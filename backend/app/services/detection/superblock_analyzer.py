@@ -19,7 +19,6 @@ import osmnx as ox
 import logging
 import threading
 import time
-import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from shapely.geometry import Polygon, Point, LineString, MultiPolygon, mapping
 from shapely.ops import polygonize, unary_union
@@ -396,7 +395,10 @@ class SuperblockAnalyzer:
         
         # Use ThreadPoolExecutor for parallel scoring (CPU-bound but with GIL,
         # still benefits from concurrency during I/O and geometry operations)
-        # For very large datasets, consider ProcessPoolExecutor with proper serialization
+        # Limit to 4 workers based on:
+        # - Typical multi-core systems (4-8 cores)
+        # - Balance between parallelism and thread management overhead
+        # - Python GIL contention for CPU-bound operations
         max_workers = min(4, len(candidates))  # Limit to 4 workers to avoid overhead
         
         if len(candidates) > 5 and max_workers > 1:
@@ -507,7 +509,7 @@ class SuperblockAnalyzer:
         report_progress(45, "Scanning edges for boundary roads...")
         
         # Use itertuples for better performance
-        for i, row in enumerate(edges.itertuples(), start=1):
+        for i, row in enumerate(edges.itertuples(index=False), start=1):
             if i % max(1, total_edges // 20) == 0:
                 percent = 45 + int(7 * (i / total_edges)) if total_edges else 45
                 report_progress(
@@ -554,7 +556,7 @@ class SuperblockAnalyzer:
         edge_osmids = []
         edge_centroids = []
         
-        for row in edges.itertuples():
+        for row in edges.itertuples(index=False):
             osmid = getattr(row, "osmid", 0)
             if isinstance(osmid, list):
                 osmid = osmid[0]
@@ -662,7 +664,7 @@ class SuperblockAnalyzer:
         boundary_capacity = 0
 
         # Single-pass iteration using itertuples for performance
-        for row in edges.itertuples():
+        for row in edges.itertuples(index=False):
             osmid = getattr(row, "osmid", 0)
             if isinstance(osmid, list):
                 osmid = osmid[0]
@@ -833,7 +835,7 @@ class SuperblockAnalyzer:
         interior_set = set(candidate.interior_roads)
 
         # Single-pass iteration using itertuples for better performance
-        for row in edges.itertuples():
+        for row in edges.itertuples(index=False):
             osmid = getattr(row, "osmid", 0)
             if isinstance(osmid, list):
                 osmid = osmid[0]
