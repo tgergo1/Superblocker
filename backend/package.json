@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "deck.gl": "^8.9.36"
+  }
+}

@@ -1,0 +1,130 @@
+.search-box {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 1000;
+  width: 400px;
+  max-width: calc(100vw - 32px);
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+.search-box.selected {
+  width: auto;
+  max-width: 500px;
+}
+
+.search-input-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-input {
+  width: 100%;
+  padding: 12px 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  outline: none;
+}
+
+.search-input:focus {
+  box-shadow: 0 0 0 2px #3b82f6;
+}
+
+.search-spinner {
+  position: absolute;
+  right: 12px;
+  width: 20px;
+  height: 20px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.search-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid #e5e7eb;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.search-result-item {
+  padding: 12px 16px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.search-result-item:last-child {
+  border-bottom: none;
+}
+
+.search-result-item:hover {
+  background: #f9fafb;
+}
+
+.result-name {
+  font-size: 14px;
+  color: #111827;
+  line-height: 1.4;
+}
+
+.result-type {
+  font-size: 12px;
+  color: #6b7280;
+  text-transform: capitalize;
+}
+
+.search-no-results {
+  padding: 16px;
+  text-align: center;
+  color: #6b7280;
+  font-size: 14px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.selected-place {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.place-name {
+  font-size: 14px;
+  color: #111827;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 400px;
+}
+
+.clear-button {
+  background: none;
+  border: none;
+  font-size: 20px;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.clear-button:hover {
+  background: #f3f4f6;
+  color: #111827;
+}

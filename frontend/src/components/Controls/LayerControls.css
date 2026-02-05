@@ -1,0 +1,81 @@
+.layer-controls {
+  position: absolute;
+  top: 80px;
+  left: 16px;
+  background: white;
+  padding: 16px;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.control-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.button-group {
+  display: flex;
+  gap: 4px;
+}
+
+.toggle-button {
+  padding: 8px 16px;
+  border: 1px solid #e5e7eb;
+  background: white;
+  font-size: 13px;
+  color: #374151;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.toggle-button:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.toggle-button:last-child {
+  border-radius: 0 6px 6px 0;
+}
+
+.toggle-button:hover {
+  background: #f9fafb;
+}
+
+.toggle-button.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: white;
+}
+
+.fetch-button {
+  padding: 10px 20px;
+  background: #3b82f6;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: white;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.fetch-button:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.fetch-button:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}

@@ -1,0 +1,34 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px 20px;
+  background: #1f2937;
+  color: white;
+  flex-shrink: 0;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.app-header .subtitle {
+  font-size: 14px;
+  color: #9ca3af;
+}
+
+.app-main {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
