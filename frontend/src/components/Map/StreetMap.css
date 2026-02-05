@@ -73,14 +73,11 @@
 
 /* Superblock details panel */
 .superblock-details {
-  position: absolute;
-  bottom: 40px;
-  left: 16px;
+  position: static;
   background: white;
   border-radius: 8px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
   min-width: 220px;
-  z-index: 999;
   overflow: hidden;
 }
 
@@ -263,16 +260,23 @@
 }
 
 /* Map Legend */
-.map-legend {
+.map-legend-stack {
   position: absolute;
-  bottom: 100px;
+  bottom: 16px;
   left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 996;
+}
+
+.map-legend {
+  position: static;
   background: white;
   padding: 12px 16px;
   border-radius: 8px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
   min-width: 140px;
-  z-index: 996;
 }
 
 .legend-title {
@@ -326,4 +330,53 @@
 .interventions-legend .legend-color {
   height: 6px;
   border-radius: 3px;
+}
+
+/* Partition info panel */
+.partition-info {
+  position: absolute;
+  bottom: 40px;
+  right: 190px;
+  background: white;
+  padding: 12px 16px;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  min-width: 170px;
+  z-index: 997;
+}
+
+/* Route info panel */
+.route-info {
+  position: absolute;
+  bottom: 40px;
+  right: 375px;
+  background: white;
+  padding: 12px 16px;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  min-width: 150px;
+  z-index: 997;
+}
+
+/* Warning style for info rows */
+.info-row.warning span {
+  color: #f59e0b !important;
+}
+
+.info-row.warning span:last-child {
+  color: #d97706 !important;
+}
+
+/* Partition legend */
+.partition-legend .legend-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+}
+
+/* Entry point marker styling in legend */
+.partition-legend .legend-item:nth-child(n+5) .legend-color {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
 }

@@ -245,3 +245,57 @@ async def get_street_network(
     )
 
     return response
+
+
+async def get_street_network_graph(
+    bbox: BoundingBox,
+    network_type: str = "drive",
+):
+    """
+    Fetch street network as a NetworkX MultiDiGraph.
+
+    This is the raw graph used for partitioning and routing algorithms.
+
+    Args:
+        bbox: Bounding box coordinates
+        network_type: Type of network ('drive', 'walk', 'bike', 'all')
+
+    Returns:
+        NetworkX MultiDiGraph of the street network
+    """
+    # Validate bbox size
+    lat_diff = bbox.north - bbox.south
+    lon_diff = bbox.east - bbox.west
+
+    if lat_diff > 0.5 or lon_diff > 0.5:
+        raise ValueError(
+            "Bounding box too large. Maximum size is ~50km. "
+            "Please select a smaller area."
+        )
+
+    if lat_diff <= 0 or lon_diff <= 0:
+        raise ValueError("Invalid bounding box: north must be > south, east must be > west")
+
+    logger.info(
+        "Fetching street network graph from OSM (network_type=%s bbox=%s)",
+        network_type,
+        bbox.model_dump(),
+    )
+
+    # Fetch the network using OSMnx
+    bbox_tuple = (bbox.west, bbox.south, bbox.east, bbox.north)
+    G = ox.graph_from_bbox(
+        bbox=bbox_tuple,
+        network_type=network_type,
+        simplify=True,
+        retain_all=False,
+        truncate_by_edge=True,
+    )
+
+    logger.info(
+        "Street network graph fetched (nodes=%s edges=%s)",
+        G.number_of_nodes(),
+        G.number_of_edges(),
+    )
+
+    return G

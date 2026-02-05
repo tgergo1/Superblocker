@@ -1,27 +1,24 @@
 .search-box {
-  position: absolute;
-  top: 16px;
-  left: 16px;
-  z-index: 1001;
-  width: 400px;
-  max-width: calc(100vw - 32px);
+  position: relative;
+  width: 100%;
+  max-width: 100%;
   background: white;
   border-radius: 8px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
 }
 
 .search-box.selected {
-  width: auto;
-  max-width: 500px;
+  width: 100%;
+  max-width: 100%;
 }
 
-.search-input-container {
+.search-box .search-input-container {
   position: relative;
   display: flex;
   align-items: center;
 }
 
-.search-input {
+.search-box .search-input {
   width: 100%;
   padding: 12px 16px;
   border: none;
@@ -30,11 +27,11 @@
   outline: none;
 }
 
-.search-input:focus {
+.search-box .search-input:focus {
   box-shadow: 0 0 0 2px #3b82f6;
 }
 
-.search-spinner {
+.search-box .search-spinner {
   position: absolute;
   right: 12px;
   width: 20px;
@@ -42,16 +39,16 @@
   border: 2px solid #e5e7eb;
   border-top-color: #3b82f6;
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: search-spin 0.8s linear infinite;
 }
 
-@keyframes spin {
+@keyframes search-spin {
   to {
     transform: rotate(360deg);
   }
 }
 
-.search-results {
+.search-box .search-results {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -60,7 +57,7 @@
   overflow-y: auto;
 }
 
-.search-result-item {
+.search-box .search-result-item {
   padding: 12px 16px;
   cursor: pointer;
   display: flex;
@@ -69,27 +66,27 @@
   border-bottom: 1px solid #f3f4f6;
 }
 
-.search-result-item:last-child {
+.search-box .search-result-item:last-child {
   border-bottom: none;
 }
 
-.search-result-item:hover {
+.search-box .search-result-item:hover {
   background: #f9fafb;
 }
 
-.result-name {
+.search-box .result-name {
   font-size: 14px;
   color: #111827;
   line-height: 1.4;
 }
 
-.result-type {
+.search-box .result-type {
   font-size: 12px;
   color: #6b7280;
   text-transform: capitalize;
 }
 
-.search-no-results {
+.search-box .search-no-results {
   padding: 16px;
   text-align: center;
   color: #6b7280;
@@ -97,23 +94,23 @@
   border-top: 1px solid #e5e7eb;
 }
 
-.selected-place {
+.search-box .selected-place {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
 }
 
-.place-name {
+.search-box .place-name {
   font-size: 14px;
   color: #111827;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 400px;
+  max-width: 100%;
 }
 
-.clear-button {
+.search-box .clear-button {
   background: none;
   border: none;
   font-size: 20px;
@@ -124,7 +121,7 @@
   border-radius: 4px;
 }
 
-.clear-button:hover {
+.search-box .clear-button:hover {
   background: #f3f4f6;
   color: #111827;
 }

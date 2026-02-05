@@ -1,10 +1,10 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import MapGL, { NavigationControl, ScaleControl } from 'react-map-gl/maplibre';
 import type { MapRef } from 'react-map-gl/maplibre';
-import { GeoJsonLayer, PolygonLayer } from '@deck.gl/layers';
+import { GeoJsonLayer, PolygonLayer, ScatterplotLayer, PathLayer } from '@deck.gl/layers';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import type { Feature, LineString } from 'geojson';
-import type { ViewState, StreetNetworkResponse, RoadProperties } from '../../types';
+import type { ViewState, StreetNetworkResponse, RoadProperties, EnforcedSuperblock, CityPartition, RouteResult } from '../../types';
 import type { SuperblockCandidate } from '../../services/api';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './StreetMap.css';
@@ -57,6 +57,25 @@ function getScoreColor(score: number): [number, number, number, number] {
   return [239, 68, 68, 160];                     // red
 }
 
+// Entry point colors by sector (for partitioning visualization)
+const SECTOR_COLORS: Record<number, [number, number, number, number]> = {
+  0: [59, 130, 246, 255],   // Blue (North)
+  1: [34, 197, 94, 255],    // Green (East)
+  2: [239, 68, 68, 255],    // Red (South)
+  3: [251, 191, 36, 255],   // Yellow (West)
+  4: [168, 85, 247, 255],   // Purple
+  5: [236, 72, 153, 255],   // Pink
+  6: [20, 184, 166, 255],   // Teal
+  7: [249, 115, 22, 255],   // Orange
+};
+
+// Modal filter marker color
+const MODAL_FILTER_COLOR: [number, number, number, number] = [168, 85, 247, 255]; // Purple
+
+// Route colors
+const ROUTE_ARTERIAL_COLOR: [number, number, number, number] = [59, 130, 246, 255]; // Blue
+const ROUTE_INTERIOR_COLOR: [number, number, number, number] = [34, 197, 94, 255]; // Green
+
 interface StreetMapProps {
   streetNetwork: StreetNetworkResponse | null;
   superblocks?: SuperblockCandidate[];
@@ -65,6 +84,16 @@ interface StreetMapProps {
   onViewStateChange?: (viewState: ViewState) => void;
   colorBy?: 'hierarchy' | 'traffic' | 'interventions';
   onSuperblockClick?: (superblock: SuperblockCandidate) => void;
+  // New partitioning system props
+  partition?: CityPartition | null;
+  showPartition?: boolean;
+  showEntryPoints?: boolean;
+  showModalFilters?: boolean;
+  selectedEnforcedSuperblock?: EnforcedSuperblock | null;
+  onEnforcedSuperblockClick?: (superblock: EnforcedSuperblock) => void;
+  // Routing props
+  route?: RouteResult | null;
+  showRoute?: boolean;
 }
 
 export function StreetMap({
@@ -75,6 +104,14 @@ export function StreetMap({
   onViewStateChange,
   colorBy = 'hierarchy',
   onSuperblockClick,
+  partition,
+  showPartition = false,
+  showEntryPoints = true,
+  showModalFilters = true,
+  selectedEnforcedSuperblock,
+  onEnforcedSuperblockClick,
+  route,
+  showRoute = true,
 }: StreetMapProps) {
   const mapRef = useRef<MapRef>(null);
   const [viewState, setViewState] = useState<ViewState>(
@@ -228,8 +265,141 @@ export function StreetMap({
       );
     }
 
+    // Partitioned superblocks layer (new system)
+    if (showPartition && partition && partition.superblocks.length > 0) {
+      result.push(
+        new PolygonLayer({
+          id: 'enforced-superblocks',
+          data: partition.superblocks,
+          pickable: true,
+          stroked: true,
+          filled: true,
+          getPolygon: (d: EnforcedSuperblock) => d.geometry.coordinates,
+          getFillColor: (d: EnforcedSuperblock) => {
+            if (selectedEnforcedSuperblock?.id === d.id) {
+              return [59, 130, 246, 180]; // blue when selected
+            }
+            // Color based on constraint validation
+            if (d.constraint_validated && d.all_addresses_reachable) {
+              return [34, 197, 94, 140]; // green - valid
+            } else if (d.constraint_validated) {
+              return [251, 191, 36, 140]; // yellow - constraint ok but some unreachable
+            }
+            return [239, 68, 68, 140]; // red - constraint not satisfied
+          },
+          getLineColor: (d: EnforcedSuperblock) => {
+            if (selectedEnforcedSuperblock?.id === d.id) {
+              return [37, 99, 235, 255]; // darker blue
+            }
+            return [0, 0, 0, 100];
+          },
+          getLineWidth: (d: EnforcedSuperblock) =>
+            selectedEnforcedSuperblock?.id === d.id ? 3 : 1,
+          onClick: (info: { object?: EnforcedSuperblock }) => {
+            if (info.object) {
+              onEnforcedSuperblockClick?.(info.object);
+            }
+          },
+          updateTriggers: {
+            getFillColor: [selectedEnforcedSuperblock?.id],
+            getLineColor: [selectedEnforcedSuperblock?.id],
+            getLineWidth: [selectedEnforcedSuperblock?.id],
+          },
+        } as any)
+      );
+    }
+
+    // Entry points layer
+    if (showPartition && showEntryPoints && partition) {
+      const entryPointData = partition.superblocks.flatMap(sb =>
+        sb.entry_points.map(ep => ({
+          ...ep,
+          superblockId: sb.id,
+        }))
+      );
+
+      if (entryPointData.length > 0) {
+        result.push(
+          new ScatterplotLayer({
+            id: 'entry-points',
+            data: entryPointData,
+            pickable: true,
+            opacity: 0.8,
+            stroked: true,
+            filled: true,
+            radiusScale: 1,
+            radiusMinPixels: 4,
+            radiusMaxPixels: 10,
+            getPosition: (d: typeof entryPointData[0]) => [d.coordinates.lon, d.coordinates.lat],
+            getFillColor: (d: typeof entryPointData[0]) => SECTOR_COLORS[d.sector % 8] || SECTOR_COLORS[0],
+            getLineColor: [255, 255, 255, 255],
+            getRadius: 6,
+            lineWidthMinPixels: 1,
+          } as any)
+        );
+      }
+    }
+
+    // Modal filters layer
+    if (showPartition && showModalFilters && partition) {
+      const modalFilterData = partition.superblocks.flatMap(sb =>
+        sb.modifications
+          .filter(m => m.modification_type === 'modal_filter' && m.filter_location)
+          .map(m => ({
+            ...m,
+            superblockId: sb.id,
+          }))
+      );
+
+      if (modalFilterData.length > 0) {
+        result.push(
+          new ScatterplotLayer({
+            id: 'modal-filters',
+            data: modalFilterData,
+            pickable: true,
+            opacity: 0.9,
+            stroked: true,
+            filled: true,
+            radiusScale: 1,
+            radiusMinPixels: 5,
+            radiusMaxPixels: 12,
+            getPosition: (d: typeof modalFilterData[0]) =>
+              d.filter_location ? [d.filter_location.lon, d.filter_location.lat] : [0, 0],
+            getFillColor: MODAL_FILTER_COLOR,
+            getLineColor: [255, 255, 255, 255],
+            getRadius: 8,
+            lineWidthMinPixels: 2,
+          } as any)
+        );
+      }
+    }
+
+    // Route layer
+    if (showRoute && route && route.success && route.segments.length > 0) {
+      const routePathData = route.segments.map(segment => ({
+        path: segment.coordinates.map(c => [c.lon, c.lat]),
+        isArterial: segment.is_arterial,
+        roadType: segment.road_type,
+      }));
+
+      result.push(
+        new PathLayer({
+          id: 'route-path',
+          data: routePathData,
+          pickable: false,
+          widthScale: 1,
+          widthMinPixels: 4,
+          widthMaxPixels: 8,
+          getPath: (d: typeof routePathData[0]) => d.path,
+          getColor: (d: typeof routePathData[0]) =>
+            d.isArterial ? ROUTE_ARTERIAL_COLOR : ROUTE_INTERIOR_COLOR,
+          getWidth: 5,
+        } as any)
+      );
+    }
+
     return result;
-  }, [streetNetwork, superblocks, showSuperblocks, colorBy, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick]);
+  }, [streetNetwork, superblocks, showSuperblocks, colorBy, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, showModalFilters, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute]);
 
   // Store overlay reference
   const overlayRef = useRef<MapboxOverlay | null>(null);
@@ -323,219 +493,269 @@ export function StreetMap({
         </div>
       )}
 
-      {/* Selected superblock details */}
-      {selectedSuperblock && (
-        <div className="superblock-details">
-          <div className="details-header">
-            <span className="details-title">Superblock Analysis</span>
-            <button
-              className="close-button"
-              onClick={() => setSelectedSuperblock(null)}
-            >
-              ×
-            </button>
-          </div>
-          <div className="details-body">
-            {/* Overall score */}
-            <div className="detail-row">
-              <span>Overall Score:</span>
-              <span className={`score score-${selectedSuperblock.score >= 70 ? 'good' : selectedSuperblock.score >= 50 ? 'ok' : 'poor'}`}>
-                {selectedSuperblock.score}/100
-              </span>
-            </div>
-            <div className="detail-row">
-              <span>Area:</span>
-              <span>{selectedSuperblock.area_hectares} ha</span>
-            </div>
-
-            {/* Score breakdown */}
-            {selectedSuperblock.score_breakdown && (
-              <>
-                <div className="details-section-title">Score Breakdown</div>
-                <div className="score-breakdown">
-                  <div className="score-item">
-                    <span>Size</span>
-                    <div className="score-bar">
-                      <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.size_score}%` }} />
-                    </div>
-                    <span>{selectedSuperblock.score_breakdown.size_score}</span>
-                  </div>
-                  <div className="score-item">
-                    <span>Shape</span>
-                    <div className="score-bar">
-                      <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.shape_score}%` }} />
-                    </div>
-                    <span>{selectedSuperblock.score_breakdown.shape_score}</span>
-                  </div>
-                  <div className="score-item">
-                    <span>Traffic</span>
-                    <div className="score-bar">
-                      <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.traffic_score}%` }} />
-                    </div>
-                    <span>{selectedSuperblock.score_breakdown.traffic_score}</span>
-                  </div>
-                  <div className="score-item">
-                    <span>Access</span>
-                    <div className="score-bar">
-                      <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.accessibility_score}%` }} />
-                    </div>
-                    <span>{selectedSuperblock.score_breakdown.accessibility_score}</span>
-                  </div>
-                  <div className="score-item">
-                    <span>Connect</span>
-                    <div className="score-bar">
-                      <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.connectivity_score}%` }} />
-                    </div>
-                    <span>{selectedSuperblock.score_breakdown.connectivity_score}</span>
-                  </div>
-                  <div className="score-item">
-                    <span>Boundary</span>
-                    <div className="score-bar">
-                      <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.boundary_quality_score}%` }} />
-                    </div>
-                    <span>{selectedSuperblock.score_breakdown.boundary_quality_score}</span>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {/* Traffic impact */}
-            {selectedSuperblock.traffic_impact && (
-              <>
-                <div className="details-section-title">Traffic Impact</div>
-                <div className="detail-row">
-                  <span>Through-traffic removed:</span>
-                  <span className="score-good">{selectedSuperblock.traffic_impact.removed_through_traffic_pct}%</span>
-                </div>
-                <div className="detail-row">
-                  <span>Boundary load increase:</span>
-                  <span>{selectedSuperblock.traffic_impact.boundary_load_increase_pct}%</span>
-                </div>
-              </>
-            )}
-
-            {/* Interventions summary */}
-            {selectedSuperblock.interventions && selectedSuperblock.interventions.length > 0 && (
-              <>
-                <div className="details-section-title">Planned Interventions</div>
-                <div className="interventions-summary">
-                  {(() => {
-                    const counts = selectedSuperblock.interventions.reduce((acc, i) => {
-                      acc[i.intervention_type] = (acc[i.intervention_type] || 0) + 1;
-                      return acc;
-                    }, {} as Record<string, number>);
-                    return (
-                      <>
-                        {counts.pedestrianize && (
-                          <div className="intervention-badge pedestrianize">
-                            {counts.pedestrianize} pedestrian
-                          </div>
-                        )}
-                        {counts.one_way && (
-                          <div className="intervention-badge one-way">
-                            {counts.one_way} one-way
-                          </div>
-                        )}
-                        {counts.modal_filter && (
-                          <div className="intervention-badge modal-filter">
-                            {counts.modal_filter} filtered
-                          </div>
-                        )}
-                        {counts.local_access && (
-                          <div className="intervention-badge local-access">
-                            {counts.local_access} local only
-                          </div>
-                        )}
-                      </>
-                    );
-                  })()}
-                </div>
-              </>
-            )}
-
-            {/* Network info */}
-            <div className="details-section-title">Network</div>
-            <div className="detail-row">
-              <span>Interior roads:</span>
-              <span>{selectedSuperblock.interior_roads.length}</span>
-            </div>
-            <div className="detail-row">
-              <span>Boundary roads:</span>
-              <span>{selectedSuperblock.perimeter_roads.length}</span>
-            </div>
-            <div className="detail-row">
-              <span>Access points:</span>
-              <span>{selectedSuperblock.num_access_points ?? 'N/A'}</span>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Map Legend */}
-      {colorBy === 'interventions' && selectedSuperblock && (
-        <div className="map-legend interventions-legend">
-          <div className="legend-title">Street Interventions</div>
-          <div className="legend-item">
-            <span className="legend-color" style={{ background: 'rgb(34, 197, 94)' }} />
-            <span className="legend-label">Pedestrianize</span>
-          </div>
-          <div className="legend-item">
-            <span className="legend-color" style={{ background: 'rgb(59, 130, 246)' }} />
-            <span className="legend-label">One-way</span>
-          </div>
-          <div className="legend-item">
-            <span className="legend-color" style={{ background: 'rgb(251, 191, 36)' }} />
-            <span className="legend-label">Modal filter</span>
-          </div>
-          <div className="legend-item">
-            <span className="legend-color" style={{ background: 'rgb(168, 85, 247)' }} />
-            <span className="legend-label">Local access</span>
-          </div>
-          <div className="legend-item">
-            <span className="legend-color" style={{ background: 'rgb(156, 163, 175)' }} />
-            <span className="legend-label">No change</span>
-          </div>
-        </div>
-      )}
+      <div className="map-legend-stack">
+        {/* Selected superblock details */}
+        {selectedSuperblock && (
+          <div className="superblock-details">
+            <div className="details-header">
+              <span className="details-title">Superblock Analysis</span>
+              <button
+                className="close-button"
+                onClick={() => setSelectedSuperblock(null)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="details-body">
+              {/* Overall score */}
+              <div className="detail-row">
+                <span>Overall Score:</span>
+                <span className={`score score-${selectedSuperblock.score >= 70 ? 'good' : selectedSuperblock.score >= 50 ? 'ok' : 'poor'}`}>
+                  {selectedSuperblock.score}/100
+                </span>
+              </div>
+              <div className="detail-row">
+                <span>Area:</span>
+                <span>{selectedSuperblock.area_hectares} ha</span>
+              </div>
 
-      {colorBy === 'hierarchy' && (
-        <div className="map-legend hierarchy-legend">
-          <div className="legend-title">Road Types</div>
-          <div className="legend-item">
-            <span className="legend-color" style={{ background: 'rgb(139, 0, 0)' }} />
-            <span className="legend-label">Motorway</span>
-          </div>
-          <div className="legend-item">
-            <span className="legend-color" style={{ background: 'rgb(255, 69, 0)' }} />
-            <span className="legend-label">Primary</span>
-          </div>
-          <div className="legend-item">
-            <span className="legend-color" style={{ background: 'rgb(255, 140, 0)' }} />
-            <span className="legend-label">Secondary</span>
-          </div>
-          <div className="legend-item">
-            <span className="legend-color" style={{ background: 'rgb(255, 215, 0)' }} />
-            <span className="legend-label">Tertiary</span>
-          </div>
-          <div className="legend-item">
-            <span className="legend-color" style={{ background: 'rgb(144, 238, 144)' }} />
-            <span className="legend-label">Residential</span>
-          </div>
-        </div>
-      )}
+              {/* Score breakdown */}
+              {selectedSuperblock.score_breakdown && (
+                <>
+                  <div className="details-section-title">Score Breakdown</div>
+                  <div className="score-breakdown">
+                    <div className="score-item">
+                      <span>Size</span>
+                      <div className="score-bar">
+                        <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.size_score}%` }} />
+                      </div>
+                      <span>{selectedSuperblock.score_breakdown.size_score}</span>
+                    </div>
+                    <div className="score-item">
+                      <span>Shape</span>
+                      <div className="score-bar">
+                        <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.shape_score}%` }} />
+                      </div>
+                      <span>{selectedSuperblock.score_breakdown.shape_score}</span>
+                    </div>
+                    <div className="score-item">
+                      <span>Traffic</span>
+                      <div className="score-bar">
+                        <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.traffic_score}%` }} />
+                      </div>
+                      <span>{selectedSuperblock.score_breakdown.traffic_score}</span>
+                    </div>
+                    <div className="score-item">
+                      <span>Access</span>
+                      <div className="score-bar">
+                        <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.accessibility_score}%` }} />
+                      </div>
+                      <span>{selectedSuperblock.score_breakdown.accessibility_score}</span>
+                    </div>
+                    <div className="score-item">
+                      <span>Connect</span>
+                      <div className="score-bar">
+                        <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.connectivity_score}%` }} />
+                      </div>
+                      <span>{selectedSuperblock.score_breakdown.connectivity_score}</span>
+                    </div>
+                    <div className="score-item">
+                      <span>Boundary</span>
+                      <div className="score-bar">
+                        <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.boundary_quality_score}%` }} />
+                      </div>
+                      <span>{selectedSuperblock.score_breakdown.boundary_quality_score}</span>
+                    </div>
+                  </div>
+                </>
+              )}
 
-      {colorBy === 'traffic' && (
-        <div className="map-legend traffic-legend">
-          <div className="legend-title">Traffic Intensity</div>
-          <div className="legend-gradient">
-            <div className="gradient-bar" />
-            <div className="gradient-labels">
-              <span>Low</span>
-              <span>High</span>
+              {/* Traffic impact */}
+              {selectedSuperblock.traffic_impact && (
+                <>
+                  <div className="details-section-title">Traffic Impact</div>
+                  <div className="detail-row">
+                    <span>Through-traffic removed:</span>
+                    <span className="score-good">{selectedSuperblock.traffic_impact.removed_through_traffic_pct}%</span>
+                  </div>
+                  <div className="detail-row">
+                    <span>Boundary load increase:</span>
+                    <span>{selectedSuperblock.traffic_impact.boundary_load_increase_pct}%</span>
+                  </div>
+                </>
+              )}
+
+              {/* Interventions summary */}
+              {selectedSuperblock.interventions && selectedSuperblock.interventions.length > 0 && (
+                <>
+                  <div className="details-section-title">Planned Interventions</div>
+                  <div className="interventions-summary">
+                    {(() => {
+                      const counts = selectedSuperblock.interventions.reduce((acc, i) => {
+                        acc[i.intervention_type] = (acc[i.intervention_type] || 0) + 1;
+                        return acc;
+                      }, {} as Record<string, number>);
+                      return (
+                        <>
+                          {counts.pedestrianize && (
+                            <div className="intervention-badge pedestrianize">
+                              {counts.pedestrianize} pedestrian
+                            </div>
+                          )}
+                          {counts.one_way && (
+                            <div className="intervention-badge one-way">
+                              {counts.one_way} one-way
+                            </div>
+                          )}
+                          {counts.modal_filter && (
+                            <div className="intervention-badge modal-filter">
+                              {counts.modal_filter} filtered
+                            </div>
+                          )}
+                          {counts.local_access && (
+                            <div className="intervention-badge local-access">
+                              {counts.local_access} local only
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                </>
+              )}
+
+              {/* Network info */}
+              <div className="details-section-title">Network</div>
+              <div className="detail-row">
+                <span>Interior roads:</span>
+                <span>{selectedSuperblock.interior_roads.length}</span>
+              </div>
+              <div className="detail-row">
+                <span>Boundary roads:</span>
+                <span>{selectedSuperblock.perimeter_roads.length}</span>
+              </div>
+              <div className="detail-row">
+                <span>Access points:</span>
+                <span>{selectedSuperblock.num_access_points ?? 'N/A'}</span>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {colorBy === 'interventions' && selectedSuperblock && (
+          <div className="map-legend interventions-legend">
+            <div className="legend-title">Street Interventions</div>
+            <div className="legend-item">
+              <span className="legend-color" style={{ background: 'rgb(34, 197, 94)' }} />
+              <span className="legend-label">Pedestrianize</span>
+            </div>
+            <div className="legend-item">
+              <span className="legend-color" style={{ background: 'rgb(59, 130, 246)' }} />
+              <span className="legend-label">One-way</span>
+            </div>
+            <div className="legend-item">
+              <span className="legend-color" style={{ background: 'rgb(251, 191, 36)' }} />
+              <span className="legend-label">Modal filter</span>
+            </div>
+            <div className="legend-item">
+              <span className="legend-color" style={{ background: 'rgb(168, 85, 247)' }} />
+              <span className="legend-label">Local access</span>
+            </div>
+            <div className="legend-item">
+              <span className="legend-color" style={{ background: 'rgb(156, 163, 175)' }} />
+              <span className="legend-label">No change</span>
+            </div>
+          </div>
+        )}
+
+        {colorBy === 'hierarchy' && (
+          <div className="map-legend hierarchy-legend">
+            <div className="legend-title">Road Types</div>
+            <div className="legend-item">
+              <span className="legend-color" style={{ background: 'rgb(139, 0, 0)' }} />
+              <span className="legend-label">Motorway</span>
+            </div>
+            <div className="legend-item">
+              <span className="legend-color" style={{ background: 'rgb(255, 69, 0)' }} />
+              <span className="legend-label">Primary</span>
+            </div>
+            <div className="legend-item">
+              <span className="legend-color" style={{ background: 'rgb(255, 140, 0)' }} />
+              <span className="legend-label">Secondary</span>
+            </div>
+            <div className="legend-item">
+              <span className="legend-color" style={{ background: 'rgb(255, 215, 0)' }} />
+              <span className="legend-label">Tertiary</span>
+            </div>
+            <div className="legend-item">
+              <span className="legend-color" style={{ background: 'rgb(144, 238, 144)' }} />
+              <span className="legend-label">Residential</span>
+            </div>
+          </div>
+        )}
+
+        {colorBy === 'traffic' && (
+          <div className="map-legend traffic-legend">
+            <div className="legend-title">Traffic Intensity</div>
+            <div className="legend-gradient">
+              <div className="gradient-bar" />
+              <div className="gradient-labels">
+                <span>Low</span>
+                <span>High</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showPartition && partition && (
+          <div className="map-legend partition-legend">
+            <div className="legend-title">Partition Status</div>
+            <div className="legend-item">
+              <span className="legend-color" style={{ background: 'rgba(34, 197, 94, 0.6)' }} />
+              <span className="legend-label">Valid (all accessible)</span>
+            </div>
+            <div className="legend-item">
+              <span className="legend-color" style={{ background: 'rgba(251, 191, 36, 0.6)' }} />
+              <span className="legend-label">Some unreachable</span>
+            </div>
+            <div className="legend-item">
+              <span className="legend-color" style={{ background: 'rgba(239, 68, 68, 0.6)' }} />
+              <span className="legend-label">Constraint violated</span>
+            </div>
+            {showEntryPoints && (
+              <>
+                <div className="legend-title" style={{ marginTop: '8px' }}>Entry Points</div>
+                <div className="legend-item">
+                  <span className="legend-color" style={{ background: 'rgb(59, 130, 246)' }} />
+                  <span className="legend-label">Sector 0</span>
+                </div>
+                <div className="legend-item">
+                  <span className="legend-color" style={{ background: 'rgb(34, 197, 94)' }} />
+                  <span className="legend-label">Sector 1</span>
+                </div>
+                <div className="legend-item">
+                  <span className="legend-color" style={{ background: 'rgb(239, 68, 68)' }} />
+                  <span className="legend-label">Sector 2</span>
+                </div>
+                <div className="legend-item">
+                  <span className="legend-color" style={{ background: 'rgb(251, 191, 36)' }} />
+                  <span className="legend-label">Sector 3</span>
+                </div>
+              </>
+            )}
+            {showModalFilters && (
+              <>
+                <div className="legend-title" style={{ marginTop: '8px' }}>Modifications</div>
+                <div className="legend-item">
+                  <span className="legend-color" style={{ background: 'rgb(168, 85, 247)' }} />
+                  <span className="legend-label">Modal filter</span>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Network stats */}
       {streetNetwork && (
@@ -557,6 +777,61 @@ export function StreetMap({
           )}
         </div>
       )}
+
+      {/* Partition stats */}
+      {showPartition && partition && (
+        <div className="partition-info">
+          <div className="info-title">Partition Stats</div>
+          <div className="info-row">
+            <span>Superblocks:</span>
+            <span>{partition.total_superblocks}</span>
+          </div>
+          <div className="info-row">
+            <span>Coverage:</span>
+            <span>{partition.coverage_percent.toFixed(1)}%</span>
+          </div>
+          <div className="info-row">
+            <span>Modal filters:</span>
+            <span>{partition.total_modal_filters}</span>
+          </div>
+          <div className="info-row">
+            <span>One-way conversions:</span>
+            <span>{partition.total_one_way_conversions}</span>
+          </div>
+          {partition.total_unreachable_addresses > 0 && (
+            <div className="info-row warning">
+              <span>Unreachable:</span>
+              <span>{partition.total_unreachable_addresses}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Route info */}
+      {showRoute && route && route.success && (
+        <div className="route-info">
+          <div className="info-title">Route</div>
+          <div className="info-row">
+            <span>Distance:</span>
+            <span>{route.total_distance_km.toFixed(2)} km</span>
+          </div>
+          <div className="info-row">
+            <span>Time:</span>
+            <span>{route.estimated_time_min.toFixed(0)} min</span>
+          </div>
+          <div className="info-row">
+            <span>Arterial:</span>
+            <span>{route.arterial_percent.toFixed(0)}%</span>
+          </div>
+          {route.superblocks_traversed.length > 0 && (
+            <div className="info-row">
+              <span>Superblocks:</span>
+              <span>{route.superblocks_traversed.length}</span>
+            </div>
+          )}
+        </div>
+      )}
+
     </div>
   );
 }

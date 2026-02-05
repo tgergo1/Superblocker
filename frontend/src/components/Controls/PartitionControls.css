@@ -1,0 +1,307 @@
+.partition-controls {
+  position: relative;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+/* Settings Toggle */
+.partition-controls .settings-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #f9fafb;
+  border: none;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  cursor: pointer;
+  text-align: left;
+}
+
+.partition-controls .settings-toggle:hover {
+  background: #f3f4f6;
+}
+
+.partition-controls .settings-icon {
+  font-size: 10px;
+  color: #6b7280;
+}
+
+/* Settings Panel */
+.partition-controls .settings-panel {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.partition-controls .param-group {
+  margin-bottom: 14px;
+}
+
+.partition-controls .param-group:last-child {
+  margin-bottom: 0;
+}
+
+.partition-controls .param-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #374151;
+  margin-bottom: 6px;
+}
+
+.partition-controls .param-value {
+  font-weight: 600;
+  color: #3b82f6;
+}
+
+.partition-controls .param-slider {
+  width: 100%;
+  height: 4px;
+  appearance: none;
+  background: #e5e7eb;
+  border-radius: 2px;
+  outline: none;
+}
+
+.partition-controls .param-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: #3b82f6;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.partition-controls .param-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: #3b82f6;
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+}
+
+.partition-controls .param-hint {
+  display: block;
+  font-size: 10px;
+  color: #9ca3af;
+  margin-top: 4px;
+}
+
+/* Checkbox styling */
+.partition-controls .checkbox-group {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.partition-controls .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #374151;
+  cursor: pointer;
+}
+
+.partition-controls .checkbox-label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: #3b82f6;
+  cursor: pointer;
+}
+
+/* Display Options */
+.partition-controls .display-options {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.partition-controls .option-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.partition-controls .display-options .checkbox-label {
+  margin-bottom: 6px;
+}
+
+.partition-controls .display-options .checkbox-label:last-child {
+  margin-bottom: 0;
+}
+
+/* Progress Section */
+.partition-controls .progress-section {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.partition-controls .progress-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.partition-controls .progress-stage {
+  font-size: 12px;
+  font-weight: 600;
+  color: #374151;
+  text-transform: capitalize;
+}
+
+.partition-controls .progress-count {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.partition-controls .progress-bar {
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.partition-controls .progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.partition-controls .progress-info {
+  display: flex;
+  justify-content: space-between;
+}
+
+.partition-controls .progress-message {
+  font-size: 11px;
+  color: #6b7280;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.partition-controls .progress-time {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-left: 8px;
+}
+
+/* Action Button */
+.partition-controls .action-button {
+  width: calc(100% - 32px);
+  margin: 12px 16px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.partition-controls .partition-button {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  color: white;
+}
+
+.partition-controls .partition-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+}
+
+.partition-controls .partition-button:disabled {
+  background: #e5e7eb;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
+.partition-controls .partition-button.loading {
+  background: #93c5fd;
+  cursor: wait;
+}
+
+/* Spinner */
+.partition-controls .spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: partition-spin 0.8s linear infinite;
+}
+
+@keyframes partition-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Results Summary */
+.partition-controls .results-summary {
+  padding: 12px 16px;
+  background: #f9fafb;
+}
+
+.partition-controls .summary-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 10px;
+}
+
+.partition-controls .summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.partition-controls .summary-item {
+  text-align: center;
+}
+
+.partition-controls .summary-value {
+  display: block;
+  font-size: 20px;
+  font-weight: 700;
+  color: #111827;
+  line-height: 1.2;
+}
+
+.partition-controls .summary-label {
+  display: block;
+  font-size: 10px;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Warning Banner */
+.partition-controls .warning-banner {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: #fef3c7;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #92400e;
+  text-align: center;
+}

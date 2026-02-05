@@ -1,0 +1,237 @@
+.route-validator {
+  position: relative;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.route-validator .validator-header {
+  padding: 12px 16px;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.route-validator .validator-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: #374151;
+}
+
+.route-validator .validator-body {
+  padding: 12px 16px;
+}
+
+/* Coordinate Input */
+.route-validator .coordinate-input {
+  margin-bottom: 12px;
+}
+
+.route-validator .input-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: #374151;
+  margin-bottom: 6px;
+}
+
+.route-validator .coord-row {
+  display: flex;
+  gap: 6px;
+}
+
+.route-validator .coord-field {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 12px;
+  outline: none;
+}
+
+.route-validator .coord-field:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.route-validator .coord-field::placeholder {
+  color: #9ca3af;
+}
+
+.route-validator .set-button {
+  padding: 6px 12px;
+  background: #e5e7eb;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.route-validator .set-button:hover:not(:disabled) {
+  background: #d1d5db;
+}
+
+.route-validator .set-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.route-validator .coord-set {
+  margin-top: 4px;
+  font-size: 10px;
+  color: #22c55e;
+  font-family: monospace;
+}
+
+/* Route Options */
+.route-validator .route-options {
+  margin-bottom: 12px;
+  padding: 10px;
+  background: #f9fafb;
+  border-radius: 4px;
+}
+
+.route-validator .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #374151;
+  cursor: pointer;
+}
+
+.route-validator .checkbox-label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: #3b82f6;
+  cursor: pointer;
+}
+
+/* Action Buttons */
+.route-validator .action-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.route-validator .compute-button {
+  flex: 1;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.route-validator .compute-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+}
+
+.route-validator .compute-button:disabled {
+  background: #e5e7eb;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
+.route-validator .clear-button {
+  padding: 8px 12px;
+  background: white;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.route-validator .clear-button:hover:not(:disabled) {
+  background: #f3f4f6;
+}
+
+.route-validator .clear-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Error Message */
+.route-validator .error-message {
+  padding: 8px 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #dc2626;
+  margin-bottom: 12px;
+}
+
+/* Result Display */
+.route-validator .result-display {
+  padding: 12px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+}
+
+.route-validator .result-display.blocked {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.route-validator .result-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #166534;
+  margin-bottom: 8px;
+}
+
+.route-validator .result-display.blocked .result-title {
+  color: #dc2626;
+}
+
+.route-validator .result-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  padding: 3px 0;
+}
+
+.route-validator .result-row span:first-child {
+  color: #6b7280;
+}
+
+.route-validator .result-row span:last-child {
+  color: #111827;
+  font-weight: 500;
+}
+
+.route-validator .blocked-reason {
+  font-size: 11px;
+  color: #dc2626;
+  margin-bottom: 8px;
+}
+
+.route-validator .alternative-hint {
+  font-size: 10px;
+  color: #9ca3af;
+  font-style: italic;
+}
+
+/* Help Text */
+.route-validator .help-text {
+  padding: 10px;
+  background: #fef3c7;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #92400e;
+  text-align: center;
+}

@@ -32,3 +32,45 @@
   position: relative;
   overflow: hidden;
 }
+
+.app-overlay {
+  position: absolute;
+  inset: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  pointer-events: none;
+  z-index: 1000;
+}
+
+.overlay-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.overlay-column > * {
+  pointer-events: auto;
+}
+
+.overlay-left {
+  width: min(420px, 100%);
+}
+
+.overlay-right {
+  width: min(320px, 100%);
+}
+
+@media (max-width: 960px) {
+  .app-overlay {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .overlay-left,
+  .overlay-right {
+    width: 100%;
+  }
+}

@@ -1,5 +1,14 @@
 import axios from 'axios';
-import type { SearchResponse, StreetNetworkResponse, BoundingBox } from '../types';
+import type {
+  SearchResponse,
+  StreetNetworkResponse,
+  BoundingBox,
+  Coordinates,
+  CityPartition,
+  PartitionProgress,
+  RouteResult,
+  SizeRecommendation,
+} from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
 
@@ -245,6 +254,178 @@ export async function analyzeAreaWithProgress(
         reject(err);
       });
   });
+}
+
+// =============================================================================
+// City Partitioning API
+// =============================================================================
+
+export interface PartitionRequest {
+  bbox: BoundingBox;
+  target_size_hectares?: number;
+  min_area_hectares?: number;
+  max_area_hectares?: number;
+  enforce_constraints?: boolean;
+  num_sectors?: number;
+}
+
+export interface PartitionResponse {
+  partition: CityPartition;
+  street_network: StreetNetworkResponse;
+  processing_time_seconds: number;
+}
+
+// Regular (non-streaming) partitioning
+export async function partitionCity(request: PartitionRequest): Promise<PartitionResponse> {
+  const response = await api.post<PartitionResponse>('/partition', {
+    bbox: request.bbox,
+    target_size_hectares: request.target_size_hectares ?? 12,
+    min_area_hectares: request.min_area_hectares ?? 6,
+    max_area_hectares: request.max_area_hectares ?? 20,
+    enforce_constraints: request.enforce_constraints ?? true,
+    num_sectors: request.num_sectors ?? 4,
+  });
+  return response.data;
+}
+
+// Streaming partitioning with progress updates
+export async function partitionCityWithProgress(
+  request: PartitionRequest,
+  onProgress?: (progress: PartitionProgress) => void
+): Promise<PartitionResponse> {
+  console.log('[Partition] Starting streaming partition...');
+
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      bbox: request.bbox,
+      target_size_hectares: request.target_size_hectares ?? 12,
+      min_area_hectares: request.min_area_hectares ?? 6,
+      max_area_hectares: request.max_area_hectares ?? 20,
+      enforce_constraints: request.enforce_constraints ?? true,
+      num_sectors: request.num_sectors ?? 4,
+    });
+
+    const url = `${API_BASE_URL}/partition/stream`;
+    console.log('[Partition] Fetching:', url);
+
+    fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+      },
+      body,
+    })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error('No response body');
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        const processStream = async (): Promise<void> => {
+          try {
+            const { done, value } = await reader.read();
+
+            if (done) {
+              reject(new Error('Stream ended without completion'));
+              return;
+            }
+
+            const chunk = decoder.decode(value, { stream: true });
+            buffer += chunk;
+
+            const lines = buffer.split('\n\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(line.slice(6));
+
+                  if (data.type === 'progress') {
+                    onProgress?.({
+                      stage: data.stage,
+                      percent: data.percent,
+                      message: data.message,
+                      current_superblock: data.current_superblock,
+                      total_superblocks: data.total_superblocks,
+                    });
+                  } else if (data.type === 'complete') {
+                    console.log('[Partition] Complete!', data.partition?.total_superblocks, 'superblocks');
+                    resolve({
+                      partition: data.partition,
+                      street_network: { type: 'FeatureCollection', features: [], metadata: {} as any },
+                      processing_time_seconds: data.processing_time_seconds,
+                    });
+                    return;
+                  } else if (data.type === 'error') {
+                    reject(new Error(data.message));
+                    return;
+                  }
+                } catch (e) {
+                  console.error('[Partition] Failed to parse SSE data:', e);
+                }
+              }
+            }
+
+            return processStream();
+          } catch (streamError) {
+            reject(streamError);
+          }
+        };
+
+        processStream().catch(reject);
+      })
+      .catch(reject);
+  });
+}
+
+// =============================================================================
+// Routing API
+// =============================================================================
+
+export interface RouteRequest {
+  origin: Coordinates;
+  destination: Coordinates;
+  respect_superblocks?: boolean;
+  prefer_arterials?: boolean;
+}
+
+export async function computeRoute(request: RouteRequest): Promise<RouteResult> {
+  const response = await api.post<RouteResult>('/route', {
+    origin: request.origin,
+    destination: request.destination,
+    respect_superblocks: request.respect_superblocks ?? true,
+    prefer_arterials: request.prefer_arterials ?? true,
+  });
+  return response.data;
+}
+
+// =============================================================================
+// Size Optimization API
+// =============================================================================
+
+export async function getOptimalSize(
+  bbox: BoundingBox,
+  populationDensity?: number
+): Promise<SizeRecommendation> {
+  const response = await api.get<SizeRecommendation>('/optimize/size', {
+    params: {
+      north: bbox.north,
+      south: bbox.south,
+      east: bbox.east,
+      west: bbox.west,
+      population_density: populationDensity,
+    },
+  });
+  return response.data;
 }
 
 export default api;
