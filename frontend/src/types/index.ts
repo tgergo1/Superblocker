@@ -29,7 +29,7 @@ export interface SearchResponse {
 }
 
 export interface RoadProperties {
-  osmid: number;
+  osmid: number | number[];
   name: string | null;
   highway: string;
   hierarchy: number;

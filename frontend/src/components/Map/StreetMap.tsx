@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import MapGL, { NavigationControl, ScaleControl } from 'react-map-gl/maplibre';
 import type { MapRef } from 'react-map-gl/maplibre';
-import { GeoJsonLayer, PolygonLayer, ScatterplotLayer, PathLayer } from '@deck.gl/layers';
+import { GeoJsonLayer, PolygonLayer, ScatterplotLayer, PathLayer, TextLayer } from '@deck.gl/layers';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import type { Feature, LineString } from 'geojson';
 import type { ViewState, StreetNetworkResponse, RoadProperties, EnforcedSuperblock, CityPartition, RouteResult } from '../../types';
@@ -57,20 +57,47 @@ function getScoreColor(score: number): [number, number, number, number] {
   return [239, 68, 68, 160];                     // red
 }
 
-// Entry point colors by sector (for partitioning visualization)
-const SECTOR_COLORS: Record<number, [number, number, number, number]> = {
-  0: [59, 130, 246, 255],   // Blue (North)
-  1: [34, 197, 94, 255],    // Green (East)
-  2: [239, 68, 68, 255],    // Red (South)
-  3: [251, 191, 36, 255],   // Yellow (West)
-  4: [168, 85, 247, 255],   // Purple
-  5: [236, 72, 153, 255],   // Pink
-  6: [20, 184, 166, 255],   // Teal
-  7: [249, 115, 22, 255],   // Orange
-};
+// Direction calculation helper - gets direction label based on angle from centroid
+function getDirectionFromAngle(angleDeg: number): { label: string; arrow: string } {
+  // Normalize angle to 0-360
+  const normalizedAngle = ((angleDeg % 360) + 360) % 360;
 
-// Modal filter marker color
-const MODAL_FILTER_COLOR: [number, number, number, number] = [168, 85, 247, 255]; // Purple
+  if (normalizedAngle >= 337.5 || normalizedAngle < 22.5) return { label: 'East', arrow: 'E' };
+  if (normalizedAngle >= 22.5 && normalizedAngle < 67.5) return { label: 'NE', arrow: 'NE' };
+  if (normalizedAngle >= 67.5 && normalizedAngle < 112.5) return { label: 'North', arrow: 'N' };
+  if (normalizedAngle >= 112.5 && normalizedAngle < 157.5) return { label: 'NW', arrow: 'NW' };
+  if (normalizedAngle >= 157.5 && normalizedAngle < 202.5) return { label: 'West', arrow: 'W' };
+  if (normalizedAngle >= 202.5 && normalizedAngle < 247.5) return { label: 'SW', arrow: 'SW' };
+  if (normalizedAngle >= 247.5 && normalizedAngle < 292.5) return { label: 'South', arrow: 'S' };
+  return { label: 'SE', arrow: 'SE' };
+}
+
+// Calculate centroid of a polygon
+function calculateCentroid(coordinates: number[][][]): [number, number] {
+  const ring = coordinates[0]; // Outer ring
+  if (!ring || ring.length === 0) return [0, 0];
+
+  let sumLon = 0, sumLat = 0;
+  for (const coord of ring) {
+    sumLon += coord[0];
+    sumLat += coord[1];
+  }
+  return [sumLon / ring.length, sumLat / ring.length];
+}
+
+// Superblock colors for visual distinction (pastel palette)
+const SUPERBLOCK_COLORS: [number, number, number, number][] = [
+  [99, 102, 241, 255],   // Indigo
+  [236, 72, 153, 255],   // Pink
+  [34, 197, 94, 255],    // Green
+  [249, 115, 22, 255],   // Orange
+  [14, 165, 233, 255],   // Sky
+  [168, 85, 247, 255],   // Purple
+  [20, 184, 166, 255],   // Teal
+  [245, 158, 11, 255],   // Amber
+  [239, 68, 68, 255],    // Red
+  [59, 130, 246, 255],   // Blue
+];
 
 // Route colors
 const ROUTE_ARTERIAL_COLOR: [number, number, number, number] = [59, 130, 246, 255]; // Blue
@@ -114,6 +141,11 @@ export function StreetMap({
   showRoute = true,
 }: StreetMapProps) {
   const mapRef = useRef<MapRef>(null);
+
+  // Panel collapse states
+  const [legendCollapsed, setLegendCollapsed] = useState(false);
+  const [infoCollapsed, setInfoCollapsed] = useState(false);
+
   const [viewState, setViewState] = useState<ViewState>(
     initialViewState ?? {
       longitude: 19.0402,
@@ -148,6 +180,22 @@ export function StreetMap({
     [onViewStateChange]
   );
 
+  // Build a map of modified streets from partition data for quick lookup
+  const modifiedStreets = useMemo(() => {
+    if (!showPartition || !partition) return new Map<number, { type: string; direction: string | null }>();
+
+    const map = new Map<number, { type: string; direction: string | null }>();
+    partition.superblocks.forEach(sb => {
+      sb.modifications.forEach(mod => {
+        map.set(mod.osm_id, {
+          type: mod.modification_type,
+          direction: mod.direction
+        });
+      });
+    });
+    return map;
+  }, [showPartition, partition]);
+
   const getLineColor = useCallback(
     (d: Feature<LineString, RoadProperties>): [number, number, number, number] => {
       const props = d.properties;
@@ -161,7 +209,11 @@ export function StreetMap({
       }
 
       if (colorBy === 'interventions' && selectedSuperblock) {
-        const osmid = props.osmid;
+        // Handle osmid being a single number or an array
+        let osmid = props.osmid;
+        if (Array.isArray(osmid)) {
+          osmid = osmid[0];
+        }
         // Check if this road is in the selected superblock's interventions
         const intervention = selectedSuperblock.interventions?.find(i => i.osm_id === osmid);
         if (intervention) {
@@ -178,10 +230,32 @@ export function StreetMap({
         return [200, 200, 200, 100];
       }
 
+      // Highlight modified streets in partition mode
+      if (showPartition && modifiedStreets.size > 0) {
+        // Handle osmid being a single number or an array
+        let osmidToCheck = props.osmid;
+        if (Array.isArray(osmidToCheck)) {
+          osmidToCheck = osmidToCheck[0];
+        }
+        const mod = modifiedStreets.get(osmidToCheck);
+        if (mod) {
+          if (mod.type === 'modal_filter') {
+            return [239, 68, 68, 255]; // Red for modal filter
+          }
+          if (mod.type === 'one_way') {
+            return [59, 130, 246, 255]; // Blue for one-way
+          }
+          if (mod.type === 'full_closure') {
+            return [124, 58, 237, 255]; // Purple for closure
+          }
+          return [251, 191, 36, 255]; // Yellow for other modifications
+        }
+      }
+
       const hierarchy = props.hierarchy ?? 99;
       return ROAD_COLORS[hierarchy] ?? DEFAULT_ROAD_COLOR;
     },
-    [colorBy, selectedSuperblock]
+    [colorBy, selectedSuperblock, showPartition, modifiedStreets]
   );
 
   const getLineWidth = useCallback((d: Feature<LineString, RoadProperties>): number => {
@@ -259,10 +333,80 @@ export function StreetMap({
             setHoveredFeature(info.object as Feature<LineString, RoadProperties> | null);
           },
           updateTriggers: {
-            getLineColor: [colorBy, selectedSuperblock?.id],
+            getLineColor: [colorBy, selectedSuperblock?.id, showPartition, partition?.total_superblocks],
           },
         })
       );
+
+      // Add direction arrows on modified streets (one-way)
+      if (showPartition && partition && modifiedStreets.size > 0) {
+        // Helper to get osmid as number
+        const getOsmId = (osmid: number | number[] | undefined): number | undefined => {
+          if (osmid === undefined) return undefined;
+          return Array.isArray(osmid) ? osmid[0] : osmid;
+        };
+
+        // Find streets that have been modified and get their geometry
+        const modifiedStreetFeatures = streetNetwork.features.filter(f => {
+          const osmid = getOsmId(f.properties?.osmid);
+          return osmid !== undefined && modifiedStreets.get(osmid)?.type === 'one_way';
+        });
+
+        // Create arrow data at midpoints of modified streets
+        const arrowData = modifiedStreetFeatures.map(f => {
+          const coords = f.geometry.coordinates;
+          const midIndex = Math.floor(coords.length / 2);
+          const midPoint = coords[midIndex] || coords[0];
+
+          // Calculate direction from geometry
+          let angle = 0;
+          if (coords.length >= 2) {
+            const start = coords[Math.max(0, midIndex - 1)];
+            const end = coords[Math.min(coords.length - 1, midIndex + 1)];
+            angle = Math.atan2(end[1] - start[1], end[0] - start[0]) * (180 / Math.PI);
+          }
+
+          const osmid = getOsmId(f.properties?.osmid);
+          const mod = osmid !== undefined ? modifiedStreets.get(osmid) : undefined;
+          // Adjust angle based on direction field if available
+          if (mod?.direction) {
+            const dir = mod.direction.toLowerCase();
+            if (dir.includes('north')) angle = 90;
+            else if (dir.includes('south')) angle = -90;
+            else if (dir.includes('east')) angle = 0;
+            else if (dir.includes('west')) angle = 180;
+          }
+
+          return {
+            position: midPoint,
+            angle,
+            name: f.properties?.name || 'One-way street',
+          };
+        });
+
+        if (arrowData.length > 0) {
+          // Direction arrows on one-way streets (using > rotated)
+          result.push(
+            new TextLayer({
+              id: 'one-way-street-arrows',
+              data: arrowData,
+              pickable: false,
+              getPosition: (d: typeof arrowData[0]) => d.position as [number, number],
+              getText: () => '>',
+              getSize: 20,
+              getAngle: (d: typeof arrowData[0]) => -d.angle,
+              getColor: [30, 64, 175, 255], // Darker blue for visibility
+              getTextAnchor: 'middle',
+              getAlignmentBaseline: 'center',
+              fontFamily: 'Arial, Helvetica, sans-serif',
+              fontWeight: 'bold',
+              billboard: false,
+              sizeMinPixels: 14,
+              sizeMaxPixels: 28,
+            } as any)
+          );
+        }
+      }
     }
 
     // Partitioned superblocks layer (new system)
@@ -309,38 +453,100 @@ export function StreetMap({
       );
     }
 
-    // Entry points layer
+    // Entry points layer with direction arrows - color by superblock, direction by position
     if (showPartition && showEntryPoints && partition) {
-      const entryPointData = partition.superblocks.flatMap(sb =>
-        sb.entry_points.map(ep => ({
-          ...ep,
-          superblockId: sb.id,
-        }))
-      );
+      // Build entry point data with actual direction calculated from centroid
+      const entryPointData = partition.superblocks.flatMap((sb, sbIndex) => {
+        const centroid = calculateCentroid(sb.geometry.coordinates as number[][][]);
+
+        return sb.entry_points.map(ep => {
+          // Calculate angle from centroid to entry point
+          const dx = ep.coordinates.lon - centroid[0];
+          const dy = ep.coordinates.lat - centroid[1];
+          const angleDeg = Math.atan2(dy, dx) * (180 / Math.PI);
+          const direction = getDirectionFromAngle(angleDeg);
+
+          return {
+            ...ep,
+            superblockId: sb.id,
+            superblockIndex: sbIndex,
+            centroid,
+            direction: direction.label,
+            arrow: direction.arrow,
+          };
+        });
+      });
 
       if (entryPointData.length > 0) {
+        // Lines connecting entry points to superblock centroid (for visual association)
+        const connectionLines = entryPointData.map(ep => ({
+          path: [
+            [ep.coordinates.lon, ep.coordinates.lat],
+            ep.centroid,
+          ],
+          superblockIndex: ep.superblockIndex,
+        }));
+
+        result.push(
+          new PathLayer({
+            id: 'entry-point-connections',
+            data: connectionLines,
+            pickable: false,
+            widthScale: 1,
+            widthMinPixels: 1,
+            widthMaxPixels: 2,
+            getPath: (d: typeof connectionLines[0]) => d.path,
+            getColor: (d: typeof connectionLines[0]) => {
+              const color = SUPERBLOCK_COLORS[d.superblockIndex % SUPERBLOCK_COLORS.length];
+              return [color[0], color[1], color[2], 100] as [number, number, number, number];
+            },
+            getWidth: 1,
+          } as any)
+        );
+
+        // Entry point circles - colored by superblock
         result.push(
           new ScatterplotLayer({
             id: 'entry-points',
             data: entryPointData,
             pickable: true,
-            opacity: 0.8,
+            opacity: 0.95,
             stroked: true,
             filled: true,
             radiusScale: 1,
-            radiusMinPixels: 4,
-            radiusMaxPixels: 10,
+            radiusMinPixels: 8,
+            radiusMaxPixels: 16,
             getPosition: (d: typeof entryPointData[0]) => [d.coordinates.lon, d.coordinates.lat],
-            getFillColor: (d: typeof entryPointData[0]) => SECTOR_COLORS[d.sector % 8] || SECTOR_COLORS[0],
+            getFillColor: (d: typeof entryPointData[0]) =>
+              SUPERBLOCK_COLORS[d.superblockIndex % SUPERBLOCK_COLORS.length],
             getLineColor: [255, 255, 255, 255],
-            getRadius: 6,
-            lineWidthMinPixels: 1,
+            getRadius: 10,
+            lineWidthMinPixels: 2,
+          } as any)
+        );
+
+        // Direction labels on entry points
+        result.push(
+          new TextLayer({
+            id: 'entry-point-arrows',
+            data: entryPointData,
+            pickable: false,
+            getPosition: (d: typeof entryPointData[0]) => [d.coordinates.lon, d.coordinates.lat],
+            getText: (d: typeof entryPointData[0]) => d.arrow,
+            getSize: 11,
+            getColor: [255, 255, 255, 255],
+            getTextAnchor: 'middle',
+            getAlignmentBaseline: 'center',
+            fontFamily: 'Arial, Helvetica, sans-serif',
+            fontWeight: 'bold',
+            sizeMinPixels: 9,
+            sizeMaxPixels: 13,
           } as any)
         );
       }
     }
 
-    // Modal filters layer
+    // Modal filters layer with barrier visualization
     if (showPartition && showModalFilters && partition) {
       const modalFilterData = partition.superblocks.flatMap(sb =>
         sb.modifications
@@ -351,24 +557,105 @@ export function StreetMap({
           }))
       );
 
+      // One-way conversion data
+      const oneWayData = partition.superblocks.flatMap(sb =>
+        sb.modifications
+          .filter(m => m.modification_type === 'one_way' && m.filter_location)
+          .map(m => ({
+            ...m,
+            superblockId: sb.id,
+          }))
+      );
+
       if (modalFilterData.length > 0) {
+        // Modal filter circles (red/orange for blocking)
         result.push(
           new ScatterplotLayer({
             id: 'modal-filters',
             data: modalFilterData,
             pickable: true,
-            opacity: 0.9,
+            opacity: 0.95,
             stroked: true,
             filled: true,
             radiusScale: 1,
-            radiusMinPixels: 5,
-            radiusMaxPixels: 12,
+            radiusMinPixels: 8,
+            radiusMaxPixels: 16,
             getPosition: (d: typeof modalFilterData[0]) =>
               d.filter_location ? [d.filter_location.lon, d.filter_location.lat] : [0, 0],
-            getFillColor: MODAL_FILTER_COLOR,
+            getFillColor: [239, 68, 68, 255], // Red for barrier
             getLineColor: [255, 255, 255, 255],
-            getRadius: 8,
+            getRadius: 10,
             lineWidthMinPixels: 2,
+          } as any)
+        );
+
+        // X symbol on modal filters
+        result.push(
+          new TextLayer({
+            id: 'modal-filter-icons',
+            data: modalFilterData,
+            pickable: false,
+            getPosition: (d: typeof modalFilterData[0]) =>
+              d.filter_location ? [d.filter_location.lon, d.filter_location.lat] : [0, 0],
+            getText: () => 'X',
+            getSize: 14,
+            getColor: [255, 255, 255, 255],
+            getTextAnchor: 'middle',
+            getAlignmentBaseline: 'center',
+            fontFamily: 'Arial, Helvetica, sans-serif',
+            fontWeight: 'bold',
+            sizeMinPixels: 10,
+            sizeMaxPixels: 16,
+          } as any)
+        );
+      }
+
+      // One-way conversion markers
+      if (oneWayData.length > 0) {
+        result.push(
+          new ScatterplotLayer({
+            id: 'one-way-markers',
+            data: oneWayData,
+            pickable: true,
+            opacity: 0.95,
+            stroked: true,
+            filled: true,
+            radiusScale: 1,
+            radiusMinPixels: 7,
+            radiusMaxPixels: 14,
+            getPosition: (d: typeof oneWayData[0]) =>
+              d.filter_location ? [d.filter_location.lon, d.filter_location.lat] : [0, 0],
+            getFillColor: [59, 130, 246, 255], // Blue for one-way
+            getLineColor: [255, 255, 255, 255],
+            getRadius: 9,
+            lineWidthMinPixels: 2,
+          } as any)
+        );
+
+        // Arrow for one-way direction (using simple characters)
+        result.push(
+          new TextLayer({
+            id: 'one-way-arrows',
+            data: oneWayData,
+            pickable: false,
+            getPosition: (d: typeof oneWayData[0]) =>
+              d.filter_location ? [d.filter_location.lon, d.filter_location.lat] : [0, 0],
+            getText: (d: typeof oneWayData[0]) => {
+              const dir = d.direction?.toLowerCase() || '';
+              if (dir.includes('north')) return '^';
+              if (dir.includes('south')) return 'v';
+              if (dir.includes('east')) return '>';
+              if (dir.includes('west')) return '<';
+              return '>'; // Default
+            },
+            getSize: 16,
+            getColor: [255, 255, 255, 255],
+            getTextAnchor: 'middle',
+            getAlignmentBaseline: 'center',
+            fontFamily: 'Arial, Helvetica, sans-serif',
+            fontWeight: 'bold',
+            sizeMinPixels: 12,
+            sizeMaxPixels: 18,
           } as any)
         );
       }
@@ -710,127 +997,151 @@ export function StreetMap({
 
         {showPartition && partition && (
           <div className="map-legend partition-legend">
-            <div className="legend-title">Partition Status</div>
+            <div
+              className="panel-header"
+              onClick={() => setLegendCollapsed(!legendCollapsed)}
+            >
+              <span className="panel-header-title">Legend</span>
+              <span className={`panel-toggle ${legendCollapsed ? 'collapsed' : ''}`}>▼</span>
+            </div>
+            <div className={`panel-content ${legendCollapsed ? 'collapsed' : ''}`}>
+              <div className="legend-section-title">Superblock Status</div>
+              <div className="legend-item">
+                <span className="legend-color" style={{ background: 'rgba(34, 197, 94, 0.6)', width: 16, height: 16, borderRadius: 4 }} />
+                <span className="legend-label">Valid</span>
+              </div>
+              <div className="legend-item">
+                <span className="legend-color" style={{ background: 'rgba(251, 191, 36, 0.6)', width: 16, height: 16, borderRadius: 4 }} />
+                <span className="legend-label">Some unreachable</span>
+              </div>
+              <div className="legend-item">
+                <span className="legend-color" style={{ background: 'rgba(239, 68, 68, 0.6)', width: 16, height: 16, borderRadius: 4 }} />
+                <span className="legend-label">Invalid</span>
+              </div>
+              {showEntryPoints && (
+                <>
+                  <div className="legend-section-title">Entry Points</div>
+                  <div className="legend-item">
+                    <span className="legend-marker entry-point" style={{ background: 'rgb(99, 102, 241)' }}>N</span>
+                    <span className="legend-label">Direction label</span>
+                  </div>
+                  <div className="legend-hint">Color = superblock, Letter = direction</div>
+                  <div className="legend-hint">Line connects to superblock center</div>
+                </>
+              )}
+              {showModalFilters && (
+                <>
+                  <div className="legend-section-title">Modifications</div>
+                  <div className="legend-item">
+                    <span className="legend-marker" style={{ background: 'rgb(239, 68, 68)' }}>X</span>
+                    <span className="legend-label">Modal filter</span>
+                  </div>
+                  <div className="legend-item">
+                    <span className="legend-marker" style={{ background: 'rgb(59, 130, 246)' }}>&gt;</span>
+                    <span className="legend-label">One-way street</span>
+                  </div>
+                  <div className="legend-item">
+                    <span className="legend-color" style={{ background: 'rgb(239, 68, 68)', height: 4 }} />
+                    <span className="legend-label">Filtered road</span>
+                  </div>
+                  <div className="legend-item">
+                    <span className="legend-color" style={{ background: 'rgb(59, 130, 246)', height: 4 }} />
+                    <span className="legend-label">One-way road</span>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Route legend */}
+        {showRoute && route && route.success && (
+          <div className="map-legend route-legend">
+            <div className="legend-title">Route</div>
             <div className="legend-item">
-              <span className="legend-color" style={{ background: 'rgba(34, 197, 94, 0.6)' }} />
-              <span className="legend-label">Valid (all accessible)</span>
+              <span className="legend-color" style={{ background: 'rgb(59, 130, 246)', height: 4 }} />
+              <span className="legend-label">Arterial roads</span>
             </div>
             <div className="legend-item">
-              <span className="legend-color" style={{ background: 'rgba(251, 191, 36, 0.6)' }} />
-              <span className="legend-label">Some unreachable</span>
+              <span className="legend-color" style={{ background: 'rgb(34, 197, 94)', height: 4 }} />
+              <span className="legend-label">Interior roads</span>
             </div>
-            <div className="legend-item">
-              <span className="legend-color" style={{ background: 'rgba(239, 68, 68, 0.6)' }} />
-              <span className="legend-label">Constraint violated</span>
-            </div>
-            {showEntryPoints && (
-              <>
-                <div className="legend-title" style={{ marginTop: '8px' }}>Entry Points</div>
-                <div className="legend-item">
-                  <span className="legend-color" style={{ background: 'rgb(59, 130, 246)' }} />
-                  <span className="legend-label">Sector 0</span>
-                </div>
-                <div className="legend-item">
-                  <span className="legend-color" style={{ background: 'rgb(34, 197, 94)' }} />
-                  <span className="legend-label">Sector 1</span>
-                </div>
-                <div className="legend-item">
-                  <span className="legend-color" style={{ background: 'rgb(239, 68, 68)' }} />
-                  <span className="legend-label">Sector 2</span>
-                </div>
-                <div className="legend-item">
-                  <span className="legend-color" style={{ background: 'rgb(251, 191, 36)' }} />
-                  <span className="legend-label">Sector 3</span>
-                </div>
-              </>
-            )}
-            {showModalFilters && (
-              <>
-                <div className="legend-title" style={{ marginTop: '8px' }}>Modifications</div>
-                <div className="legend-item">
-                  <span className="legend-color" style={{ background: 'rgb(168, 85, 247)' }} />
-                  <span className="legend-label">Modal filter</span>
-                </div>
-              </>
-            )}
           </div>
         )}
       </div>
 
-      {/* Network stats */}
-      {streetNetwork && (
-        <div className="network-info">
-          <div className="info-title">Network Stats</div>
-          <div className="info-row">
-            <span>Roads:</span>
-            <span>{streetNetwork.metadata.total_edges}</span>
+      {/* Stacked info panels on bottom right */}
+      <div className="map-info-stack">
+        <div className="info-panel">
+          <div
+            className="info-panel-header"
+            onClick={() => setInfoCollapsed(!infoCollapsed)}
+          >
+            <span className="info-panel-title">Info</span>
+            <span className={`panel-toggle ${infoCollapsed ? 'collapsed' : ''}`}>▼</span>
           </div>
-          <div className="info-row">
-            <span>Total length:</span>
-            <span>{streetNetwork.metadata.total_length_km} km</span>
-          </div>
-          {streetNetwork.metadata.average_load !== undefined && (
-            <div className="info-row">
-              <span>Avg. load:</span>
-              <span>{(streetNetwork.metadata.average_load * 100).toFixed(0)}%</span>
-            </div>
-          )}
-        </div>
-      )}
+          <div className={`info-panel-content ${infoCollapsed ? 'collapsed' : ''}`}>
+            {/* Route info */}
+            {showRoute && route && route.success && (
+              <div className="info-section">
+                <div className="info-section-title">Route</div>
+                <div className="info-row">
+                  <span>Distance:</span>
+                  <span>{route.total_distance_km.toFixed(2)} km</span>
+                </div>
+                <div className="info-row">
+                  <span>Time:</span>
+                  <span>{route.estimated_time_min.toFixed(0)} min</span>
+                </div>
+                <div className="info-row">
+                  <span>Arterial:</span>
+                  <span>{route.arterial_percent.toFixed(0)}%</span>
+                </div>
+              </div>
+            )}
 
-      {/* Partition stats */}
-      {showPartition && partition && (
-        <div className="partition-info">
-          <div className="info-title">Partition Stats</div>
-          <div className="info-row">
-            <span>Superblocks:</span>
-            <span>{partition.total_superblocks}</span>
-          </div>
-          <div className="info-row">
-            <span>Coverage:</span>
-            <span>{partition.coverage_percent.toFixed(1)}%</span>
-          </div>
-          <div className="info-row">
-            <span>Modal filters:</span>
-            <span>{partition.total_modal_filters}</span>
-          </div>
-          <div className="info-row">
-            <span>One-way conversions:</span>
-            <span>{partition.total_one_way_conversions}</span>
-          </div>
-          {partition.total_unreachable_addresses > 0 && (
-            <div className="info-row warning">
-              <span>Unreachable:</span>
-              <span>{partition.total_unreachable_addresses}</span>
-            </div>
-          )}
-        </div>
-      )}
+            {/* Partition stats */}
+            {showPartition && partition && (
+              <div className="info-section">
+                <div className="info-section-title">Partition</div>
+                <div className="info-row">
+                  <span>Superblocks:</span>
+                  <span>{partition.total_superblocks}</span>
+                </div>
+                <div className="info-row">
+                  <span>Coverage:</span>
+                  <span>{partition.coverage_percent.toFixed(1)}%</span>
+                </div>
+                <div className="info-row">
+                  <span>Modifications:</span>
+                  <span>{partition.total_modal_filters + partition.total_one_way_conversions}</span>
+                </div>
+                {partition.total_unreachable_addresses > 0 && (
+                  <div className="info-row warning">
+                    <span>Unreachable:</span>
+                    <span>{partition.total_unreachable_addresses}</span>
+                  </div>
+                )}
+              </div>
+            )}
 
-      {/* Route info */}
-      {showRoute && route && route.success && (
-        <div className="route-info">
-          <div className="info-title">Route</div>
-          <div className="info-row">
-            <span>Distance:</span>
-            <span>{route.total_distance_km.toFixed(2)} km</span>
+            {/* Network stats */}
+            {streetNetwork && (
+              <div className="info-section">
+                <div className="info-section-title">Network</div>
+                <div className="info-row">
+                  <span>Roads:</span>
+                  <span>{streetNetwork.metadata.total_edges}</span>
+                </div>
+                <div className="info-row">
+                  <span>Length:</span>
+                  <span>{streetNetwork.metadata.total_length_km} km</span>
+                </div>
+              </div>
+            )}
           </div>
-          <div className="info-row">
-            <span>Time:</span>
-            <span>{route.estimated_time_min.toFixed(0)} min</span>
-          </div>
-          <div className="info-row">
-            <span>Arterial:</span>
-            <span>{route.arterial_percent.toFixed(0)}%</span>
-          </div>
-          {route.superblocks_traversed.length > 0 && (
-            <div className="info-row">
-              <span>Superblocks:</span>
-              <span>{route.superblocks_traversed.length}</span>
-            </div>
-          )}
         </div>
-      )}
+      </div>
 
     </div>
   );

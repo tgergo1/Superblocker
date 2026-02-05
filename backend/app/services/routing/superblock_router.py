@@ -438,6 +438,8 @@ class SuperblockRouter:
                     if osmid not in self.arterial_set:
                         # Check if it's really an interior road
                         highway = data.get("highway", "")
+                        if isinstance(highway, list):
+                            highway = highway[0] if highway else ""
                         if highway not in {"primary", "secondary", "tertiary",
                                            "primary_link", "secondary_link", "tertiary_link"}:
                             continue
@@ -450,6 +452,8 @@ class SuperblockRouter:
                 # Calculate cost
                 length = data.get("length", 100)
                 highway = data.get("highway", "residential")
+                if isinstance(highway, list):
+                    highway = highway[0] if highway else "residential"
 
                 # Prefer arterials with lower cost
                 if highway in {"primary", "secondary", "tertiary"}:

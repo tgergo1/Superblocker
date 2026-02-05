@@ -251,56 +251,85 @@ function App() {
             </button>
           </div>
           <div className="details-body">
-            <div className="detail-row">
-              <span>ID:</span>
-              <span>{selectedEnforcedSuperblock.id.slice(0, 12)}...</span>
-            </div>
-            <div className="detail-row">
-              <span>Area:</span>
-              <span>{selectedEnforcedSuperblock.area_hectares.toFixed(1)} ha</span>
-            </div>
-            <div className="detail-row">
-              <span>Sectors:</span>
-              <span>{selectedEnforcedSuperblock.num_sectors}</span>
-            </div>
-            <div className="detail-row">
-              <span>Entry Points:</span>
-              <span>{selectedEnforcedSuperblock.entry_points.length}</span>
-            </div>
-            <div className="detail-row">
-              <span>Constraint Valid:</span>
-              <span className={selectedEnforcedSuperblock.constraint_validated ? 'status-good' : 'status-bad'}>
-                {selectedEnforcedSuperblock.constraint_validated ? 'Yes' : 'No'}
+            {/* Status indicators */}
+            <div className="status-row">
+              <span className={`status-badge ${selectedEnforcedSuperblock.constraint_validated ? 'valid' : 'invalid'}`}>
+                {selectedEnforcedSuperblock.constraint_validated ? '✓ Valid' : '✕ Invalid'}
               </span>
-            </div>
-            <div className="detail-row">
-              <span>All Reachable:</span>
-              <span className={selectedEnforcedSuperblock.all_addresses_reachable ? 'status-good' : 'status-warning'}>
-                {selectedEnforcedSuperblock.all_addresses_reachable ? 'Yes' : 'No'}
+              <span className={`status-badge ${selectedEnforcedSuperblock.all_addresses_reachable ? 'reachable' : 'unreachable'}`}>
+                {selectedEnforcedSuperblock.all_addresses_reachable ? '✓ All Reachable' : '⚠ Some Unreachable'}
               </span>
             </div>
 
-            <div className="details-section-title">Modifications</div>
             <div className="detail-row">
-              <span>Modal Filters:</span>
-              <span>{selectedEnforcedSuperblock.modal_filter_count}</span>
-            </div>
-            <div className="detail-row">
-              <span>One-way Conversions:</span>
-              <span>{selectedEnforcedSuperblock.one_way_conversion_count}</span>
+              <span>Area:</span>
+              <span>{selectedEnforcedSuperblock.area_hectares.toFixed(1)} ha</span>
             </div>
             <div className="detail-row">
               <span>Interior Roads:</span>
               <span>{selectedEnforcedSuperblock.interior_roads_count}</span>
             </div>
 
+            {/* Entry Points by direction */}
+            <div className="details-section-title">Entry Points ({selectedEnforcedSuperblock.entry_points.length})</div>
+            <div className="entry-points-grid">
+              {[0, 1, 2, 3].map(sector => {
+                const count = selectedEnforcedSuperblock.entry_points.filter(ep => ep.sector === sector).length;
+                const labels = ['N', 'E', 'S', 'W'];
+                const arrows = ['↑', '→', '↓', '←'];
+                const colors = ['#3b82f6', '#22c55e', '#ef4444', '#fbbf24'];
+                return count > 0 ? (
+                  <div key={sector} className="entry-point-item" style={{ borderLeftColor: colors[sector] }}>
+                    <span className="direction-arrow" style={{ color: colors[sector] }}>{arrows[sector]}</span>
+                    <span className="direction-label">{labels[sector]}</span>
+                    <span className="direction-count">{count}</span>
+                  </div>
+                ) : null;
+              })}
+            </div>
+
+            {/* Street Modifications */}
+            <div className="details-section-title">
+              Street Modifications ({selectedEnforcedSuperblock.modifications.length})
+            </div>
+            <div className="modifications-list">
+              {selectedEnforcedSuperblock.modifications.slice(0, 5).map((mod, i) => (
+                <div key={i} className="modification-item">
+                  <span className={`mod-icon ${mod.modification_type}`}>
+                    {mod.modification_type === 'modal_filter' ? '✕' :
+                     mod.modification_type === 'one_way' ? '→' :
+                     mod.modification_type === 'turn_restriction' ? '⊘' : '▬'}
+                  </span>
+                  <div className="mod-details">
+                    <span className="mod-name">{mod.name || `Road ${mod.osm_id}`}</span>
+                    <span className="mod-type">
+                      {mod.modification_type.replace('_', ' ')}
+                      {mod.direction && (
+                        <span className="mod-direction"> → {mod.direction}</span>
+                      )}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              {selectedEnforcedSuperblock.modifications.length > 5 && (
+                <div className="modifications-more">
+                  +{selectedEnforcedSuperblock.modifications.length - 5} more modifications
+                </div>
+              )}
+            </div>
+
+            {/* Unreachable addresses warning */}
             {selectedEnforcedSuperblock.unreachable_addresses.length > 0 && (
               <>
-                <div className="details-section-title">Unreachable ({selectedEnforcedSuperblock.unreachable_addresses.length})</div>
+                <div className="details-section-title warning">
+                  ⚠ Unreachable ({selectedEnforcedSuperblock.unreachable_addresses.length})
+                </div>
                 <div className="unreachable-list">
                   {selectedEnforcedSuperblock.unreachable_addresses.slice(0, 3).map((addr, i) => (
                     <div key={i} className="unreachable-item">
-                      Node {addr.node_id} - Sector {addr.nearest_entry_sector}
+                      <span className="unreachable-icon">⚠</span>
+                      <span>Node {addr.node_id}</span>
+                      <span className="unreachable-reason">{addr.reason}</span>
                     </div>
                   ))}
                   {selectedEnforcedSuperblock.unreachable_addresses.length > 3 && (

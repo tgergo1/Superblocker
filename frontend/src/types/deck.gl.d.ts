@@ -120,4 +120,30 @@ declare module '@deck.gl/layers' {
       updateTriggers?: Record<string, unknown[]>;
     });
   }
+
+  export class TextLayer<D = any> {
+    constructor(props: {
+      id: string;
+      data: D[];
+      pickable?: boolean;
+      getPosition?: (d: D) => [number, number];
+      getText?: (d: D) => string;
+      getSize?: ((d: D) => number) | number;
+      getColor?: ((d: D) => [number, number, number, number]) | [number, number, number, number];
+      getAngle?: ((d: D) => number) | number;
+      getTextAnchor?: 'start' | 'middle' | 'end';
+      getAlignmentBaseline?: 'top' | 'center' | 'bottom';
+      fontFamily?: string;
+      fontWeight?: string | number;
+      sizeMinPixels?: number;
+      sizeMaxPixels?: number;
+      billboard?: boolean;
+      sizeScale?: number;
+      updateTriggers?: Record<string, unknown[]>;
+    });
+  }
+}
+
+declare module 'deck.gl' {
+  export { TextLayer } from '@deck.gl/layers';
 }

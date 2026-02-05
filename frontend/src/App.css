@@ -35,7 +35,10 @@
 
 .app-overlay {
   position: absolute;
-  inset: 16px;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  bottom: 60px; /* Leave space for map controls and legends */
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -47,20 +50,34 @@
 .overlay-column {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   pointer-events: none;
+  max-height: 100%;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+.overlay-column::-webkit-scrollbar {
+  width: 6px;
+}
+
+.overlay-column::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
 }
 
 .overlay-column > * {
   pointer-events: auto;
+  flex-shrink: 0;
 }
 
 .overlay-left {
-  width: min(420px, 100%);
+  width: min(380px, calc(50% - 20px));
 }
 
 .overlay-right {
-  width: min(320px, 100%);
+  width: min(300px, calc(50% - 20px));
 }
 
 @media (max-width: 960px) {
@@ -73,4 +90,322 @@
   .overlay-right {
     width: 100%;
   }
+}
+
+/* Mode Toggle in Header */
+.mode-toggle {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 4px;
+  border-radius: 6px;
+}
+
+.mode-btn {
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.mode-btn:hover {
+  color: white;
+}
+
+.mode-btn.active {
+  background: #3b82f6;
+  color: white;
+}
+
+/* Enforced Superblock Details Panel */
+.enforced-superblock-details {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  min-width: 320px;
+  max-width: 400px;
+  z-index: 1001;
+  overflow: hidden;
+}
+
+.enforced-superblock-details .details-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #3b82f6;
+  color: white;
+}
+
+.enforced-superblock-details .details-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.enforced-superblock-details .close-button {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  opacity: 0.8;
+}
+
+.enforced-superblock-details .close-button:hover {
+  opacity: 1;
+}
+
+.enforced-superblock-details .details-body {
+  padding: 14px 16px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+/* Status Row */
+.status-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.status-badge {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.status-badge.valid {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-badge.invalid {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.status-badge.reachable {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.status-badge.unreachable {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+/* Detail Rows */
+.enforced-superblock-details .detail-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 5px 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.enforced-superblock-details .detail-row:last-of-type {
+  border-bottom: none;
+}
+
+.enforced-superblock-details .detail-row span:first-child {
+  color: #6b7280;
+}
+
+.enforced-superblock-details .detail-row span:last-child {
+  color: #111827;
+  font-weight: 500;
+}
+
+/* Section Title */
+.enforced-superblock-details .details-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #374151;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 14px;
+  margin-bottom: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.enforced-superblock-details .details-section-title.warning {
+  color: #b45309;
+}
+
+/* Entry Points Grid */
+.entry-points-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
+.entry-point-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #f9fafb;
+  border-radius: 6px;
+  border-left: 3px solid;
+}
+
+.direction-arrow {
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.direction-label {
+  font-size: 12px;
+  color: #374151;
+  font-weight: 500;
+}
+
+.direction-count {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: #111827;
+}
+
+/* Modifications List */
+.modifications-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.modification-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #f9fafb;
+  border-radius: 6px;
+}
+
+.mod-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: bold;
+  color: white;
+  flex-shrink: 0;
+}
+
+.mod-icon.modal_filter {
+  background: #ef4444;
+}
+
+.mod-icon.one_way {
+  background: #3b82f6;
+}
+
+.mod-icon.turn_restriction {
+  background: #f59e0b;
+}
+
+.mod-icon.full_closure {
+  background: #7c3aed;
+}
+
+.mod-details {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mod-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: #374151;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mod-type {
+  font-size: 10px;
+  color: #6b7280;
+  text-transform: capitalize;
+}
+
+.mod-direction {
+  color: #3b82f6;
+  font-weight: 600;
+}
+
+.modifications-more {
+  font-size: 11px;
+  color: #6b7280;
+  text-align: center;
+  padding: 6px;
+  font-style: italic;
+}
+
+/* Unreachable List */
+.unreachable-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.unreachable-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #fef3c7;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #92400e;
+}
+
+.unreachable-icon {
+  color: #f59e0b;
+}
+
+.unreachable-reason {
+  margin-left: auto;
+  font-size: 10px;
+  color: #b45309;
+}
+
+.unreachable-more {
+  font-size: 10px;
+  color: #b45309;
+  text-align: center;
+  padding: 4px;
+  font-style: italic;
+}
+
+/* Status colors */
+.status-good {
+  color: #22c55e !important;
+}
+
+.status-bad {
+  color: #ef4444 !important;
+}
+
+.status-warning {
+  color: #f59e0b !important;
 }

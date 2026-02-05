@@ -6,6 +6,13 @@
   width: 100%;
   max-width: 100%;
   overflow: hidden;
+  box-sizing: border-box;
+}
+
+.route-validator *,
+.route-validator *::before,
+.route-validator *::after {
+  box-sizing: border-box;
 }
 
 .route-validator .validator-header {
@@ -24,30 +31,122 @@
   padding: 12px 16px;
 }
 
-/* Coordinate Input */
-.route-validator .coordinate-input {
-  margin-bottom: 12px;
+/* Input Mode Toggle */
+.route-validator .input-mode-toggle {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+  background: #f3f4f6;
+  padding: 3px;
+  border-radius: 6px;
+}
+
+.route-validator .mode-btn {
+  flex: 1;
+  padding: 5px 8px;
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 500;
+  color: #6b7280;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.route-validator .mode-btn.active {
+  background: white;
+  color: #374151;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* Location Input */
+.route-validator .location-input {
+  margin-bottom: 10px;
 }
 
 .route-validator .input-label {
   display: block;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   color: #374151;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
+}
+
+/* Address Search */
+.route-validator .address-input-wrapper {
+  position: relative;
+}
+
+.route-validator .address-field {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 12px;
+  outline: none;
+}
+
+.route-validator .address-field:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.route-validator .address-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #d1d5db;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  max-height: 150px;
+  overflow-y: auto;
+  z-index: 10;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.route-validator .address-result-item {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: #374151;
+  cursor: pointer;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.route-validator .address-result-item:last-child {
+  border-bottom: none;
+}
+
+.route-validator .address-result-item:hover {
+  background: #f3f4f6;
+}
+
+.route-validator .address-searching {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: #6b7280;
+  text-align: center;
+}
+
+/* Coordinate Input */
+.route-validator .coordinate-input {
+  margin-bottom: 10px;
 }
 
 .route-validator .coord-row {
   display: flex;
-  gap: 6px;
+  gap: 4px;
 }
 
 .route-validator .coord-field {
   flex: 1;
+  min-width: 0;
   padding: 6px 8px;
   border: 1px solid #d1d5db;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 11px;
   outline: none;
 }
 
@@ -86,6 +185,13 @@
   font-size: 10px;
   color: #22c55e;
   font-family: monospace;
+}
+
+.route-validator .input-label .coord-set {
+  margin-top: 0;
+  margin-left: 4px;
+  display: inline;
+  font-weight: normal;
 }
 
 /* Route Options */
