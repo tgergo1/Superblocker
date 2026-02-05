@@ -3,6 +3,7 @@ import httpx
 
 from app.core.config import get_settings
 from app.models.schemas import SearchResponse, SearchResult, BoundingBox
+from app.services.cache_service import get_cache_service
 
 router = APIRouter()
 settings = get_settings()
@@ -16,8 +17,17 @@ async def search_places(
     """
     Search for cities and places using Nominatim geocoding.
 
+    Uses caching to avoid re-fetching the same search results.
+
     Returns a list of matching places with their coordinates and bounding boxes.
     """
+    # Check cache first
+    cache_params = {"query": q.lower().strip(), "limit": limit}
+    cache_service = get_cache_service()
+    cached_data = cache_service.get("search", cache_params)
+
+    if cached_data is not None:
+        return SearchResponse(results=[SearchResult(**r) for r in cached_data])
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(
@@ -74,6 +84,14 @@ async def search_places(
                 importance=item.get("importance", 0.0),
             )
         )
+
+    # Cache the results
+    cache_service.set(
+        "search",
+        cache_params,
+        [r.model_dump() for r in results],
+        ttl_seconds=settings.cache_search_ttl_seconds,
+    )
 
     return SearchResponse(results=results)
 

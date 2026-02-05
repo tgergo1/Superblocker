@@ -102,6 +102,56 @@ This will start both backend and frontend services.
 - `POST /api/v1/network` - Fetch street network for a bounding box
 - `POST /api/v1/analyze` - Analyze area for superblock candidates (coming soon)
 
+### Cache Management
+- `GET /api/v1/cache/stats` - Get cache statistics
+- `DELETE /api/v1/cache?cache_type={type}` - Clear cache entries (optional type filter)
+- `POST /api/v1/cache/cleanup` - Remove expired cache entries
+
+## Caching
+
+The application includes a robust caching system to improve performance by avoiding redundant API calls and computations.
+
+### What is Cached
+
+- **Street Network Data** (`network`): Downloaded road networks from OpenStreetMap (7 days TTL)
+- **Analysis Results** (`analysis`): Superblock detection and analysis results (24 hours TTL)  
+- **Search Results** (`search`): Nominatim geocoding search results (1 hour TTL)
+
+### Configuration
+
+Cache settings can be configured via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CACHE_ENABLED` | `true` | Enable or disable caching |
+| `CACHE_DIR` | `cache` | Directory for cache files |
+| `CACHE_TTL_SECONDS` | `86400` | Default cache TTL (24 hours) |
+| `CACHE_NETWORK_TTL_SECONDS` | `604800` | Network data TTL (7 days) |
+| `CACHE_ANALYSIS_TTL_SECONDS` | `86400` | Analysis results TTL (24 hours) |
+| `CACHE_SEARCH_TTL_SECONDS` | `3600` | Search results TTL (1 hour) |
+
+### Cache Management
+
+View cache statistics:
+```bash
+curl http://localhost:8000/api/v1/cache/stats
+```
+
+Clear all cache:
+```bash
+curl -X DELETE http://localhost:8000/api/v1/cache
+```
+
+Clear specific cache type:
+```bash
+curl -X DELETE "http://localhost:8000/api/v1/cache?cache_type=network"
+```
+
+Remove expired entries:
+```bash
+curl -X POST http://localhost:8000/api/v1/cache/cleanup
+```
+
 ## Project Structure
 
 ```
@@ -113,6 +163,7 @@ superblocker/
 │   │   ├── core/                # Configuration
 │   │   ├── models/              # Pydantic schemas
 │   │   ├── services/            # Business logic
+│   │   │   └── cache_service.py # Caching system
 │   │   └── utils/               # Utilities
 │   └── requirements.txt
 ├── frontend/
@@ -131,6 +182,9 @@ superblocker/
 - `DEBUG` - Enable debug mode
 - `CORS_ORIGINS` - Allowed CORS origins
 - `NOMINATIM_USER_AGENT` - User agent for Nominatim requests
+- `CACHE_ENABLED` - Enable/disable caching (default: true)
+- `CACHE_DIR` - Cache directory path (default: cache)
+- `CACHE_*_TTL_SECONDS` - TTL settings for different cache types
 
 ### Frontend (.env)
 - `VITE_API_URL` - Backend API URL

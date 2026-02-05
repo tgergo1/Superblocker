@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 
 from app.core.config import get_settings
-from app.api.routes import search, analysis
+from app.api.routes import search, analysis, cache
 
 settings = get_settings()
 
@@ -30,6 +30,7 @@ app.add_middleware(
 # Include routers
 app.include_router(search.router, prefix=settings.api_v1_prefix, tags=["search"])
 app.include_router(analysis.router, prefix=settings.api_v1_prefix, tags=["analysis"])
+app.include_router(cache.router, prefix=settings.api_v1_prefix, tags=["cache"])
 
 
 @app.get("/")

@@ -8,6 +8,7 @@ import time
 
 from app.models.schemas import BoundingBox, StreetNetworkResponse
 from app.core.config import get_settings
+from app.services.cache_service import get_cache_service
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -62,6 +63,8 @@ async def get_street_network(
     """
     Fetch street network from OSM for a bounding box.
 
+    Uses caching to avoid re-fetching the same network data.
+
     Args:
         bbox: Bounding box coordinates
         network_type: Type of network ('drive', 'walk', 'bike', 'all')
@@ -70,11 +73,7 @@ async def get_street_network(
         StreetNetworkResponse with GeoJSON features
     """
     start_time = time.time()
-    logger.info(
-        "Fetching street network (network_type=%s bbox=%s)",
-        network_type,
-        bbox.model_dump(),
-    )
+
     # Validate bbox size to prevent huge requests
     lat_diff = bbox.north - bbox.south
     lon_diff = bbox.east - bbox.west
@@ -87,6 +86,36 @@ async def get_street_network(
 
     if lat_diff <= 0 or lon_diff <= 0:
         raise ValueError("Invalid bounding box: north must be > south, east must be > west")
+
+    # Round bbox coordinates for consistent cache keys (5 decimal places ~ 1m precision)
+    cache_params = {
+        "north": round(bbox.north, 5),
+        "south": round(bbox.south, 5),
+        "east": round(bbox.east, 5),
+        "west": round(bbox.west, 5),
+        "network_type": network_type,
+    }
+
+    # Check cache first
+    cache_service = get_cache_service()
+    cached_data = cache_service.get("network", cache_params)
+
+    if cached_data is not None:
+        logger.info(
+            "Street network loaded from cache (network_type=%s)",
+            network_type,
+        )
+        return StreetNetworkResponse(
+            type=cached_data["type"],
+            features=cached_data["features"],
+            metadata=cached_data["metadata"],
+        )
+
+    logger.info(
+        "Fetching street network from OSM (network_type=%s bbox=%s)",
+        network_type,
+        bbox.model_dump(),
+    )
 
     # Fetch the network using OSMnx
     # OSMnx 2.x expects bbox as tuple: (left, bottom, right, top) = (west, south, east, north)
@@ -197,8 +226,22 @@ async def get_street_network(
         "network_type": network_type,
     }
 
-    return StreetNetworkResponse(
+    response = StreetNetworkResponse(
         type="FeatureCollection",
         features=features,
         metadata=metadata,
     )
+
+    # Cache the result
+    cache_service.set(
+        "network",
+        cache_params,
+        {
+            "type": response.type,
+            "features": response.features,
+            "metadata": response.metadata,
+        },
+        ttl_seconds=settings.cache_network_ttl_seconds,
+    )
+
+    return response
