@@ -19,8 +19,10 @@ import osmnx as ox
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from shapely.geometry import Polygon, Point, LineString, MultiPolygon, mapping
 from shapely.ops import polygonize, unary_union
+from shapely.strtree import STRtree
 import pyproj
 from shapely.ops import transform
 import uuid
@@ -388,25 +390,71 @@ class SuperblockAnalyzer:
         report_progress("scoring", 65, f"Scoring {len(candidates)} candidates...")
         logger.info("Scoring %s candidates...", len(candidates))
 
-        # 4. Score and rank candidates
+        # 4. Score and rank candidates in parallel
         scored_candidates = []
-        for i, candidate in enumerate(candidates):
-            scored = self._score_candidate(candidate, G)
-            scored_candidates.append(scored)
+        
+        # Use ThreadPoolExecutor for parallel scoring (CPU-bound but with GIL,
+        # still benefits from concurrency during I/O and geometry operations)
+        # Limit to 4 workers based on:
+        # - Typical multi-core systems (4-8 cores)
+        # - Balance between parallelism and thread management overhead
+        # - Python GIL contention for CPU-bound operations
+        max_workers = min(4, len(candidates))  # Limit to 4 workers to avoid overhead
+        
+        if len(candidates) > 5 and max_workers > 1:
+            # Parallel scoring for multiple candidates
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all scoring tasks
+                future_to_candidate = {
+                    executor.submit(self._score_candidate, candidate, G): i
+                    for i, candidate in enumerate(candidates)
+                }
+                
+                # Collect results as they complete
+                for future in as_completed(future_to_candidate):
+                    i = future_to_candidate[future]
+                    try:
+                        scored = future.result()
+                        scored_candidates.append(scored)
+                        
+                        if i % 10 == 0:
+                            pct = 65 + int(20 * (len(scored_candidates) / len(candidates)))
+                            report_progress("scoring", pct, f"Scoring candidate {len(scored_candidates)}/{len(candidates)}...")
+                    except Exception as e:
+                        logger.error(f"Error scoring candidate {i}: {e}")
+        else:
+            # Sequential scoring for small numbers of candidates
+            for i, candidate in enumerate(candidates):
+                scored = self._score_candidate(candidate, G)
+                scored_candidates.append(scored)
 
-            if i % 10 == 0:
-                pct = 65 + int(20 * (i / len(candidates)))
-                report_progress("scoring", pct, f"Scoring candidate {i+1}/{len(candidates)}...")
+                if i % 10 == 0:
+                    pct = 65 + int(20 * (i / len(candidates)))
+                    report_progress("scoring", pct, f"Scoring candidate {i+1}/{len(candidates)}...")
 
         report_progress("reorientation", 85, "Planning street interventions...")
         logger.info("Planning street interventions for top candidates...")
 
-        # 5. Plan interventions for top candidates
-        for candidate in scored_candidates[:20]:  # Top 20
-            self._plan_interventions(candidate, G)
-
-        # Sort by score
+        # 5. Sort by score first, then plan interventions for top candidates only
         scored_candidates.sort(key=lambda c: c.score, reverse=True)
+        
+        # Plan interventions for top candidates in parallel
+        top_candidates = scored_candidates[:20]
+        if len(top_candidates) > 2:
+            with ThreadPoolExecutor(max_workers=min(4, len(top_candidates))) as executor:
+                futures = [
+                    executor.submit(self._plan_interventions, candidate, G)
+                    for candidate in top_candidates
+                ]
+                # Wait for all to complete
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logger.error(f"Error planning interventions: {e}")
+        else:
+            for candidate in top_candidates:
+                self._plan_interventions(candidate, G)
 
         report_progress("complete", 100, f"Analysis complete: {len(scored_candidates)} candidates found")
         logger.info("Analysis complete: %s candidates found", len(scored_candidates))
@@ -433,6 +481,10 @@ class SuperblockAnalyzer:
         1. Extract edges with centrality above threshold (boundary candidates)
         2. Create polygons from enclosed areas
         3. Filter by size constraints
+        
+        Optimizations:
+        - Uses spatial indexing (R-tree) for fast polygon-edge intersection
+        - Batch processing for improved performance
         """
         def report_progress(percent: int, message: str) -> None:
             if progress_callback:
@@ -455,10 +507,10 @@ class SuperblockAnalyzer:
         boundary_edges = []
         total_edges = len(edges)
         report_progress(45, "Scanning edges for boundary roads...")
-        update_step = max(1, total_edges // 20)
-
+        
+        # Use itertuples for better performance
         for i, row in enumerate(edges.itertuples(index=False), start=1):
-            if i == 1 or i % update_step == 0 or i == total_edges:
+            if i % max(1, total_edges // 20) == 0:
                 percent = 45 + int(7 * (i / total_edges)) if total_edges else 45
                 report_progress(
                     percent,
@@ -490,7 +542,6 @@ class SuperblockAnalyzer:
         polygons = list(polygonize(boundary_union))
 
         # Filter and create candidates
-        candidates = []
         transformer = pyproj.Transformer.from_crs(
             self.proj_wgs84, self.proj_mercator, always_xy=True
         )
@@ -499,8 +550,27 @@ class SuperblockAnalyzer:
         if total_polys == 0:
             return []
 
+        # Build spatial index for fast intersection queries
+        report_progress(53, "Building spatial index for edge geometries...")
+        edge_geometries = edges.geometry.tolist()
+        edge_osmids = []
+        edge_centroids = []
+        
+        for row in edges.itertuples(index=False):
+            osmid = getattr(row, "osmid", 0)
+            if isinstance(osmid, list):
+                osmid = osmid[0]
+            edge_osmids.append(int(osmid))
+            edge_centroids.append(row.geometry.centroid)
+        
+        # Create spatial index for boundary intersection tests
+        edge_tree = STRtree(edge_geometries)
+        centroid_tree = STRtree(edge_centroids)
+        
+        candidates = []
+        
         for poly_idx, poly in enumerate(polygons, start=1):
-            percent = 52 + int(8 * (poly_idx / total_polys))
+            percent = 54 + int(6 * (poly_idx / total_polys))
             report_progress(
                 percent,
                 f"Evaluating polygons ({poly_idx}/{total_polys})",
@@ -517,41 +587,29 @@ class SuperblockAnalyzer:
             if area_ha < self.min_area or area_ha > self.max_area:
                 continue
 
-            # Find interior and perimeter roads
-            perimeter_ids = []
-            interior_ids = []
-
-            last_edge_update = time.time()
-            for edge_idx, row in enumerate(edges.itertuples(index=False), start=1):
-                osmid = getattr(row, "osmid", 0)
-                if isinstance(osmid, list):
-                    osmid = osmid[0]
-
-                name = getattr(row, "name", None)
-                if isinstance(name, list):
-                    name = name[0] if name else None
-
-                if time.time() - last_edge_update >= 2:
-                    suffix = f", osmid={osmid}" if osmid else ""
-                    if name:
-                        suffix += f", name={name}"
-                    report_progress(
-                        percent,
-                        f"Polygon {poly_idx}/{total_polys}: scanning edges ({edge_idx}/{total_edges}){suffix}",
-                    )
-                    last_edge_update = time.time()
-
-                if row.geometry.intersects(poly.boundary):
-                    perimeter_ids.append(int(osmid))
-                elif poly.contains(row.geometry.centroid):
-                    interior_ids.append(int(osmid))
+            # Find interior and perimeter roads using spatial index
+            # Query edges that potentially intersect with polygon boundary
+            boundary_candidates = edge_tree.query(poly.boundary)
+            perimeter_ids = set()
+            
+            for idx in boundary_candidates:
+                if edge_geometries[idx].intersects(poly.boundary):
+                    perimeter_ids.add(edge_osmids[idx])
+            
+            # Query edges that are potentially inside polygon
+            interior_candidates = centroid_tree.query(poly)
+            interior_ids = set()
+            
+            for idx in interior_candidates:
+                if poly.contains(edge_centroids[idx]) and edge_osmids[idx] not in perimeter_ids:
+                    interior_ids.add(edge_osmids[idx])
 
             candidates.append(SuperblockCandidate(
                 id=str(uuid.uuid4())[:8],
                 geometry=mapping(poly),
                 area_hectares=round(area_ha, 2),
-                perimeter_roads=list(set(perimeter_ids))[:30],
-                interior_roads=list(set(interior_ids))[:50],
+                perimeter_roads=list(perimeter_ids)[:30],
+                interior_roads=list(interior_ids)[:50],
                 score=0,
                 algorithm="centrality_based",
             ))
@@ -573,6 +631,10 @@ class SuperblockAnalyzer:
         4. Accessibility: Walking distance to boundary, access points
         5. Connectivity: Internal network density for walking/cycling
         6. Boundary quality: Capacity of boundary roads to absorb diverted traffic
+        
+        Optimizations:
+        - Single-pass edge iteration with data caching
+        - Pre-compute lookups for candidate roads
         """
         nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
         poly = Polygon(candidate.geometry["coordinates"][0])
@@ -593,21 +655,45 @@ class SuperblockAnalyzer:
         else:
             shape_score = 50
 
-        # 3. Traffic score (centrality differential)
+        # 3-6. Collect all edge data in a single pass (optimization)
+        perimeter_set = set(candidate.perimeter_roads)
+        interior_set = set(candidate.interior_roads)
+        
         boundary_centralities = []
         interior_centralities = []
+        boundary_capacity = 0
 
-        for idx, row in edges.iterrows():
-            osmid = row.get("osmid", 0)
+        # Single-pass iteration using itertuples for performance
+        for row in edges.itertuples(index=False):
+            osmid = getattr(row, "osmid", 0)
             if isinstance(osmid, list):
                 osmid = osmid[0]
-            centrality = row.get("centrality", 0)
-
-            if osmid in candidate.perimeter_roads:
+            
+            if osmid in perimeter_set:
+                # Collect boundary data
+                centrality = getattr(row, "centrality", 0)
                 boundary_centralities.append(centrality)
-            elif osmid in candidate.interior_roads:
+                
+                # Calculate capacity
+                highway = getattr(row, "highway", "unclassified")
+                if isinstance(highway, list):
+                    highway = highway[0]
+                lanes = getattr(row, "lanes", 1)
+                if isinstance(lanes, list):
+                    lanes = lanes[0]
+                try:
+                    lanes = int(lanes)
+                except (ValueError, TypeError):
+                    lanes = 1
+                capacity = self.CAPACITY_MAP.get(highway, 200) * lanes
+                boundary_capacity += capacity
+                
+            elif osmid in interior_set:
+                # Collect interior data
+                centrality = getattr(row, "centrality", 0)
                 interior_centralities.append(centrality)
 
+        # Calculate traffic score from collected data
         boundary_mean = sum(boundary_centralities) / len(boundary_centralities) if boundary_centralities else 0
         interior_mean = sum(interior_centralities) / len(interior_centralities) if interior_centralities else 0
 
@@ -658,26 +744,7 @@ class SuperblockAnalyzer:
         else:
             connectivity_score = 30  # No interior roads - might be too small
 
-        # 6. Boundary quality score (capacity of boundary roads)
-        boundary_capacity = 0
-        for idx, row in edges.iterrows():
-            osmid = row.get("osmid", 0)
-            if isinstance(osmid, list):
-                osmid = osmid[0]
-            if osmid in candidate.perimeter_roads:
-                highway = row.get("highway", "unclassified")
-                if isinstance(highway, list):
-                    highway = highway[0]
-                lanes = row.get("lanes", 1)
-                if isinstance(lanes, list):
-                    lanes = lanes[0]
-                try:
-                    lanes = int(lanes)
-                except (ValueError, TypeError):
-                    lanes = 1
-                capacity = self.CAPACITY_MAP.get(highway, 200) * lanes
-                boundary_capacity += capacity
-
+        # 6. Boundary quality score (already calculated from boundary_capacity)
         # Good boundaries should have significant capacity
         if boundary_capacity >= 5000:
             boundary_quality_score = 100
@@ -753,29 +820,41 @@ class SuperblockAnalyzer:
         - Major interior roads: Convert to one-way with alternating directions
         - Minor interior roads: Modal filter (bikes/emergency only)
         - Central areas: Full pedestrianization
+        
+        Optimizations:
+        - Single-pass edge iteration using itertuples
+        - Pre-compute road sets for faster lookup
         """
         nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
         poly = Polygon(candidate.geometry["coordinates"][0])
         centroid = poly.centroid
+        poly_area_sqrt = poly.area ** 0.5
 
         interventions = []
+        perimeter_set = set(candidate.perimeter_roads)
+        interior_set = set(candidate.interior_roads)
 
-        for idx, row in edges.iterrows():
-            osmid = row.get("osmid", 0)
+        # Single-pass iteration using itertuples for better performance
+        for row in edges.itertuples(index=False):
+            osmid = getattr(row, "osmid", 0)
             if isinstance(osmid, list):
                 osmid = osmid[0]
 
-            name = row.get("name", None)
+            # Only process roads relevant to this candidate
+            if osmid not in perimeter_set and osmid not in interior_set:
+                continue
+
+            name = getattr(row, "name", None)
             if isinstance(name, list):
                 name = name[0] if name else None
 
-            highway = row.get("highway", "unclassified")
+            highway = getattr(row, "highway", "unclassified")
             if isinstance(highway, list):
                 highway = highway[0]
 
             hierarchy = self.HIERARCHY_MAP.get(highway, 99)
 
-            if osmid in candidate.perimeter_roads:
+            if osmid in perimeter_set:
                 # Boundary road - no change
                 interventions.append(StreetIntervention(
                     osm_id=int(osmid),
@@ -785,11 +864,11 @@ class SuperblockAnalyzer:
                     rationale="Boundary road - maintains through traffic capacity"
                 ))
 
-            elif osmid in candidate.interior_roads:
+            elif osmid in interior_set:
                 # Interior road - determine intervention type
                 road_centroid = row.geometry.centroid
                 distance_to_center = road_centroid.distance(centroid)
-                relative_distance = distance_to_center / (poly.area ** 0.5)
+                relative_distance = distance_to_center / poly_area_sqrt
 
                 if hierarchy <= 5:
                     # Major interior road - one-way for local access
