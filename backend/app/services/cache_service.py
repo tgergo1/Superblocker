@@ -117,17 +117,20 @@ class CacheService:
         """
         Generate a unique cache key from type and parameters.
 
+        Uses MD5 hashing for fast, compact key generation.
+        Note: This is not used for security purposes, only for cache key uniqueness.
+
         Args:
             cache_type: Type of cached data (e.g., 'network', 'analysis', 'search')
             params: Dictionary of parameters that uniquely identify the cached data
 
         Returns:
-            SHA-1 hash string as cache key
+            MD5 hash string as cache key
         """
         # Sort params for consistent key generation
         sorted_params = json.dumps(params, sort_keys=True, default=str)
         key_string = f"{cache_type}:{sorted_params}"
-        return hashlib.sha1(key_string.encode()).hexdigest()
+        return hashlib.md5(key_string.encode(), usedforsecurity=False).hexdigest()
 
     def _get_cache_path(self, cache_key: str) -> Path:
         """Get the file path for a cache key."""
