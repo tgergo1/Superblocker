@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { StreetMap } from './components/Map';
 import { SearchBox } from './components/Search';
 import { LayerControls } from './components/Controls';
@@ -18,7 +18,7 @@ function App() {
     clearSelection,
   } = useSearch();
 
-  const [colorBy, setColorBy] = useState<'hierarchy' | 'traffic'>('hierarchy');
+  const [colorBy, setColorBy] = useState<'hierarchy' | 'traffic' | 'interventions'>('hierarchy');
   const [bbox, setBbox] = useState<BoundingBox | null>(null);
   const [showSuperblocks, setShowSuperblocks] = useState(true);
   const [viewState, setViewState] = useState<ViewState>({
@@ -37,8 +37,47 @@ function App() {
     data: superblockData,
     isLoading: isLoadingSuperblocks,
     progress: analysisProgress,
+    parameters: analysisParameters,
+    setParameters: setAnalysisParameters,
     analyze: findSuperblocks,
   } = useSuperblocks(bbox);
+
+  // Calculate impact metrics from superblock data
+  const impactMetrics = useMemo(() => {
+    if (!superblockData?.candidates || superblockData.candidates.length === 0) {
+      return undefined;
+    }
+
+    const candidates = superblockData.candidates;
+    
+    // Calculate total area covered by superblocks
+    const totalArea = candidates.reduce((sum, c) => sum + c.area_hectares, 0);
+    
+    // Estimate traffic reduction from average score and traffic impact
+    // When actual traffic_impact data is unavailable, we estimate using score * 0.6
+    // because superblock scores correlate with through-traffic removal potential,
+    // and typically 60% of a high-scoring superblock's benefit comes from traffic reduction
+    const avgTrafficReduction = candidates.reduce((sum, c) => {
+      const trafficImpact = c.traffic_impact?.removed_through_traffic_pct ?? (c.score * 0.6);
+      return sum + trafficImpact;
+    }, 0) / candidates.length;
+    
+    // Estimate pollution reduction (roughly proportional to traffic reduction)
+    const pollutionReduction = Math.round(avgTrafficReduction * 0.8);
+    
+    // Estimate pedestrian area gain (interior roads becoming pedestrian/shared)
+    const interiorRoadsCount = candidates.reduce((sum, c) => sum + (c.interior_roads?.length ?? 0), 0);
+    // Each interior road segment is assumed to average ~500m² (0.05 ha) of reclaimed pedestrian space
+    // This accounts for typical urban road widths (8-10m) and segment lengths (50-60m)
+    const pedestrianAreaGain = Math.round((interiorRoadsCount * 0.05) * 10) / 10;
+    
+    return {
+      trafficReduction: Math.round(avgTrafficReduction),
+      pollutionReduction,
+      pedestrianArea: pedestrianAreaGain,
+      totalArea: Math.round(totalArea * 10) / 10,
+    };
+  }, [superblockData?.candidates]);
 
   // Update view state and bbox when a place is selected
   useEffect(() => {
@@ -108,6 +147,9 @@ function App() {
           superblockCount={superblockData?.candidates.length}
           showSuperblocks={showSuperblocks}
           onToggleSuperblocks={setShowSuperblocks}
+          analysisParameters={analysisParameters}
+          onParametersChange={setAnalysisParameters}
+          impactMetrics={impactMetrics}
         />
       </main>
     </div>

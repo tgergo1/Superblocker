@@ -261,3 +261,69 @@
   background: #f3e8ff;
   color: #6b21a8;
 }
+
+/* Map Legend */
+.map-legend {
+  position: absolute;
+  bottom: 100px;
+  left: 16px;
+  background: white;
+  padding: 12px 16px;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  min-width: 140px;
+  z-index: 996;
+}
+
+.legend-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: #111827;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.legend-color {
+  width: 20px;
+  height: 4px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.legend-label {
+  font-size: 11px;
+  color: #374151;
+}
+
+/* Traffic legend with gradient */
+.legend-gradient {
+  padding: 4px 0;
+}
+
+.gradient-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(to right, rgb(0, 200, 50), rgb(255, 200, 50), rgb(255, 0, 50));
+}
+
+.gradient-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #6b7280;
+  margin-top: 4px;
+}
+
+/* Interventions legend specific styling */
+.interventions-legend .legend-color {
+  height: 6px;
+  border-radius: 3px;
+}
