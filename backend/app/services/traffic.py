@@ -56,6 +56,12 @@ def estimate_traffic(network: StreetNetworkResponse) -> StreetNetworkResponse:
     Returns:
         Network with added traffic properties
     """
+    # Batch process all features for better performance
+    max_intensity_volume = 1500  # vehicles/hour considered "intense"
+    total_capacity = 0
+    total_volume = 0
+    
+    # Pre-compute all traffic properties in a single pass
     for feature in network.features:
         props = feature["properties"]
         highway = props.get("highway", "unclassified")
@@ -71,21 +77,17 @@ def estimate_traffic(network: StreetNetworkResponse) -> StreetNetworkResponse:
         # Estimate volume
         volume = int(capacity * load_factor)
 
-        # Add to properties
+        # Add to properties (batch update)
         props["capacity"] = capacity
         props["estimated_load"] = load_factor
         props["estimated_volume"] = volume
-
-        # Calculate a "traffic intensity" score (0-100) for visualization
-        # Based on volume relative to typical residential capacity
-        max_intensity_volume = 1500  # vehicles/hour considered "intense"
-        intensity = min(100, int((volume / max_intensity_volume) * 100))
-        props["traffic_intensity"] = intensity
+        props["traffic_intensity"] = min(100, int((volume / max_intensity_volume) * 100))
+        
+        # Accumulate totals in same pass
+        total_capacity += capacity
+        total_volume += volume
 
     # Update metadata
-    total_capacity = sum(f["properties"]["capacity"] for f in network.features)
-    total_volume = sum(f["properties"]["estimated_volume"] for f in network.features)
-
     network.metadata["total_capacity"] = total_capacity
     network.metadata["total_estimated_volume"] = total_volume
     network.metadata["average_load"] = round(total_volume / total_capacity, 3) if total_capacity > 0 else 0
