@@ -29,6 +29,29 @@ declare module '@deck.gl/react' {
   export default class DeckGL extends Component<DeckGLProps> {}
 }
 
+declare module '@deck.gl/core' {
+  export interface MapViewState {
+    longitude: number;
+    latitude: number;
+    zoom: number;
+    pitch?: number;
+    bearing?: number;
+  }
+
+  export interface DeckProps {
+    layers?: unknown[];
+  }
+}
+
+declare module '@deck.gl/mapbox' {
+  export class MapboxOverlay {
+    constructor(props: { layers?: unknown[]; interleaved?: boolean });
+    setProps(props: { layers?: unknown[] }): void;
+    onAdd(map: unknown): HTMLElement;
+    onRemove(): void;
+  }
+}
+
 declare module '@deck.gl/layers' {
   export class GeoJsonLayer<D = any> {
     constructor(props: {

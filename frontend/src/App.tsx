@@ -4,6 +4,7 @@ import { SearchBox } from './components/Search';
 import { LayerControls } from './components/Controls';
 import { useSearch } from './hooks/useSearch';
 import { useStreetNetwork } from './hooks/useStreetNetwork';
+import { useSuperblocks } from './hooks/useSuperblocks';
 import type { BoundingBox, ViewState } from './types';
 import './App.css';
 
@@ -19,6 +20,7 @@ function App() {
 
   const [colorBy, setColorBy] = useState<'hierarchy' | 'traffic'>('hierarchy');
   const [bbox, setBbox] = useState<BoundingBox | null>(null);
+  const [showSuperblocks, setShowSuperblocks] = useState(true);
   const [viewState, setViewState] = useState<ViewState>({
     longitude: 19.0402,
     latitude: 47.4979,
@@ -30,6 +32,13 @@ function App() {
     isLoading: isLoadingNetwork,
     refetch: fetchNetwork,
   } = useStreetNetwork(bbox, false);
+
+  const {
+    data: superblockData,
+    isLoading: isLoadingSuperblocks,
+    progress: analysisProgress,
+    analyze: findSuperblocks,
+  } = useSuperblocks(bbox);
 
   // Update view state and bbox when a place is selected
   useEffect(() => {
@@ -49,6 +58,12 @@ function App() {
     }
   }, [bbox, fetchNetwork]);
 
+  const handleFindSuperblocks = useCallback(() => {
+    if (bbox && streetNetwork) {
+      findSuperblocks();
+    }
+  }, [bbox, streetNetwork, findSuperblocks]);
+
   const handleClearSelection = useCallback(() => {
     clearSelection();
     setBbox(null);
@@ -64,6 +79,8 @@ function App() {
       <main className="app-main">
         <StreetMap
           streetNetwork={streetNetwork ?? null}
+          superblocks={superblockData?.candidates}
+          showSuperblocks={showSuperblocks}
           initialViewState={viewState}
           onViewStateChange={setViewState}
           colorBy={colorBy}
@@ -81,9 +98,16 @@ function App() {
         <LayerControls
           colorBy={colorBy}
           onColorByChange={setColorBy}
-          isLoading={isLoadingNetwork}
+          isLoadingNetwork={isLoadingNetwork}
+          isLoadingSuperblocks={isLoadingSuperblocks}
+          analysisProgress={analysisProgress}
           onFetchNetwork={handleFetchNetwork}
+          onFindSuperblocks={handleFindSuperblocks}
           canFetch={bbox !== null}
+          hasNetwork={!!streetNetwork}
+          superblockCount={superblockData?.candidates.length}
+          showSuperblocks={showSuperblocks}
+          onToggleSuperblocks={setShowSuperblocks}
         />
       </main>
     </div>

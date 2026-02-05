@@ -1,9 +1,11 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
-import Map, { NavigationControl, ScaleControl } from 'react-map-gl/maplibre';
-import DeckGL from '@deck.gl/react';
-import { GeoJsonLayer } from '@deck.gl/layers';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import MapGL, { NavigationControl, ScaleControl } from 'react-map-gl/maplibre';
+import type { MapRef } from 'react-map-gl/maplibre';
+import { GeoJsonLayer, PolygonLayer } from '@deck.gl/layers';
+import { MapboxOverlay } from '@deck.gl/mapbox';
 import type { Feature, LineString } from 'geojson';
 import type { ViewState, StreetNetworkResponse, RoadProperties } from '../../types';
+import type { SuperblockCandidate } from '../../services/api';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './StreetMap.css';
 
@@ -39,19 +41,33 @@ const ROAD_WIDTHS: Record<number, number> = {
   10: 1, // pedestrian
 };
 
+// Score-based colors for superblocks (green = good, yellow = ok, red = poor)
+function getScoreColor(score: number): [number, number, number, number] {
+  if (score >= 70) return [34, 197, 94, 160];   // green
+  if (score >= 50) return [234, 179, 8, 160];   // yellow
+  return [239, 68, 68, 160];                     // red
+}
+
 interface StreetMapProps {
   streetNetwork: StreetNetworkResponse | null;
+  superblocks?: SuperblockCandidate[];
+  showSuperblocks?: boolean;
   initialViewState?: ViewState;
   onViewStateChange?: (viewState: ViewState) => void;
   colorBy?: 'hierarchy' | 'traffic';
+  onSuperblockClick?: (superblock: SuperblockCandidate) => void;
 }
 
 export function StreetMap({
   streetNetwork,
+  superblocks,
+  showSuperblocks = true,
   initialViewState,
   onViewStateChange,
   colorBy = 'hierarchy',
+  onSuperblockClick,
 }: StreetMapProps) {
+  const mapRef = useRef<MapRef>(null);
   const [viewState, setViewState] = useState<ViewState>(
     initialViewState ?? {
       longitude: 19.0402,
@@ -62,9 +78,9 @@ export function StreetMap({
     }
   );
 
-  const [hoveredFeature, setHoveredFeature] = useState<Feature<LineString, RoadProperties> | null>(
-    null
-  );
+  const [hoveredFeature, setHoveredFeature] = useState<Feature<LineString, RoadProperties> | null>(null);
+  const [hoveredSuperblock, setHoveredSuperblock] = useState<SuperblockCandidate | null>(null);
+  const [selectedSuperblock, setSelectedSuperblock] = useState<SuperblockCandidate | null>(null);
 
   // Sync with external viewState changes
   useEffect(() => {
@@ -78,10 +94,10 @@ export function StreetMap({
     }
   }, [initialViewState?.longitude, initialViewState?.latitude, initialViewState?.zoom]);
 
-  const handleViewStateChange = useCallback(
-    ({ viewState: newViewState }: { viewState: ViewState }) => {
-      setViewState(newViewState);
-      onViewStateChange?.(newViewState);
+  const handleMove = useCallback(
+    (evt: { viewState: ViewState }) => {
+      setViewState(evt.viewState);
+      onViewStateChange?.(evt.viewState);
     },
     [onViewStateChange]
   );
@@ -110,46 +126,124 @@ export function StreetMap({
   }, []);
 
   const layers = useMemo(() => {
-    if (!streetNetwork?.features) return [];
+    const result: unknown[] = [];
 
-    return [
-      new GeoJsonLayer({
-        id: 'street-network',
-        data: streetNetwork,
-        pickable: true,
-        stroked: true,
-        filled: false,
-        lineWidthUnits: 'pixels',
-        lineWidthScale: 1,
-        lineWidthMinPixels: 1,
-        getLineColor,
-        getLineWidth,
-        onHover: (info: { object?: unknown }) => {
-          setHoveredFeature(info.object as Feature<LineString, RoadProperties> | null);
-        },
-        updateTriggers: {
-          getLineColor: [colorBy],
-        },
-      }),
-    ];
-  }, [streetNetwork, getLineColor, getLineWidth, colorBy]);
+    // Superblock polygons layer (render first, below roads)
+    if (showSuperblocks && superblocks && superblocks.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      result.push(
+        new PolygonLayer({
+          id: 'superblocks',
+          data: superblocks,
+          pickable: true,
+          stroked: true,
+          filled: true,
+          getPolygon: (d: SuperblockCandidate) => d.geometry.coordinates,
+          getFillColor: (d: SuperblockCandidate) => {
+            if (selectedSuperblock?.id === d.id) {
+              return [59, 130, 246, 180]; // blue when selected
+            }
+            if (hoveredSuperblock?.id === d.id) {
+              const color = getScoreColor(d.score);
+              return [color[0], color[1], color[2], 200] as [number, number, number, number];
+            }
+            return getScoreColor(d.score);
+          },
+          getLineColor: (d: SuperblockCandidate) => {
+            if (selectedSuperblock?.id === d.id) {
+              return [37, 99, 235, 255]; // darker blue
+            }
+            return [0, 0, 0, 100];
+          },
+          getLineWidth: (d: SuperblockCandidate) =>
+            selectedSuperblock?.id === d.id ? 3 : 1,
+          onHover: (info: { object?: SuperblockCandidate }) => {
+            setHoveredSuperblock(info.object ?? null);
+          },
+          onClick: (info: { object?: SuperblockCandidate }) => {
+            if (info.object) {
+              setSelectedSuperblock(
+                selectedSuperblock?.id === info.object.id ? null : info.object
+              );
+              onSuperblockClick?.(info.object);
+            }
+          },
+          updateTriggers: {
+            getFillColor: [hoveredSuperblock?.id, selectedSuperblock?.id],
+            getLineColor: [selectedSuperblock?.id],
+            getLineWidth: [selectedSuperblock?.id],
+          },
+        } as any)
+      );
+    }
+
+    // Street network layer
+    if (streetNetwork?.features) {
+      result.push(
+        new GeoJsonLayer({
+          id: 'street-network',
+          data: streetNetwork,
+          pickable: true,
+          stroked: true,
+          filled: false,
+          lineWidthUnits: 'pixels',
+          lineWidthScale: 1,
+          lineWidthMinPixels: 1,
+          getLineColor,
+          getLineWidth,
+          onHover: (info: { object?: unknown }) => {
+            setHoveredFeature(info.object as Feature<LineString, RoadProperties> | null);
+          },
+          updateTriggers: {
+            getLineColor: [colorBy],
+          },
+        })
+      );
+    }
+
+    return result;
+  }, [streetNetwork, superblocks, showSuperblocks, colorBy, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick]);
+
+  // Store overlay reference
+  const overlayRef = useRef<MapboxOverlay | null>(null);
+
+  // Create deck overlay for maplibre
+  const onMapLoad = useCallback(() => {
+    const map = mapRef.current?.getMap();
+    if (!map || overlayRef.current) return;
+
+    const overlay = new MapboxOverlay({
+      layers,
+    });
+    overlayRef.current = overlay;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    map.addControl(overlay as any);
+  }, [layers]);
+
+  // Update deck layers when they change
+  useEffect(() => {
+    if (overlayRef.current) {
+      overlayRef.current.setProps({ layers });
+    }
+  }, [layers]);
 
   return (
     <div className="street-map">
-      <DeckGL
-        viewState={viewState}
-        onViewStateChange={handleViewStateChange}
-        controller={true}
-        layers={layers}
+      <MapGL
+        ref={mapRef}
+        {...viewState}
+        onMove={handleMove}
+        mapStyle={MAP_STYLE}
+        onLoad={onMapLoad}
+        style={{ width: '100%', height: '100%' }}
       >
-        <Map mapStyle={MAP_STYLE}>
-          <NavigationControl position="bottom-right" />
-          <ScaleControl position="bottom-left" />
-        </Map>
-      </DeckGL>
+        <NavigationControl position="bottom-right" />
+        <ScaleControl position="bottom-left" />
+      </MapGL>
 
-      {hoveredFeature && (
-        <div className="tooltip">
+      {/* Road tooltip */}
+      {hoveredFeature && !hoveredSuperblock && (
+        <div className="tooltip road-tooltip">
           <div className="tooltip-title">
             {hoveredFeature.properties?.name ?? 'Unnamed road'}
           </div>
@@ -178,6 +272,179 @@ export function StreetMap({
         </div>
       )}
 
+      {/* Superblock tooltip */}
+      {hoveredSuperblock && (
+        <div className="tooltip superblock-tooltip">
+          <div className="tooltip-title">
+            Superblock Candidate
+          </div>
+          <div className="tooltip-row">
+            <span>Score:</span>
+            <span className={`score score-${hoveredSuperblock.score >= 70 ? 'good' : hoveredSuperblock.score >= 50 ? 'ok' : 'poor'}`}>
+              {hoveredSuperblock.score}/100
+            </span>
+          </div>
+          <div className="tooltip-row">
+            <span>Area:</span>
+            <span>{hoveredSuperblock.area_hectares} ha</span>
+          </div>
+          <div className="tooltip-row">
+            <span>Interior roads:</span>
+            <span>{hoveredSuperblock.interior_roads.length}</span>
+          </div>
+          <div className="tooltip-hint">Click to select</div>
+        </div>
+      )}
+
+      {/* Selected superblock details */}
+      {selectedSuperblock && (
+        <div className="superblock-details">
+          <div className="details-header">
+            <span className="details-title">Superblock Analysis</span>
+            <button
+              className="close-button"
+              onClick={() => setSelectedSuperblock(null)}
+            >
+              ×
+            </button>
+          </div>
+          <div className="details-body">
+            {/* Overall score */}
+            <div className="detail-row">
+              <span>Overall Score:</span>
+              <span className={`score score-${selectedSuperblock.score >= 70 ? 'good' : selectedSuperblock.score >= 50 ? 'ok' : 'poor'}`}>
+                {selectedSuperblock.score}/100
+              </span>
+            </div>
+            <div className="detail-row">
+              <span>Area:</span>
+              <span>{selectedSuperblock.area_hectares} ha</span>
+            </div>
+
+            {/* Score breakdown */}
+            {selectedSuperblock.score_breakdown && (
+              <>
+                <div className="details-section-title">Score Breakdown</div>
+                <div className="score-breakdown">
+                  <div className="score-item">
+                    <span>Size</span>
+                    <div className="score-bar">
+                      <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.size_score}%` }} />
+                    </div>
+                    <span>{selectedSuperblock.score_breakdown.size_score}</span>
+                  </div>
+                  <div className="score-item">
+                    <span>Shape</span>
+                    <div className="score-bar">
+                      <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.shape_score}%` }} />
+                    </div>
+                    <span>{selectedSuperblock.score_breakdown.shape_score}</span>
+                  </div>
+                  <div className="score-item">
+                    <span>Traffic</span>
+                    <div className="score-bar">
+                      <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.traffic_score}%` }} />
+                    </div>
+                    <span>{selectedSuperblock.score_breakdown.traffic_score}</span>
+                  </div>
+                  <div className="score-item">
+                    <span>Access</span>
+                    <div className="score-bar">
+                      <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.accessibility_score}%` }} />
+                    </div>
+                    <span>{selectedSuperblock.score_breakdown.accessibility_score}</span>
+                  </div>
+                  <div className="score-item">
+                    <span>Connect</span>
+                    <div className="score-bar">
+                      <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.connectivity_score}%` }} />
+                    </div>
+                    <span>{selectedSuperblock.score_breakdown.connectivity_score}</span>
+                  </div>
+                  <div className="score-item">
+                    <span>Boundary</span>
+                    <div className="score-bar">
+                      <div className="score-fill" style={{ width: `${selectedSuperblock.score_breakdown.boundary_quality_score}%` }} />
+                    </div>
+                    <span>{selectedSuperblock.score_breakdown.boundary_quality_score}</span>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Traffic impact */}
+            {selectedSuperblock.traffic_impact && (
+              <>
+                <div className="details-section-title">Traffic Impact</div>
+                <div className="detail-row">
+                  <span>Through-traffic removed:</span>
+                  <span className="score-good">{selectedSuperblock.traffic_impact.removed_through_traffic_pct}%</span>
+                </div>
+                <div className="detail-row">
+                  <span>Boundary load increase:</span>
+                  <span>{selectedSuperblock.traffic_impact.boundary_load_increase_pct}%</span>
+                </div>
+              </>
+            )}
+
+            {/* Interventions summary */}
+            {selectedSuperblock.interventions && selectedSuperblock.interventions.length > 0 && (
+              <>
+                <div className="details-section-title">Planned Interventions</div>
+                <div className="interventions-summary">
+                  {(() => {
+                    const counts = selectedSuperblock.interventions.reduce((acc, i) => {
+                      acc[i.intervention_type] = (acc[i.intervention_type] || 0) + 1;
+                      return acc;
+                    }, {} as Record<string, number>);
+                    return (
+                      <>
+                        {counts.pedestrianize && (
+                          <div className="intervention-badge pedestrianize">
+                            {counts.pedestrianize} pedestrian
+                          </div>
+                        )}
+                        {counts.one_way && (
+                          <div className="intervention-badge one-way">
+                            {counts.one_way} one-way
+                          </div>
+                        )}
+                        {counts.modal_filter && (
+                          <div className="intervention-badge modal-filter">
+                            {counts.modal_filter} filtered
+                          </div>
+                        )}
+                        {counts.local_access && (
+                          <div className="intervention-badge local-access">
+                            {counts.local_access} local only
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              </>
+            )}
+
+            {/* Network info */}
+            <div className="details-section-title">Network</div>
+            <div className="detail-row">
+              <span>Interior roads:</span>
+              <span>{selectedSuperblock.interior_roads.length}</span>
+            </div>
+            <div className="detail-row">
+              <span>Boundary roads:</span>
+              <span>{selectedSuperblock.perimeter_roads.length}</span>
+            </div>
+            <div className="detail-row">
+              <span>Access points:</span>
+              <span>{selectedSuperblock.num_access_points ?? 'N/A'}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Network stats */}
       {streetNetwork && (
         <div className="network-info">
           <div className="info-title">Network Stats</div>

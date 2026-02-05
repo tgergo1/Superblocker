@@ -11,6 +11,24 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.*.local
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.staging.local
+
+# Build/caches
+.cache
+.vite
+.parcel-cache
+.turbo
+.rollup.cache
+.eslintcache
+coverage
+.nyc_output
+*.tsbuildinfo
 
 # Editor directories and files
 .vscode/*

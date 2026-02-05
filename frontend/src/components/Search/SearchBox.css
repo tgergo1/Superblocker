@@ -2,7 +2,7 @@
   position: absolute;
   top: 16px;
   left: 16px;
-  z-index: 1000;
+  z-index: 1001;
   width: 400px;
   max-width: calc(100vw - 32px);
   background: white;

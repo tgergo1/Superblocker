@@ -1,13 +1,16 @@
 import osmnx as ox
 import geopandas as gpd
-from shapely.geometry import box
+from shapely.geometry import box, mapping
 import json
 from typing import Any
+import logging
+import time
 
 from app.models.schemas import BoundingBox, StreetNetworkResponse
 from app.core.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 # Configure OSMnx
 ox.settings.timeout = settings.osm_timeout
@@ -66,6 +69,12 @@ async def get_street_network(
     Returns:
         StreetNetworkResponse with GeoJSON features
     """
+    start_time = time.time()
+    logger.info(
+        "Fetching street network (network_type=%s bbox=%s)",
+        network_type,
+        bbox.model_dump(),
+    )
     # Validate bbox size to prevent huge requests
     lat_diff = bbox.north - bbox.south
     lon_diff = bbox.east - bbox.west
@@ -80,16 +89,20 @@ async def get_street_network(
         raise ValueError("Invalid bounding box: north must be > south, east must be > west")
 
     # Fetch the network using OSMnx
-    # Note: OSMnx expects (north, south, east, west) for bbox
+    # OSMnx 2.x expects bbox as tuple: (left, bottom, right, top) = (west, south, east, north)
+    bbox_tuple = (bbox.west, bbox.south, bbox.east, bbox.north)
     G = ox.graph_from_bbox(
-        north=bbox.north,
-        south=bbox.south,
-        east=bbox.east,
-        west=bbox.west,
+        bbox=bbox_tuple,
         network_type=network_type,
         simplify=True,
         retain_all=False,
         truncate_by_edge=True,
+    )
+    logger.info(
+        "Street network fetched in %.1fs (nodes=%s edges=%s)",
+        time.time() - start_time,
+        G.number_of_nodes(),
+        G.number_of_edges(),
     )
 
     # Convert to GeoDataFrame (edges)
@@ -148,7 +161,7 @@ async def get_street_network(
         # Create GeoJSON feature
         feature = {
             "type": "Feature",
-            "geometry": json.loads(row.geometry.to_json()),
+            "geometry": mapping(row.geometry),
             "properties": {
                 "osmid": osmid,
                 "name": name,

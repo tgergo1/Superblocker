@@ -1,15 +1,28 @@
 .layer-controls {
   position: absolute;
-  top: 80px;
-  left: 16px;
+  top: 16px;
+  right: 16px;
   background: white;
-  padding: 16px;
+  padding: 12px;
   border-radius: 8px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
-  z-index: 1000;
+  z-index: 998;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
+  min-width: 180px;
+  max-width: 220px;
+}
+
+.control-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.control-section + .control-section {
+  padding-top: 12px;
+  border-top: 1px solid #e5e7eb;
 }
 
 .control-group {
@@ -19,7 +32,7 @@
 }
 
 .control-label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: #6b7280;
   text-transform: uppercase;
@@ -28,25 +41,27 @@
 
 .button-group {
   display: flex;
-  gap: 4px;
+  gap: 0;
 }
 
 .toggle-button {
-  padding: 8px 16px;
+  flex: 1;
+  padding: 6px 10px;
   border: 1px solid #e5e7eb;
   background: white;
-  font-size: 13px;
+  font-size: 12px;
   color: #374151;
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .toggle-button:first-child {
-  border-radius: 6px 0 0 6px;
+  border-radius: 4px 0 0 4px;
 }
 
 .toggle-button:last-child {
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 4px 4px 0;
+  border-left: none;
 }
 
 .toggle-button:hover {
@@ -59,23 +74,79 @@
   color: white;
 }
 
-.fetch-button {
-  padding: 10px 20px;
-  background: #3b82f6;
+.action-button {
+  width: 100%;
+  padding: 8px 12px;
   border: none;
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
-  color: white;
   cursor: pointer;
   transition: background 0.15s;
 }
 
-.fetch-button:hover:not(:disabled) {
+.action-button.primary {
+  background: #3b82f6;
+  color: white;
+}
+
+.action-button.primary:hover:not(:disabled) {
   background: #2563eb;
 }
 
-.fetch-button:disabled {
-  background: #9ca3af;
+.action-button.success {
+  background: #10b981;
+  color: white;
+}
+
+.action-button.success:hover:not(:disabled) {
+  background: #059669;
+}
+
+.action-button:disabled {
+  background: #d1d5db;
+  color: #9ca3af;
   cursor: not-allowed;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #374151;
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* Progress indicator */
+.progress-section {
+  margin-top: 8px;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981 0%, #34d399 100%);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 4px;
+  text-align: center;
 }
