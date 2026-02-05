@@ -27,6 +27,14 @@ class Settings(BaseSettings):
     osm_timeout: int = 180  # seconds
     osm_memory_limit: int = 1073741824  # 1GB
 
+    # Cache settings
+    cache_enabled: bool = True
+    cache_dir: str = "cache"
+    cache_ttl_seconds: int = 86400  # 24 hours default TTL
+    cache_network_ttl_seconds: int = 604800  # 7 days for network data
+    cache_analysis_ttl_seconds: int = 86400  # 24 hours for analysis results
+    cache_search_ttl_seconds: int = 3600  # 1 hour for search results
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

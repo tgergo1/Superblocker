@@ -56,5 +56,7 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
-backend/cache/20966815264724f3301481758789fb200986c140.json
-backend/cache/e3b7dd230ae65ebefb8104e9e216b893803b9475.json
+
+# Cache directory
+backend/cache/
+cache/

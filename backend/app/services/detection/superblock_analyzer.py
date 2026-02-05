@@ -32,8 +32,11 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 
 from app.models.schemas import BoundingBox
+from app.services.cache_service import get_cache_service
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 class InterventionType(str, Enum):
@@ -222,6 +225,8 @@ class SuperblockAnalyzer:
         """
         Perform complete superblock analysis for an area.
 
+        Uses caching to avoid re-computing analysis for the same parameters.
+
         Returns:
             Dictionary with candidates, network stats, and analysis metadata.
         """
@@ -238,6 +243,26 @@ class SuperblockAnalyzer:
                 "Bounding box too large. Maximum size is ~50km. "
                 "Please select a smaller area."
             )
+
+        # Round bbox coordinates for consistent cache keys (5 decimal places ~ 1m precision)
+        cache_params = {
+            "north": round(bbox.north, 5),
+            "south": round(bbox.south, 5),
+            "east": round(bbox.east, 5),
+            "west": round(bbox.west, 5),
+            "min_area": self.min_area,
+            "max_area": self.max_area,
+            "centrality_threshold_pct": self.centrality_threshold_pct,
+        }
+
+        # Check cache first
+        cache_service = get_cache_service()
+        cached_data = cache_service.get("analysis", cache_params)
+
+        if cached_data is not None:
+            logger.info("Analysis loaded from cache")
+            report_progress("complete", 100, "Analysis loaded from cache")
+            return cached_data
 
         report_progress("network", 10, "Fetching street network from OpenStreetMap...")
         logger.info(
@@ -459,7 +484,7 @@ class SuperblockAnalyzer:
         report_progress("complete", 100, f"Analysis complete: {len(scored_candidates)} candidates found")
         logger.info("Analysis complete: %s candidates found", len(scored_candidates))
 
-        return {
+        result = {
             "candidates": [c.to_dict() for c in scored_candidates[:50]],
             "network_stats": self._compute_network_stats(G),
             "analysis_params": {
@@ -468,6 +493,16 @@ class SuperblockAnalyzer:
                 "centrality_threshold_percentile": self.centrality_threshold_pct,
             }
         }
+
+        # Cache the result
+        cache_service.set(
+            "analysis",
+            cache_params,
+            result,
+            ttl_seconds=settings.cache_analysis_ttl_seconds,
+        )
+
+        return result
 
     def _detect_cells(
         self,
