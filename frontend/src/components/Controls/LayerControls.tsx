@@ -64,11 +64,15 @@ export function LayerControls({
   const [localMinArea, setLocalMinArea] = useState(analysisParameters?.minAreaHectares ?? 4);
   const [localMaxArea, setLocalMaxArea] = useState(analysisParameters?.maxAreaHectares ?? 25);
 
+  // Default parameters for safe spreading
+  const defaultParams = { minAreaHectares: 4, maxAreaHectares: 25 };
+
   const handleMinAreaChange = (value: number) => {
     setLocalMinArea(value);
     if (onParametersChange) {
+      const params = analysisParameters ?? defaultParams;
       onParametersChange({
-        ...analysisParameters!,
+        ...params,
         minAreaHectares: value,
         maxAreaHectares: Math.max(value + 1, localMaxArea),
       });
@@ -78,8 +82,9 @@ export function LayerControls({
   const handleMaxAreaChange = (value: number) => {
     setLocalMaxArea(value);
     if (onParametersChange) {
+      const params = analysisParameters ?? defaultParams;
       onParametersChange({
-        ...analysisParameters!,
+        ...params,
         minAreaHectares: Math.min(localMinArea, value - 1),
         maxAreaHectares: value,
       });

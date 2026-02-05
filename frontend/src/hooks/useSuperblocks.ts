@@ -65,7 +65,7 @@ export function useSuperblocks(bbox: BoundingBox | null) {
     
     // Estimate remaining time based on progress
     if (percent <= 0) return { elapsed, remaining: 90 }; // Default estimate
-    if (percent >= 100) return { elapsed, remaining: 0 };
+    if (percent === 100) return { elapsed, remaining: 0 };
     
     // Simple linear extrapolation
     const totalEstimate = elapsed / (percent / 100);
