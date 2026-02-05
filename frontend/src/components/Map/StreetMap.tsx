@@ -41,6 +41,15 @@ const ROAD_WIDTHS: Record<number, number> = {
   10: 1, // pedestrian
 };
 
+// Intervention type colors for road visualization
+const INTERVENTION_COLORS: Record<string, [number, number, number, number]> = {
+  pedestrianize: [34, 197, 94, 255],    // green - full pedestrianization
+  one_way: [59, 130, 246, 255],         // blue - one-way conversion
+  modal_filter: [251, 191, 36, 255],    // amber - modal filter
+  local_access: [168, 85, 247, 255],    // purple - local access only
+  no_change: [156, 163, 175, 200],      // gray - no change
+};
+
 // Score-based colors for superblocks (green = good, yellow = ok, red = poor)
 function getScoreColor(score: number): [number, number, number, number] {
   if (score >= 70) return [34, 197, 94, 160];   // green
@@ -54,7 +63,7 @@ interface StreetMapProps {
   showSuperblocks?: boolean;
   initialViewState?: ViewState;
   onViewStateChange?: (viewState: ViewState) => void;
-  colorBy?: 'hierarchy' | 'traffic';
+  colorBy?: 'hierarchy' | 'traffic' | 'interventions';
   onSuperblockClick?: (superblock: SuperblockCandidate) => void;
 }
 
@@ -114,10 +123,28 @@ export function StreetMap({
         return [r, g, 50, 220];
       }
 
+      if (colorBy === 'interventions' && selectedSuperblock) {
+        const osmid = props.osmid;
+        // Check if this road is in the selected superblock's interventions
+        const intervention = selectedSuperblock.interventions?.find(i => i.osm_id === osmid);
+        if (intervention) {
+          return INTERVENTION_COLORS[intervention.intervention_type] ?? DEFAULT_ROAD_COLOR;
+        }
+        // Check if it's a perimeter or interior road
+        if (selectedSuperblock.perimeter_roads?.includes(osmid)) {
+          return INTERVENTION_COLORS.no_change;
+        }
+        if (selectedSuperblock.interior_roads?.includes(osmid)) {
+          return [100, 100, 100, 180]; // Roads inside but not in interventions
+        }
+        // Roads outside the superblock - fade them
+        return [200, 200, 200, 100];
+      }
+
       const hierarchy = props.hierarchy ?? 99;
       return ROAD_COLORS[hierarchy] ?? DEFAULT_ROAD_COLOR;
     },
-    [colorBy]
+    [colorBy, selectedSuperblock]
   );
 
   const getLineWidth = useCallback((d: Feature<LineString, RoadProperties>): number => {
@@ -195,7 +222,7 @@ export function StreetMap({
             setHoveredFeature(info.object as Feature<LineString, RoadProperties> | null);
           },
           updateTriggers: {
-            getLineColor: [colorBy],
+            getLineColor: [colorBy, selectedSuperblock?.id],
           },
         })
       );
@@ -439,6 +466,72 @@ export function StreetMap({
             <div className="detail-row">
               <span>Access points:</span>
               <span>{selectedSuperblock.num_access_points ?? 'N/A'}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Map Legend */}
+      {colorBy === 'interventions' && selectedSuperblock && (
+        <div className="map-legend interventions-legend">
+          <div className="legend-title">Street Interventions</div>
+          <div className="legend-item">
+            <span className="legend-color" style={{ background: 'rgb(34, 197, 94)' }} />
+            <span className="legend-label">Pedestrianize</span>
+          </div>
+          <div className="legend-item">
+            <span className="legend-color" style={{ background: 'rgb(59, 130, 246)' }} />
+            <span className="legend-label">One-way</span>
+          </div>
+          <div className="legend-item">
+            <span className="legend-color" style={{ background: 'rgb(251, 191, 36)' }} />
+            <span className="legend-label">Modal filter</span>
+          </div>
+          <div className="legend-item">
+            <span className="legend-color" style={{ background: 'rgb(168, 85, 247)' }} />
+            <span className="legend-label">Local access</span>
+          </div>
+          <div className="legend-item">
+            <span className="legend-color" style={{ background: 'rgb(156, 163, 175)' }} />
+            <span className="legend-label">No change</span>
+          </div>
+        </div>
+      )}
+
+      {colorBy === 'hierarchy' && (
+        <div className="map-legend hierarchy-legend">
+          <div className="legend-title">Road Types</div>
+          <div className="legend-item">
+            <span className="legend-color" style={{ background: 'rgb(139, 0, 0)' }} />
+            <span className="legend-label">Motorway</span>
+          </div>
+          <div className="legend-item">
+            <span className="legend-color" style={{ background: 'rgb(255, 69, 0)' }} />
+            <span className="legend-label">Primary</span>
+          </div>
+          <div className="legend-item">
+            <span className="legend-color" style={{ background: 'rgb(255, 140, 0)' }} />
+            <span className="legend-label">Secondary</span>
+          </div>
+          <div className="legend-item">
+            <span className="legend-color" style={{ background: 'rgb(255, 215, 0)' }} />
+            <span className="legend-label">Tertiary</span>
+          </div>
+          <div className="legend-item">
+            <span className="legend-color" style={{ background: 'rgb(144, 238, 144)' }} />
+            <span className="legend-label">Residential</span>
+          </div>
+        </div>
+      )}
+
+      {colorBy === 'traffic' && (
+        <div className="map-legend traffic-legend">
+          <div className="legend-title">Traffic Intensity</div>
+          <div className="legend-gradient">
+            <div className="gradient-bar" />
+            <div className="gradient-labels">
+              <span>Low</span>
+              <span>High</span>
             </div>
           </div>
         </div>
