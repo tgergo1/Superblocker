@@ -57,35 +57,7 @@ function getScoreColor(score: number): [number, number, number, number] {
   return [239, 68, 68, 160];                     // red
 }
 
-// Direction calculation helper - gets direction label based on angle from centroid
-function getDirectionFromAngle(angleDeg: number): { label: string; arrow: string } {
-  // Normalize angle to 0-360
-  const normalizedAngle = ((angleDeg % 360) + 360) % 360;
-
-  if (normalizedAngle >= 337.5 || normalizedAngle < 22.5) return { label: 'East', arrow: 'E' };
-  if (normalizedAngle >= 22.5 && normalizedAngle < 67.5) return { label: 'NE', arrow: 'NE' };
-  if (normalizedAngle >= 67.5 && normalizedAngle < 112.5) return { label: 'North', arrow: 'N' };
-  if (normalizedAngle >= 112.5 && normalizedAngle < 157.5) return { label: 'NW', arrow: 'NW' };
-  if (normalizedAngle >= 157.5 && normalizedAngle < 202.5) return { label: 'West', arrow: 'W' };
-  if (normalizedAngle >= 202.5 && normalizedAngle < 247.5) return { label: 'SW', arrow: 'SW' };
-  if (normalizedAngle >= 247.5 && normalizedAngle < 292.5) return { label: 'South', arrow: 'S' };
-  return { label: 'SE', arrow: 'SE' };
-}
-
-// Calculate centroid of a polygon
-function calculateCentroid(coordinates: number[][][]): [number, number] {
-  const ring = coordinates[0]; // Outer ring
-  if (!ring || ring.length === 0) return [0, 0];
-
-  let sumLon = 0, sumLat = 0;
-  for (const coord of ring) {
-    sumLon += coord[0];
-    sumLat += coord[1];
-  }
-  return [sumLon / ring.length, sumLat / ring.length];
-}
-
-// Superblock colors for visual distinction (pastel palette)
+// Superblock colors for visual distinction
 const SUPERBLOCK_COLORS: [number, number, number, number][] = [
   [99, 102, 241, 255],   // Indigo
   [236, 72, 153, 255],   // Pink
@@ -346,63 +318,137 @@ export function StreetMap({
           return Array.isArray(osmid) ? osmid[0] : osmid;
         };
 
-        // Find streets that have been modified and get their geometry
-        const modifiedStreetFeatures = streetNetwork.features.filter(f => {
+        // Find one-way streets and create multiple arrows along each
+        const oneWayFeatures = streetNetwork.features.filter(f => {
           const osmid = getOsmId(f.properties?.osmid);
           return osmid !== undefined && modifiedStreets.get(osmid)?.type === 'one_way';
         });
 
-        // Create arrow data at midpoints of modified streets
-        const arrowData = modifiedStreetFeatures.map(f => {
+        // Create multiple arrows along each one-way street
+        const arrowData: { position: number[]; angle: number; name: string }[] = [];
+
+        oneWayFeatures.forEach(f => {
+          const coords = f.geometry.coordinates;
+          if (coords.length < 2) return;
+
+          // Place arrows at 25%, 50%, 75% of the street length
+          const positions = [0.25, 0.5, 0.75];
+
+          positions.forEach(fraction => {
+            const index = Math.floor((coords.length - 1) * fraction);
+            const point = coords[index];
+
+            // Calculate angle from this segment
+            const prevIdx = Math.max(0, index - 1);
+            const nextIdx = Math.min(coords.length - 1, index + 1);
+            const angle = Math.atan2(
+              coords[nextIdx][1] - coords[prevIdx][1],
+              coords[nextIdx][0] - coords[prevIdx][0]
+            ) * (180 / Math.PI);
+
+            arrowData.push({
+              position: point,
+              angle,
+              name: f.properties?.name || 'One-way',
+            });
+          });
+        });
+
+        // Find modal filter streets and mark them
+        const modalFilterFeatures = streetNetwork.features.filter(f => {
+          const osmid = getOsmId(f.properties?.osmid);
+          return osmid !== undefined && modifiedStreets.get(osmid)?.type === 'modal_filter';
+        });
+
+        // Create X markers at modal filter locations (midpoint of street)
+        const modalFilterMarkers = modalFilterFeatures.map(f => {
           const coords = f.geometry.coordinates;
           const midIndex = Math.floor(coords.length / 2);
-          const midPoint = coords[midIndex] || coords[0];
-
-          // Calculate direction from geometry
-          let angle = 0;
-          if (coords.length >= 2) {
-            const start = coords[Math.max(0, midIndex - 1)];
-            const end = coords[Math.min(coords.length - 1, midIndex + 1)];
-            angle = Math.atan2(end[1] - start[1], end[0] - start[0]) * (180 / Math.PI);
-          }
-
-          const osmid = getOsmId(f.properties?.osmid);
-          const mod = osmid !== undefined ? modifiedStreets.get(osmid) : undefined;
-          // Adjust angle based on direction field if available
-          if (mod?.direction) {
-            const dir = mod.direction.toLowerCase();
-            if (dir.includes('north')) angle = 90;
-            else if (dir.includes('south')) angle = -90;
-            else if (dir.includes('east')) angle = 0;
-            else if (dir.includes('west')) angle = 180;
-          }
-
           return {
-            position: midPoint,
-            angle,
-            name: f.properties?.name || 'One-way street',
+            position: coords[midIndex] || coords[0],
+            name: f.properties?.name || 'Modal filter',
           };
         });
 
         if (arrowData.length > 0) {
-          // Direction arrows on one-way streets (using > rotated)
+          // White background circles for arrow visibility
+          result.push(
+            new ScatterplotLayer({
+              id: 'one-way-arrow-bg',
+              data: arrowData,
+              pickable: false,
+              opacity: 1,
+              stroked: true,
+              filled: true,
+              radiusScale: 1,
+              radiusMinPixels: 10,
+              radiusMaxPixels: 16,
+              getPosition: (d: typeof arrowData[0]) => d.position as [number, number],
+              getFillColor: [255, 255, 255, 240],
+              getLineColor: [59, 130, 246, 255],
+              getRadius: 12,
+              lineWidthMinPixels: 2,
+            } as any)
+          );
+
+          // Direction arrows on one-way streets - using simple arrow character
           result.push(
             new TextLayer({
               id: 'one-way-street-arrows',
               data: arrowData,
               pickable: false,
               getPosition: (d: typeof arrowData[0]) => d.position as [number, number],
-              getText: () => '>',
-              getSize: 20,
+              getText: () => '→',
+              getSize: 18,
               getAngle: (d: typeof arrowData[0]) => -d.angle,
-              getColor: [30, 64, 175, 255], // Darker blue for visibility
+              getColor: [30, 64, 175, 255],
+              getTextAnchor: 'middle',
+              getAlignmentBaseline: 'center',
+              fontFamily: 'Arial, sans-serif',
+              fontWeight: 'bold',
+              billboard: false,
+              sizeMinPixels: 14,
+              sizeMaxPixels: 22,
+            } as any)
+          );
+        }
+
+        if (modalFilterMarkers.length > 0) {
+          // X markers on modal filter streets
+          result.push(
+            new ScatterplotLayer({
+              id: 'modal-filter-road-markers',
+              data: modalFilterMarkers,
+              pickable: false,
+              opacity: 1,
+              stroked: true,
+              filled: true,
+              radiusScale: 1,
+              radiusMinPixels: 8,
+              radiusMaxPixels: 14,
+              getPosition: (d: typeof modalFilterMarkers[0]) => d.position as [number, number],
+              getFillColor: [220, 38, 38, 255], // Red
+              getLineColor: [255, 255, 255, 255],
+              getRadius: 10,
+              lineWidthMinPixels: 2,
+            } as any)
+          );
+
+          result.push(
+            new TextLayer({
+              id: 'modal-filter-road-labels',
+              data: modalFilterMarkers,
+              pickable: false,
+              getPosition: (d: typeof modalFilterMarkers[0]) => d.position as [number, number],
+              getText: () => 'X',
+              getSize: 14,
+              getColor: [255, 255, 255, 255],
               getTextAnchor: 'middle',
               getAlignmentBaseline: 'center',
               fontFamily: 'Arial, Helvetica, sans-serif',
               fontWeight: 'bold',
-              billboard: false,
-              sizeMinPixels: 14,
-              sizeMaxPixels: 28,
+              sizeMinPixels: 10,
+              sizeMaxPixels: 16,
             } as any)
           );
         }
@@ -453,57 +499,17 @@ export function StreetMap({
       );
     }
 
-    // Entry points layer with direction arrows - color by superblock, direction by position
+    // Entry points layer - simple markers at superblock entries
     if (showPartition && showEntryPoints && partition) {
-      // Build entry point data with actual direction calculated from centroid
-      const entryPointData = partition.superblocks.flatMap((sb, sbIndex) => {
-        const centroid = calculateCentroid(sb.geometry.coordinates as number[][][]);
-
-        return sb.entry_points.map(ep => {
-          // Calculate angle from centroid to entry point
-          const dx = ep.coordinates.lon - centroid[0];
-          const dy = ep.coordinates.lat - centroid[1];
-          const angleDeg = Math.atan2(dy, dx) * (180 / Math.PI);
-          const direction = getDirectionFromAngle(angleDeg);
-
-          return {
-            ...ep,
-            superblockId: sb.id,
-            superblockIndex: sbIndex,
-            centroid,
-            direction: direction.label,
-            arrow: direction.arrow,
-          };
-        });
-      });
+      const entryPointData = partition.superblocks.flatMap((sb, sbIndex) =>
+        sb.entry_points.map(ep => ({
+          ...ep,
+          superblockId: sb.id,
+          superblockIndex: sbIndex,
+        }))
+      );
 
       if (entryPointData.length > 0) {
-        // Lines connecting entry points to superblock centroid (for visual association)
-        const connectionLines = entryPointData.map(ep => ({
-          path: [
-            [ep.coordinates.lon, ep.coordinates.lat],
-            ep.centroid,
-          ],
-          superblockIndex: ep.superblockIndex,
-        }));
-
-        result.push(
-          new PathLayer({
-            id: 'entry-point-connections',
-            data: connectionLines,
-            pickable: false,
-            widthScale: 1,
-            widthMinPixels: 1,
-            widthMaxPixels: 2,
-            getPath: (d: typeof connectionLines[0]) => d.path,
-            getColor: (d: typeof connectionLines[0]) => {
-              const color = SUPERBLOCK_COLORS[d.superblockIndex % SUPERBLOCK_COLORS.length];
-              return [color[0], color[1], color[2], 100] as [number, number, number, number];
-            },
-            getWidth: 1,
-          } as any)
-        );
-
         // Entry point circles - colored by superblock
         result.push(
           new ScatterplotLayer({
@@ -514,148 +520,33 @@ export function StreetMap({
             stroked: true,
             filled: true,
             radiusScale: 1,
-            radiusMinPixels: 8,
-            radiusMaxPixels: 16,
+            radiusMinPixels: 6,
+            radiusMaxPixels: 12,
             getPosition: (d: typeof entryPointData[0]) => [d.coordinates.lon, d.coordinates.lat],
             getFillColor: (d: typeof entryPointData[0]) =>
               SUPERBLOCK_COLORS[d.superblockIndex % SUPERBLOCK_COLORS.length],
             getLineColor: [255, 255, 255, 255],
-            getRadius: 10,
+            getRadius: 8,
             lineWidthMinPixels: 2,
           } as any)
         );
 
-        // Direction labels on entry points
+        // Entry label
         result.push(
           new TextLayer({
-            id: 'entry-point-arrows',
+            id: 'entry-point-labels',
             data: entryPointData,
             pickable: false,
             getPosition: (d: typeof entryPointData[0]) => [d.coordinates.lon, d.coordinates.lat],
-            getText: (d: typeof entryPointData[0]) => d.arrow,
-            getSize: 11,
+            getText: () => 'E',
+            getSize: 10,
             getColor: [255, 255, 255, 255],
             getTextAnchor: 'middle',
             getAlignmentBaseline: 'center',
             fontFamily: 'Arial, Helvetica, sans-serif',
             fontWeight: 'bold',
-            sizeMinPixels: 9,
-            sizeMaxPixels: 13,
-          } as any)
-        );
-      }
-    }
-
-    // Modal filters layer with barrier visualization
-    if (showPartition && showModalFilters && partition) {
-      const modalFilterData = partition.superblocks.flatMap(sb =>
-        sb.modifications
-          .filter(m => m.modification_type === 'modal_filter' && m.filter_location)
-          .map(m => ({
-            ...m,
-            superblockId: sb.id,
-          }))
-      );
-
-      // One-way conversion data
-      const oneWayData = partition.superblocks.flatMap(sb =>
-        sb.modifications
-          .filter(m => m.modification_type === 'one_way' && m.filter_location)
-          .map(m => ({
-            ...m,
-            superblockId: sb.id,
-          }))
-      );
-
-      if (modalFilterData.length > 0) {
-        // Modal filter circles (red/orange for blocking)
-        result.push(
-          new ScatterplotLayer({
-            id: 'modal-filters',
-            data: modalFilterData,
-            pickable: true,
-            opacity: 0.95,
-            stroked: true,
-            filled: true,
-            radiusScale: 1,
-            radiusMinPixels: 8,
-            radiusMaxPixels: 16,
-            getPosition: (d: typeof modalFilterData[0]) =>
-              d.filter_location ? [d.filter_location.lon, d.filter_location.lat] : [0, 0],
-            getFillColor: [239, 68, 68, 255], // Red for barrier
-            getLineColor: [255, 255, 255, 255],
-            getRadius: 10,
-            lineWidthMinPixels: 2,
-          } as any)
-        );
-
-        // X symbol on modal filters
-        result.push(
-          new TextLayer({
-            id: 'modal-filter-icons',
-            data: modalFilterData,
-            pickable: false,
-            getPosition: (d: typeof modalFilterData[0]) =>
-              d.filter_location ? [d.filter_location.lon, d.filter_location.lat] : [0, 0],
-            getText: () => 'X',
-            getSize: 14,
-            getColor: [255, 255, 255, 255],
-            getTextAnchor: 'middle',
-            getAlignmentBaseline: 'center',
-            fontFamily: 'Arial, Helvetica, sans-serif',
-            fontWeight: 'bold',
-            sizeMinPixels: 10,
-            sizeMaxPixels: 16,
-          } as any)
-        );
-      }
-
-      // One-way conversion markers
-      if (oneWayData.length > 0) {
-        result.push(
-          new ScatterplotLayer({
-            id: 'one-way-markers',
-            data: oneWayData,
-            pickable: true,
-            opacity: 0.95,
-            stroked: true,
-            filled: true,
-            radiusScale: 1,
-            radiusMinPixels: 7,
-            radiusMaxPixels: 14,
-            getPosition: (d: typeof oneWayData[0]) =>
-              d.filter_location ? [d.filter_location.lon, d.filter_location.lat] : [0, 0],
-            getFillColor: [59, 130, 246, 255], // Blue for one-way
-            getLineColor: [255, 255, 255, 255],
-            getRadius: 9,
-            lineWidthMinPixels: 2,
-          } as any)
-        );
-
-        // Arrow for one-way direction (using simple characters)
-        result.push(
-          new TextLayer({
-            id: 'one-way-arrows',
-            data: oneWayData,
-            pickable: false,
-            getPosition: (d: typeof oneWayData[0]) =>
-              d.filter_location ? [d.filter_location.lon, d.filter_location.lat] : [0, 0],
-            getText: (d: typeof oneWayData[0]) => {
-              const dir = d.direction?.toLowerCase() || '';
-              if (dir.includes('north')) return '^';
-              if (dir.includes('south')) return 'v';
-              if (dir.includes('east')) return '>';
-              if (dir.includes('west')) return '<';
-              return '>'; // Default
-            },
-            getSize: 16,
-            getColor: [255, 255, 255, 255],
-            getTextAnchor: 'middle',
-            getAlignmentBaseline: 'center',
-            fontFamily: 'Arial, Helvetica, sans-serif',
-            fontWeight: 'bold',
-            sizeMinPixels: 12,
-            sizeMaxPixels: 18,
+            sizeMinPixels: 8,
+            sizeMaxPixels: 12,
           } as any)
         );
       }
@@ -1022,31 +913,29 @@ export function StreetMap({
                 <>
                   <div className="legend-section-title">Entry Points</div>
                   <div className="legend-item">
-                    <span className="legend-marker entry-point" style={{ background: 'rgb(99, 102, 241)' }}>N</span>
-                    <span className="legend-label">Direction label</span>
+                    <span className="legend-marker entry-point" style={{ background: 'rgb(99, 102, 241)' }}>E</span>
+                    <span className="legend-label">Entry (color = superblock)</span>
                   </div>
-                  <div className="legend-hint">Color = superblock, Letter = direction</div>
-                  <div className="legend-hint">Line connects to superblock center</div>
                 </>
               )}
               {showModalFilters && (
                 <>
-                  <div className="legend-section-title">Modifications</div>
-                  <div className="legend-item">
-                    <span className="legend-marker" style={{ background: 'rgb(239, 68, 68)' }}>X</span>
-                    <span className="legend-label">Modal filter</span>
-                  </div>
-                  <div className="legend-item">
-                    <span className="legend-marker" style={{ background: 'rgb(59, 130, 246)' }}>&gt;</span>
-                    <span className="legend-label">One-way street</span>
-                  </div>
+                  <div className="legend-section-title">Street Modifications</div>
                   <div className="legend-item">
                     <span className="legend-color" style={{ background: 'rgb(239, 68, 68)', height: 4 }} />
-                    <span className="legend-label">Filtered road</span>
+                    <span className="legend-label">Modal filter (blocked)</span>
+                  </div>
+                  <div className="legend-item">
+                    <span className="legend-marker" style={{ background: 'rgb(220, 38, 38)' }}>X</span>
+                    <span className="legend-label">Filter location</span>
                   </div>
                   <div className="legend-item">
                     <span className="legend-color" style={{ background: 'rgb(59, 130, 246)', height: 4 }} />
-                    <span className="legend-label">One-way road</span>
+                    <span className="legend-label">One-way conversion</span>
+                  </div>
+                  <div className="legend-item">
+                    <span className="legend-direction-marker">→</span>
+                    <span className="legend-label">Traffic direction</span>
                   </div>
                 </>
               )}

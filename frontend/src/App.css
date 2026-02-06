@@ -38,7 +38,7 @@
   top: 12px;
   left: 12px;
   right: 12px;
-  bottom: 60px; /* Leave space for map controls and legends */
+  bottom: 12px;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -52,10 +52,19 @@
   flex-direction: column;
   gap: 10px;
   pointer-events: none;
-  max-height: 100%;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+.overlay-left {
+  /* Leave space at bottom for map legends */
+  max-height: calc(100% - 200px);
+}
+
+.overlay-right {
+  /* Leave space at bottom for map controls */
+  max-height: calc(100% - 60px);
 }
 
 .overlay-column::-webkit-scrollbar {
@@ -73,11 +82,11 @@
 }
 
 .overlay-left {
-  width: min(380px, calc(50% - 20px));
+  width: min(320px, calc(50% - 20px));
 }
 
 .overlay-right {
-  width: min(300px, calc(50% - 20px));
+  width: min(280px, calc(50% - 20px));
 }
 
 @media (max-width: 960px) {

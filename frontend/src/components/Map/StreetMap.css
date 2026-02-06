@@ -541,6 +541,34 @@
   font-weight: bold;
 }
 
+.legend-direction-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 16px;
+  background: #3b82f6;
+  color: white;
+  font-size: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.legend-direction-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: white;
+  border: 2px solid #3b82f6;
+  color: #1e40af;
+  font-size: 14px;
+  font-weight: bold;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
 .legend-marker {
   display: flex;
   align-items: center;
