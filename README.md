@@ -2,17 +2,42 @@
 
 A web application for identifying and visualizing potential superblocks in any city worldwide. Combines OpenStreetMap data with traffic modeling to help urban planners, researchers, and citizens explore pedestrian-friendly urban transformations.
 
+![Main Interface](https://github.com/user-attachments/assets/f685e98e-1853-4763-9cbc-7cf948de63ac)
+
 ## Features
 
-- **City Search**: Search and select any city or area worldwide using Nominatim geocoding
-- **Street Network Visualization**: View the complete road network with classification-based coloring
-- **Traffic Estimation**: Estimate traffic capacity and load based on road classification
-- **Multiple Color Modes**: View roads by type (hierarchy) or by estimated traffic intensity
-- **Interactive Map**: Pan, zoom, and hover over roads for detailed information
+### 🔍 City Search
+Search and select any city or area worldwide using Nominatim geocoding. Results appear instantly as you type, with location type badges for easy identification.
+
+![City Search](https://github.com/user-attachments/assets/7d84ae68-a800-413d-8859-d9c5005d089b)
+
+### 🛣️ Street Network Visualization
+Load the complete road network for any selected area. Roads are color-coded by classification — from motorways (red) down to residential streets (green) — with line width reflecting road importance.
+
+![Street Network — Road Type Mode](https://github.com/user-attachments/assets/c71a69a3-9708-4a99-adeb-c31102d72ab7)
+
+### 🚦 Traffic Estimation
+Switch to Traffic mode to see estimated traffic intensity across the network. A green-to-red heat gradient highlights congestion hot-spots based on road capacity, lane count, and speed limits.
+
+![Traffic Intensity Mode](https://github.com/user-attachments/assets/a22f9c7b-97c1-4505-b342-5b604d9c0ae9)
+
+### 🏙️ Superblock Detection & Impact Metrics
+Run the analysis to automatically detect superblock candidates using centrality-based algorithms. View estimated impact metrics including through-traffic reduction, CO₂ savings, and pedestrian area gains.
+
+![Superblock Analysis Results](https://github.com/user-attachments/assets/25cee805-bbc0-49b7-8223-e65a87683aef)
+
+### ⚙️ Configurable Analysis
+Fine-tune detection parameters such as minimum and maximum superblock area (Barcelona-style defaults: 4–25 ha). Toggle between Road Type, Traffic, and Changes color modes to explore different perspectives.
+
+![Analysis Settings](https://github.com/user-attachments/assets/e874371c-4f81-4f5b-96ac-2211885237d6)
+
+### 📐 Full City Partitioning
+Go beyond individual candidates with the Full Partition mode. Configure target superblock size, angular sectors, and enter-exit constraints to generate a complete city-wide partitioning plan with modal filters and one-way street conversions.
+
+![Full Partition Mode](https://github.com/user-attachments/assets/f692557e-1a57-4993-bdef-5f164594beba)
 
 ### Coming Soon
 
-- Superblock detection algorithms (Barcelona-style grid, graph-based bounded areas)
 - Street direction reorientation planning
 - Export to PDF/GeoJSON
 - Real traffic data import
