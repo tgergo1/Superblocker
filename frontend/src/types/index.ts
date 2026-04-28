@@ -146,6 +146,7 @@ export interface EnforcedSuperblock {
   interior_roads_count: number;
   modal_filter_count: number;
   one_way_conversion_count: number;
+  street_cut_count: number;
 }
 
 export interface CityPartition {
@@ -157,6 +158,7 @@ export interface CityPartition {
   total_superblocks: number;
   total_modal_filters: number;
   total_one_way_conversions: number;
+  total_street_cuts: number;
   total_unreachable_addresses: number;
 }
 

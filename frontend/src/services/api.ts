@@ -361,7 +361,17 @@ export async function partitionCityWithProgress(
                     console.log('[Partition] Complete!', data.partition?.total_superblocks, 'superblocks');
                     resolve({
                       partition: data.partition,
-                      street_network: { type: 'FeatureCollection', features: [], metadata: {} as any },
+                      street_network: {
+                        type: 'FeatureCollection',
+                        features: [],
+                        metadata: {
+                          bbox: request.bbox,
+                          total_edges: 0,
+                          total_length_km: 0,
+                          road_type_counts: {},
+                          network_type: 'drive',
+                        },
+                      },
                       processing_time_seconds: data.processing_time_seconds,
                     });
                     return;

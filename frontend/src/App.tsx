@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { StreetMap } from './components/Map';
 import { SearchBox } from './components/Search';
 import { LayerControls } from './components/Controls';
@@ -8,7 +8,7 @@ import { useSearch } from './hooks/useSearch';
 import { useStreetNetwork } from './hooks/useStreetNetwork';
 import { useSuperblocks } from './hooks/useSuperblocks';
 import { usePartition } from './hooks/usePartition';
-import type { BoundingBox, ViewState, EnforcedSuperblock, RouteResult } from './types';
+import type { BoundingBox, ViewState, EnforcedSuperblock, RouteResult, SearchResult } from './types';
 import './App.css';
 
 type AnalysisMode = 'candidates' | 'partition';
@@ -94,23 +94,23 @@ function App() {
     };
   }, [superblockData?.candidates]);
 
-  // Update view state and bbox when a place is selected
-  useEffect(() => {
-    if (selectedPlace) {
-      setViewState({
-        longitude: selectedPlace.lon,
-        latitude: selectedPlace.lat,
-        zoom: 14,
-      });
-      setBbox(selectedPlace.boundingbox);
-    }
-  }, [selectedPlace]);
-
   const handleFetchNetwork = useCallback(() => {
     if (bbox) {
       fetchNetwork();
     }
   }, [bbox, fetchNetwork]);
+
+  const handlePlaceSelect = useCallback((place: SearchResult) => {
+    handleSelect(place);
+    setViewState({
+      longitude: place.lon,
+      latitude: place.lat,
+      zoom: 14,
+    });
+    setBbox(place.boundingbox);
+    setSelectedEnforcedSuperblock(null);
+    setRoute(null);
+  }, [handleSelect]);
 
   const handleFindSuperblocks = useCallback(() => {
     if (bbox && streetNetwork) {
@@ -183,7 +183,7 @@ function App() {
           <div className="overlay-column overlay-left">
             <SearchBox
               onSearch={handleSearch}
-              onSelect={handleSelect}
+              onSelect={handlePlaceSelect}
               results={searchResults}
               isLoading={isSearching}
               selectedPlace={selectedPlace}
@@ -269,6 +269,10 @@ function App() {
               <span>Interior Roads:</span>
               <span>{selectedEnforcedSuperblock.interior_roads_count}</span>
             </div>
+            <div className="detail-row">
+              <span>Street Cuts:</span>
+              <span>{selectedEnforcedSuperblock.street_cut_count}</span>
+            </div>
 
             {/* Entry Points by direction */}
             <div className="details-section-title">Entry Points ({selectedEnforcedSuperblock.entry_points.length})</div>
@@ -303,9 +307,14 @@ function App() {
                   <div className="mod-details">
                     <span className="mod-name">{mod.name || `Road ${mod.osm_id}`}</span>
                     <span className="mod-type">
-                      {mod.modification_type.replace('_', ' ')}
+                      {mod.modification_type === 'full_closure'
+                        ? 'street cut'
+                        : mod.modification_type.replace('_', ' ')}
                       {mod.direction && (
-                        <span className="mod-direction"> → {mod.direction}</span>
+                        <span className="mod-direction">
+                          {' '}
+                          → {mod.direction === 'u_to_v' ? 'u → v' : 'v → u'}
+                        </span>
                       )}
                     </span>
                   </div>

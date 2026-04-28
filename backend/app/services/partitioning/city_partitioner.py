@@ -777,6 +777,10 @@ class CityPartitioner:
                 1 for m in modifications
                 if m.modification_type.value == "one_way"
             ),
+            street_cut_count=sum(
+                1 for m in modifications
+                if m.modification_type.value == "full_closure"
+            ),
         )
 
     def _create_simple_superblock(
@@ -810,6 +814,7 @@ class CityPartitioner:
             interior_roads_count=len(cell.interior_edges),
             modal_filter_count=0,
             one_way_conversion_count=0,
+            street_cut_count=0,
         )
 
     def _build_interior_subgraph(self, cell: SuperblockCell) -> nx.MultiDiGraph:
@@ -864,6 +869,13 @@ class CityPartitioner:
                     if modified_graph.has_edge(mod.u, mod.v):
                         for k in list(modified_graph[mod.u][mod.v].keys()):
                             modified_graph.remove_edge(mod.u, mod.v, k)
+            elif mod.modification_type.value == "full_closure":
+                if modified_graph.has_edge(mod.u, mod.v):
+                    for k in list(modified_graph[mod.u][mod.v].keys()):
+                        modified_graph.remove_edge(mod.u, mod.v, k)
+                if modified_graph.has_edge(mod.v, mod.u):
+                    for k in list(modified_graph[mod.v][mod.u].keys()):
+                        modified_graph.remove_edge(mod.v, mod.u, k)
 
         # Find all nodes reachable from any entry point
         reachable = set()
@@ -957,6 +969,7 @@ class CityPartitioner:
 
         total_filters = sum(sb.modal_filter_count for sb in self.superblocks)
         total_oneway = sum(sb.one_way_conversion_count for sb in self.superblocks)
+        total_cuts = sum(sb.street_cut_count for sb in self.superblocks)
         total_unreachable = sum(len(sb.unreachable_addresses) for sb in self.superblocks)
 
         # Arterial road OSM IDs
@@ -975,5 +988,6 @@ class CityPartitioner:
             total_superblocks=len(self.superblocks),
             total_modal_filters=total_filters,
             total_one_way_conversions=total_oneway,
+            total_street_cuts=total_cuts,
             total_unreachable_addresses=total_unreachable,
         )
