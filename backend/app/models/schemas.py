@@ -114,7 +114,7 @@ class ModificationType(str, Enum):
     MODAL_FILTER = "modal_filter"  # Block cars, allow bikes/emergency
     ONE_WAY = "one_way"  # Convert to one-way street
     TURN_RESTRICTION = "turn_restriction"  # Block specific turns
-    FULL_CLOSURE = "full_closure"  # Close to all vehicle traffic
+    FULL_CLOSURE = "full_closure"  # Street cut / close to all vehicle traffic
 
 
 class EntryPoint(BaseModel):
@@ -135,7 +135,7 @@ class StreetModification(BaseModel):
     name: Optional[str] = None
     modification_type: ModificationType
     direction: Optional[str] = None  # For one-way: 'u_to_v' or 'v_to_u'
-    filter_location: Optional[Coordinates] = None  # For modal filters
+    filter_location: Optional[Coordinates] = None  # For point-based interventions
     rationale: str = ""
 
 
@@ -170,6 +170,7 @@ class EnforcedSuperblock(BaseModel):
     interior_roads_count: int
     modal_filter_count: int
     one_way_conversion_count: int
+    street_cut_count: int
 
 
 class CityPartition(BaseModel):
@@ -184,6 +185,7 @@ class CityPartition(BaseModel):
     total_superblocks: int
     total_modal_filters: int
     total_one_way_conversions: int
+    total_street_cuts: int
     total_unreachable_addresses: int
 
 

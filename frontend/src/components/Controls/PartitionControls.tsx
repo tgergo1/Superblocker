@@ -276,6 +276,10 @@ export function PartitionControls({
               <span className="summary-value">{partition.total_one_way_conversions}</span>
               <span className="summary-label">One-ways</span>
             </div>
+            <div className="summary-item">
+              <span className="summary-value">{partition.total_street_cuts}</span>
+              <span className="summary-label">Street cuts</span>
+            </div>
           </div>
           {partition.total_unreachable_addresses > 0 && (
             <div className="warning-banner">

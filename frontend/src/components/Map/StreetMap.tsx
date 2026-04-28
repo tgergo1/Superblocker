@@ -330,6 +330,8 @@ export function StreetMap({
         oneWayFeatures.forEach(f => {
           const coords = f.geometry.coordinates;
           if (coords.length < 2) return;
+          const osmid = getOsmId(f.properties?.osmid);
+          const direction = osmid !== undefined ? modifiedStreets.get(osmid)?.direction : null;
 
           // Place arrows at 25%, 50%, 75% of the street length
           const positions = [0.25, 0.5, 0.75];
@@ -344,7 +346,7 @@ export function StreetMap({
             const angle = Math.atan2(
               coords[nextIdx][1] - coords[prevIdx][1],
               coords[nextIdx][0] - coords[prevIdx][0]
-            ) * (180 / Math.PI);
+            ) * (180 / Math.PI) + (direction === 'v_to_u' ? 180 : 0);
 
             arrowData.push({
               position: point,
@@ -367,6 +369,20 @@ export function StreetMap({
           return {
             position: coords[midIndex] || coords[0],
             name: f.properties?.name || 'Modal filter',
+          };
+        });
+
+        const fullClosureFeatures = streetNetwork.features.filter(f => {
+          const osmid = getOsmId(f.properties?.osmid);
+          return osmid !== undefined && modifiedStreets.get(osmid)?.type === 'full_closure';
+        });
+
+        const streetCutMarkers = fullClosureFeatures.map(f => {
+          const coords = f.geometry.coordinates;
+          const midIndex = Math.floor(coords.length / 2);
+          return {
+            position: coords[midIndex] || coords[0],
+            name: f.properties?.name || 'Street cut',
           };
         });
 
@@ -441,6 +457,45 @@ export function StreetMap({
               pickable: false,
               getPosition: (d: typeof modalFilterMarkers[0]) => d.position as [number, number],
               getText: () => 'X',
+              getSize: 14,
+              getColor: [255, 255, 255, 255],
+              getTextAnchor: 'middle',
+              getAlignmentBaseline: 'center',
+              fontFamily: 'Arial, Helvetica, sans-serif',
+              fontWeight: 'bold',
+              sizeMinPixels: 10,
+              sizeMaxPixels: 16,
+            } as any)
+          );
+        }
+
+        if (streetCutMarkers.length > 0) {
+          result.push(
+            new ScatterplotLayer({
+              id: 'street-cut-markers',
+              data: streetCutMarkers,
+              pickable: false,
+              opacity: 1,
+              stroked: true,
+              filled: true,
+              radiusScale: 1,
+              radiusMinPixels: 8,
+              radiusMaxPixels: 14,
+              getPosition: (d: typeof streetCutMarkers[0]) => d.position as [number, number],
+              getFillColor: [124, 58, 237, 255],
+              getLineColor: [255, 255, 255, 255],
+              getRadius: 10,
+              lineWidthMinPixels: 2,
+            } as any)
+          );
+
+          result.push(
+            new TextLayer({
+              id: 'street-cut-labels',
+              data: streetCutMarkers,
+              pickable: false,
+              getPosition: (d: typeof streetCutMarkers[0]) => d.position as [number, number],
+              getText: () => '▬',
               getSize: 14,
               getColor: [255, 255, 255, 255],
               getTextAnchor: 'middle',
@@ -937,6 +992,14 @@ export function StreetMap({
                     <span className="legend-direction-marker">→</span>
                     <span className="legend-label">Traffic direction</span>
                   </div>
+                  <div className="legend-item">
+                    <span className="legend-color" style={{ background: 'rgb(124, 58, 237)', height: 4 }} />
+                    <span className="legend-label">Street cut</span>
+                  </div>
+                  <div className="legend-item">
+                    <span className="legend-marker" style={{ background: 'rgb(124, 58, 237)' }}>▬</span>
+                    <span className="legend-label">Cut location</span>
+                  </div>
                 </>
               )}
             </div>
@@ -1003,7 +1066,13 @@ export function StreetMap({
                 </div>
                 <div className="info-row">
                   <span>Modifications:</span>
-                  <span>{partition.total_modal_filters + partition.total_one_way_conversions}</span>
+                  <span>
+                    {partition.total_modal_filters + partition.total_one_way_conversions + partition.total_street_cuts}
+                  </span>
+                </div>
+                <div className="info-row">
+                  <span>Street cuts:</span>
+                  <span>{partition.total_street_cuts}</span>
                 </div>
                 {partition.total_unreachable_addresses > 0 && (
                   <div className="info-row warning">
