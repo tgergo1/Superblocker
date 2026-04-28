@@ -20,7 +20,7 @@ export interface PartitionParameters {
 
 interface PartitionControlsProps {
   isLoading: boolean;
-  progress?: PartitionProgress;
+  progress?: PartitionProgress & { elapsedTime?: number };
   parameters: PartitionParameters;
   onParametersChange: (params: PartitionParameters) => void;
   onPartition: () => void;
@@ -47,7 +47,6 @@ export function PartitionControls({
   onShowModalFiltersChange,
 }: PartitionControlsProps) {
   const [settingsExpanded, setSettingsExpanded] = useState(false);
-  const [startTime] = useState<number | null>(null);
 
   const handleTargetSizeChange = (value: number) => {
     onParametersChange({
@@ -87,7 +86,7 @@ export function PartitionControls({
   };
 
   // Calculate elapsed time if loading
-  const elapsedSeconds = startTime ? Math.floor((Date.now() - startTime) / 1000) : 0;
+  const elapsedSeconds = progress?.elapsedTime ?? 0;
 
   return (
     <div className="partition-controls">

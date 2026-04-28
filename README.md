@@ -32,13 +32,12 @@ Fine-tune detection parameters such as minimum and maximum superblock area (Barc
 ![Analysis Settings](docs/screenshots/analysis-settings.png)
 
 ### 📐 Full City Partitioning
-Go beyond individual candidates with the Full Partition mode. Configure target superblock size, angular sectors, and enter-exit constraints to generate a complete city-wide partitioning plan with modal filters and one-way street conversions.
+Go beyond individual candidates with the Full Partition mode. Configure target superblock size, angular sectors, and enter-exit constraints to generate a complete city-wide partitioning plan with modal filters, street cuts, and one-way street conversions.
 
 ![Full Partition Mode](docs/screenshots/full-partition-mode.png)
 
 ### Coming Soon
 
-- Street direction reorientation planning
 - Export to PDF/GeoJSON
 - Real traffic data import
 

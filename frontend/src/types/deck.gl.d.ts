@@ -18,7 +18,7 @@ declare module '@deck.gl/react' {
     };
     controller?: boolean | object;
     layers?: unknown[];
-    onViewStateChange?: (params: { viewState: any }) => void;
+    onViewStateChange?: (params: { viewState: unknown }) => void;
     children?: ReactNode;
     width?: string | number;
     height?: string | number;
@@ -53,10 +53,10 @@ declare module '@deck.gl/mapbox' {
 }
 
 declare module '@deck.gl/layers' {
-  export class GeoJsonLayer<D = any> {
+  export class GeoJsonLayer<D = unknown> {
     constructor(props: {
       id: string;
-      data: any;
+      data: unknown;
       pickable?: boolean;
       stroked?: boolean;
       filled?: boolean;
@@ -75,7 +75,7 @@ declare module '@deck.gl/layers' {
     });
   }
 
-  export class PathLayer<D = any> {
+  export class PathLayer<D = unknown> {
     constructor(props: {
       id: string;
       data: D[];
@@ -83,6 +83,7 @@ declare module '@deck.gl/layers' {
       widthUnits?: 'pixels' | 'meters';
       widthScale?: number;
       widthMinPixels?: number;
+       widthMaxPixels?: number;
       getPath?: (d: D) => number[][];
       getColor?: ((d: D) => [number, number, number, number]) | [number, number, number, number];
       getWidth?: ((d: D) => number) | number;
@@ -90,7 +91,7 @@ declare module '@deck.gl/layers' {
     });
   }
 
-  export class PolygonLayer<D = any> {
+  export class PolygonLayer<D = unknown> {
     constructor(props: {
       id: string;
       data: D[];
@@ -102,26 +103,34 @@ declare module '@deck.gl/layers' {
       getLineColor?: ((d: D) => [number, number, number, number]) | [number, number, number, number];
       getFillColor?: ((d: D) => [number, number, number, number]) | [number, number, number, number];
       getLineWidth?: ((d: D) => number) | number;
+      onHover?: (info: { object?: D; x?: number; y?: number }) => void;
+      onClick?: (info: { object?: D; x?: number; y?: number }) => void;
       updateTriggers?: Record<string, unknown[]>;
     });
   }
 
-  export class ScatterplotLayer<D = any> {
+  export class ScatterplotLayer<D = unknown> {
     constructor(props: {
       id: string;
       data: D[];
       pickable?: boolean;
+      opacity?: number;
+      stroked?: boolean;
+      filled?: boolean;
       radiusUnits?: 'pixels' | 'meters';
       radiusScale?: number;
       radiusMinPixels?: number;
+      radiusMaxPixels?: number;
       getPosition?: (d: D) => [number, number];
       getRadius?: ((d: D) => number) | number;
       getFillColor?: ((d: D) => [number, number, number, number]) | [number, number, number, number];
+      getLineColor?: ((d: D) => [number, number, number, number]) | [number, number, number, number];
+      lineWidthMinPixels?: number;
       updateTriggers?: Record<string, unknown[]>;
     });
   }
 
-  export class TextLayer<D = any> {
+  export class TextLayer<D = unknown> {
     constructor(props: {
       id: string;
       data: D[];

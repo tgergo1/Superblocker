@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import MapGL, { NavigationControl, ScaleControl } from 'react-map-gl/maplibre';
 import type { MapRef } from 'react-map-gl/maplibre';
+import type { IControl } from 'maplibre-gl';
 import { GeoJsonLayer, PolygonLayer, ScatterplotLayer, PathLayer, TextLayer } from '@deck.gl/layers';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import type { Feature, LineString } from 'geojson';
@@ -74,6 +75,13 @@ const SUPERBLOCK_COLORS: [number, number, number, number][] = [
 // Route colors
 const ROUTE_ARTERIAL_COLOR: [number, number, number, number] = [59, 130, 246, 255]; // Blue
 const ROUTE_INTERIOR_COLOR: [number, number, number, number] = [34, 197, 94, 255]; // Green
+const DEFAULT_VIEW_STATE: ViewState = {
+  longitude: 19.0402,
+  latitude: 47.4979,
+  zoom: 12,
+  pitch: 0,
+  bearing: 0,
+};
 
 interface StreetMapProps {
   streetNetwork: StreetNetworkResponse | null;
@@ -118,38 +126,24 @@ export function StreetMap({
   const [legendCollapsed, setLegendCollapsed] = useState(false);
   const [infoCollapsed, setInfoCollapsed] = useState(false);
 
-  const [viewState, setViewState] = useState<ViewState>(
-    initialViewState ?? {
-      longitude: 19.0402,
-      latitude: 47.4979,
-      zoom: 12,
-      pitch: 0,
-      bearing: 0,
-    }
+  const [internalViewState, setInternalViewState] = useState<ViewState>(
+    initialViewState ?? DEFAULT_VIEW_STATE
   );
 
   const [hoveredFeature, setHoveredFeature] = useState<Feature<LineString, RoadProperties> | null>(null);
   const [hoveredSuperblock, setHoveredSuperblock] = useState<SuperblockCandidate | null>(null);
   const [selectedSuperblock, setSelectedSuperblock] = useState<SuperblockCandidate | null>(null);
 
-  // Sync with external viewState changes
-  useEffect(() => {
-    if (initialViewState) {
-      setViewState(prev => ({
-        ...prev,
-        longitude: initialViewState.longitude,
-        latitude: initialViewState.latitude,
-        zoom: initialViewState.zoom,
-      }));
-    }
-  }, [initialViewState?.longitude, initialViewState?.latitude, initialViewState?.zoom]);
+  const viewState = initialViewState ?? internalViewState;
 
   const handleMove = useCallback(
     (evt: { viewState: ViewState }) => {
-      setViewState(evt.viewState);
+      if (!initialViewState) {
+        setInternalViewState(evt.viewState);
+      }
       onViewStateChange?.(evt.viewState);
     },
-    [onViewStateChange]
+    [initialViewState, onViewStateChange]
   );
 
   // Build a map of modified streets from partition data for quick lookup
@@ -240,7 +234,6 @@ export function StreetMap({
 
     // Superblock polygons layer (render first, below roads)
     if (showSuperblocks && superblocks && superblocks.length > 0) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       result.push(
         new PolygonLayer({
           id: 'superblocks',
@@ -283,7 +276,7 @@ export function StreetMap({
             getLineColor: [selectedSuperblock?.id],
             getLineWidth: [selectedSuperblock?.id],
           },
-        } as any)
+        })
       );
     }
 
@@ -404,7 +397,7 @@ export function StreetMap({
               getLineColor: [59, 130, 246, 255],
               getRadius: 12,
               lineWidthMinPixels: 2,
-            } as any)
+            })
           );
 
           // Direction arrows on one-way streets - using simple arrow character
@@ -425,7 +418,7 @@ export function StreetMap({
               billboard: false,
               sizeMinPixels: 14,
               sizeMaxPixels: 22,
-            } as any)
+            })
           );
         }
 
@@ -447,7 +440,7 @@ export function StreetMap({
               getLineColor: [255, 255, 255, 255],
               getRadius: 10,
               lineWidthMinPixels: 2,
-            } as any)
+            })
           );
 
           result.push(
@@ -465,7 +458,7 @@ export function StreetMap({
               fontWeight: 'bold',
               sizeMinPixels: 10,
               sizeMaxPixels: 16,
-            } as any)
+            })
           );
         }
 
@@ -486,7 +479,7 @@ export function StreetMap({
               getLineColor: [255, 255, 255, 255],
               getRadius: 10,
               lineWidthMinPixels: 2,
-            } as any)
+            })
           );
 
           result.push(
@@ -504,7 +497,7 @@ export function StreetMap({
               fontWeight: 'bold',
               sizeMinPixels: 10,
               sizeMaxPixels: 16,
-            } as any)
+            })
           );
         }
       }
@@ -550,7 +543,7 @@ export function StreetMap({
             getLineColor: [selectedEnforcedSuperblock?.id],
             getLineWidth: [selectedEnforcedSuperblock?.id],
           },
-        } as any)
+        })
       );
     }
 
@@ -583,7 +576,7 @@ export function StreetMap({
             getLineColor: [255, 255, 255, 255],
             getRadius: 8,
             lineWidthMinPixels: 2,
-          } as any)
+          })
         );
 
         // Entry label
@@ -602,7 +595,7 @@ export function StreetMap({
             fontWeight: 'bold',
             sizeMinPixels: 8,
             sizeMaxPixels: 12,
-          } as any)
+          })
         );
       }
     }
@@ -627,12 +620,12 @@ export function StreetMap({
           getColor: (d: typeof routePathData[0]) =>
             d.isArterial ? ROUTE_ARTERIAL_COLOR : ROUTE_INTERIOR_COLOR,
           getWidth: 5,
-        } as any)
+        })
       );
     }
 
     return result;
-  }, [streetNetwork, superblocks, showSuperblocks, colorBy, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, showModalFilters, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute]);
+  }, [streetNetwork, superblocks, showSuperblocks, colorBy, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute, modifiedStreets]);
 
   // Store overlay reference
   const overlayRef = useRef<MapboxOverlay | null>(null);
@@ -646,8 +639,7 @@ export function StreetMap({
       layers,
     });
     overlayRef.current = overlay;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    map.addControl(overlay as any);
+    map.addControl(overlay as unknown as IControl);
   }, [layers]);
 
   // Update deck layers when they change
