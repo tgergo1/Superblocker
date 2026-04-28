@@ -195,6 +195,7 @@ class AccessibilityValidator:
             if entry not in vehicle_graph.nodes:
                 continue
 
+            reachable.add(entry)
             try:
                 descendants = nx.descendants(vehicle_graph, entry)
                 reachable.update(descendants)
@@ -379,20 +380,19 @@ class AccessibilityValidator:
                         test_graph.add_edge(mod.u, mod.v, key=k, **data)
 
         # Count newly reachable nodes
-        newly_reachable = 0
+        reachable_after_undo = set()
         for entry in entry_nodes:
             if entry not in test_graph.nodes:
                 continue
 
+            reachable_after_undo.add(entry)
             try:
                 descendants = nx.descendants(test_graph, entry)
-                for node in unreachable_nodes:
-                    if node in descendants:
-                        newly_reachable += 1
+                reachable_after_undo.update(descendants)
             except nx.NetworkXError:
                 continue
 
-        return newly_reachable
+        return len(unreachable_nodes.intersection(reachable_after_undo))
 
 
 def validate_superblock_accessibility(

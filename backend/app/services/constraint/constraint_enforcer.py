@@ -130,6 +130,12 @@ class ConstraintEnforcer:
         # Step 5: Apply modifications and validate
         remaining_violations = self._validate_modifications(modifications)
 
+        if remaining_violations:
+            modifications, remaining_violations = self._repair_remaining_violations(
+                modifications,
+                remaining_violations,
+            )
+
         return modifications, remaining_violations
 
     def _assign_sectors(self) -> SectorAssignment:
@@ -182,25 +188,14 @@ class ConstraintEnforcer:
         self, angle: float, sector_angles: list[tuple[float, float]]
     ) -> int:
         """Convert an angle to a sector index."""
-        # Normalize angle to [-pi, pi]
-        while angle > math.pi:
-            angle -= 2 * math.pi
-        while angle < -math.pi:
-            angle += 2 * math.pi
+        if self.num_sectors <= 0:
+            return 0
 
-        for i, (start, end) in enumerate(sector_angles):
-            # Handle wrap-around at -pi/pi boundary
-            if start < -math.pi:
-                if angle >= start + 2 * math.pi or angle < end:
-                    return i
-            elif end > math.pi:
-                if angle >= start or angle < end - 2 * math.pi:
-                    return i
-            elif start <= angle < end:
-                return i
-
-        # Default to sector 0 if angle doesn't match (shouldn't happen)
-        return 0
+        sector_size = 2 * math.pi / self.num_sectors
+        start_offset = sector_angles[0][0] if sector_angles else -sector_size / 2
+        normalized_angle = (angle - start_offset) % (2 * math.pi)
+        sector = int(normalized_angle / sector_size)
+        return min(self.num_sectors - 1, sector)
 
     def _find_violations(self) -> list[ConstraintViolation]:
         """
@@ -653,6 +648,183 @@ class ConstraintEnforcer:
             )
 
         return modifications
+
+    def _repair_remaining_violations(
+        self,
+        modifications: list[StreetModification],
+        remaining_violations: list[ConstraintViolation],
+    ) -> tuple[list[StreetModification], list[ConstraintViolation]]:
+        """
+        Greedily add additional low-cost modifications until remaining directed
+        cross-sector paths are removed or no further progress is possible.
+        """
+        updated = list(modifications)
+        max_iterations = max(1, self.graph.number_of_edges())
+
+        for _ in range(max_iterations):
+            if not remaining_violations:
+                break
+
+            extra_modifications = self._generate_greedy_repairs(
+                remaining_violations,
+                updated,
+            )
+            if not extra_modifications:
+                break
+
+            updated.extend(extra_modifications)
+            remaining_violations = self._validate_modifications(updated)
+
+        return updated, remaining_violations
+
+    def _generate_greedy_repairs(
+        self,
+        violations: list[ConstraintViolation],
+        existing_modifications: list[StreetModification],
+    ) -> list[StreetModification]:
+        """Pick cheap edges on still-violating paths and modify them."""
+        existing_edges = {
+            (mod.u, mod.v, mod.key, mod.modification_type, mod.direction)
+            for mod in existing_modifications
+        }
+        repairs: list[StreetModification] = []
+
+        for violation in violations:
+            repair_edge = self._select_repair_edge(violation, existing_edges)
+            if repair_edge is None:
+                continue
+
+            u, v, key = repair_edge
+            edge_data = self.graph[u][v][key]
+            mod_type, direction = self._determine_modification_type(u, v, key, edge_data)
+            modification = self._build_single_modification(
+                u,
+                v,
+                key,
+                edge_data,
+                mod_type,
+                direction,
+            )
+            if modification is None:
+                continue
+
+            edge_signature = (
+                modification.u,
+                modification.v,
+                modification.key,
+                modification.modification_type,
+                modification.direction,
+            )
+            if edge_signature in existing_edges:
+                continue
+
+            repairs.append(modification)
+            existing_edges.add(edge_signature)
+
+        return repairs
+
+    def _select_repair_edge(
+        self,
+        violation: ConstraintViolation,
+        existing_edges: set[tuple[int, int, int, ModificationType, Optional[str]]],
+    ) -> Optional[tuple[int, int, int]]:
+        """Choose the cheapest non-entry edge on a violating path."""
+        best_edge: Optional[tuple[int, int, int]] = None
+        best_cost = float("inf")
+        blocked_nodes = {
+            violation.from_entry.node_id,
+            violation.to_entry.node_id,
+        }
+
+        for u, v in violation.path_edges:
+            for from_node, to_node in ((u, v), (v, u)):
+                if from_node in blocked_nodes or to_node in blocked_nodes:
+                    continue
+                if not self.graph.has_edge(from_node, to_node):
+                    continue
+
+                for key, edge_data in self.graph[from_node][to_node].items():
+                    mod_type, direction = self._determine_modification_type(
+                        from_node,
+                        to_node,
+                        key,
+                        edge_data,
+                    )
+                    signature = (
+                        from_node,
+                        to_node,
+                        key,
+                        ModificationType(mod_type),
+                        direction,
+                    )
+                    if signature in existing_edges:
+                        continue
+
+                    cost = self._edge_cut_cost(edge_data)
+                    if mod_type == "one_way":
+                        cost += 0.5
+
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_edge = (from_node, to_node, key)
+
+        return best_edge
+
+    def _build_single_modification(
+        self,
+        u: int,
+        v: int,
+        key: int,
+        edge_data: dict,
+        mod_type: str,
+        direction: Optional[str],
+    ) -> Optional[StreetModification]:
+        """Create a StreetModification for a single edge."""
+        osmid = self._normalize_osm_id(edge_data.get("osmid", 0))
+        name = self._normalize_edge_name(edge_data.get("name"))
+        node_u = self.graph.nodes.get(u, {})
+        midpoint = Coordinates(
+            lat=(node_u.get("y", 0) + self.graph.nodes.get(v, {}).get("y", 0)) / 2,
+            lon=(node_u.get("x", 0) + self.graph.nodes.get(v, {}).get("x", 0)) / 2,
+        )
+
+        if mod_type == "modal_filter":
+            return StreetModification(
+                u=u,
+                v=v,
+                key=key,
+                osm_id=osmid,
+                name=name,
+                modification_type=ModificationType.MODAL_FILTER,
+                filter_location=midpoint,
+                rationale="Additional modal filter to remove remaining cross-sector through traffic",
+            )
+
+        if mod_type == "full_closure":
+            return StreetModification(
+                u=u,
+                v=v,
+                key=key,
+                osm_id=osmid,
+                name=name,
+                modification_type=ModificationType.FULL_CLOSURE,
+                filter_location=midpoint,
+                rationale="Additional street cut to eliminate remaining cross-sector routing",
+            )
+
+        if mod_type == "one_way":
+            return StreetModification(
+                u=u,
+                v=v,
+                key=key,
+                osm_id=osmid,
+                name=name,
+                modification_type=ModificationType.ONE_WAY,
+                direction=direction,
+                rationale=f"Additional one-way conversion ({direction}) to eliminate remaining cross-sector routing",
+            )
+
+        return None
 
     def _validate_modifications(
         self, modifications: list[StreetModification]
