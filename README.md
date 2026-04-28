@@ -24,7 +24,7 @@ Switch to Traffic mode to see estimated traffic intensity across the network. A 
 ### 🏙️ Superblock Detection & Impact Metrics
 Run the analysis to automatically detect superblock candidates using centrality-based algorithms. View estimated impact metrics including through-traffic reduction, CO₂ savings, and pedestrian area gains.
 
-![Superblock Analysis Results](https://github.com/user-attachments/assets/25cee805-bbc0-49b7-8223-e65a87683aef)
+![Superblock Analysis Results](https://github.com/user-attachments/assets/5e7f8cec-6cd8-4658-a79b-2273d3f8f7f7)
 
 ### ⚙️ Configurable Analysis
 Fine-tune detection parameters such as minimum and maximum superblock area (Barcelona-style defaults: 4–25 ha). Toggle between Road Type, Traffic, and Changes color modes to explore different perspectives.
