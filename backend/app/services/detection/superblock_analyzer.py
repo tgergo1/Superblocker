@@ -20,7 +20,7 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from shapely.geometry import Polygon, Point, LineString, MultiPolygon, mapping
+from shapely.geometry import Polygon, Point, LineString, MultiPolygon, mapping, shape
 from shapely.ops import polygonize, unary_union
 from shapely.strtree import STRtree
 import pyproj
@@ -593,9 +593,7 @@ class SuperblockAnalyzer:
         
         for row in edges.itertuples(index=False):
             osmid = getattr(row, "osmid", 0)
-            if isinstance(osmid, list):
-                osmid = osmid[0]
-            edge_osmids.append(int(osmid))
+            edge_osmids.append(self._normalize_osm_id(osmid))
             edge_centroids.append(row.geometry.centroid)
         
         # Create spatial index for boundary intersection tests
@@ -672,7 +670,9 @@ class SuperblockAnalyzer:
         - Pre-compute lookups for candidate roads
         """
         nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
-        poly = Polygon(candidate.geometry["coordinates"][0])
+        poly = shape(candidate.geometry)
+        metric_transformer = self._get_metric_transformer(poly.centroid)
+        poly_projected = transform(metric_transformer.transform, poly)
 
         # 1. Size score (ideal: 9-16 ha)
         area = candidate.area_hectares
@@ -743,11 +743,8 @@ class SuperblockAnalyzer:
             traffic_score = 50
 
         # 4. Accessibility score (walking distances, access points)
-        centroid = poly.centroid
-        boundary_distance = poly.boundary.distance(centroid)
-
-        # Convert to approximate meters (rough estimate)
-        boundary_distance_m = boundary_distance * 111000 * math.cos(math.radians(centroid.y))
+        centroid = poly_projected.centroid
+        boundary_distance_m = poly_projected.boundary.distance(centroid)
 
         # Ideal: max 200m to boundary (400m diameter)
         if boundary_distance_m <= 200:
@@ -964,6 +961,30 @@ class SuperblockAnalyzer:
             "mean_centrality": round(sum(centralities) / len(centralities), 6) if centralities else 0,
             "max_centrality": round(max(centralities), 6) if centralities else 0,
         }
+
+    @staticmethod
+    def _get_metric_transformer(point: Point) -> pyproj.Transformer:
+        """Create a local UTM transformer for accurate metric distances."""
+        utm_zone = min(60, max(1, int((point.x + 180) / 6) + 1))
+        epsg = 32600 + utm_zone if point.y >= 0 else 32700 + utm_zone
+        return pyproj.Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+
+    @staticmethod
+    def _normalize_osm_id(osmid) -> int:
+        """Normalize OSM IDs to one positive integer."""
+        if osmid is None:
+            return 0
+        if isinstance(osmid, (list, tuple, set)):
+            for item in osmid:
+                value = SuperblockAnalyzer._normalize_osm_id(item)
+                if value:
+                    return value
+            return 0
+        try:
+            value = int(osmid)
+        except (TypeError, ValueError):
+            return 0
+        return value if value > 0 else 0
 
 
 # Convenience function for API

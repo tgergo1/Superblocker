@@ -18,7 +18,9 @@ import numpy as np
 from typing import Optional
 from dataclasses import dataclass
 from shapely.geometry import Polygon, LineString, Point
+from shapely.ops import polygonize, transform, unary_union
 import networkx as nx
+import pyproj
 
 logger = logging.getLogger(__name__)
 
@@ -268,18 +270,7 @@ class SizeOptimizer:
 
         regularity = aligned_length / total_length if total_length > 0 else 0.5
 
-        # Estimate average block size
-        # This is rough - based on total length and number of nodes
-        num_nodes = self.graph.number_of_nodes()
-        if num_nodes > 0:
-            # Assume roughly square blocks
-            # Average block perimeter ≈ total_length / (num_blocks)
-            # num_blocks ≈ num_nodes / 4
-            estimated_blocks = max(1, num_nodes / 4)
-            avg_perimeter = total_length / estimated_blocks
-            avg_block_size = avg_perimeter / 4  # Perimeter to side
-        else:
-            avg_block_size = 100
+        avg_block_size = self._estimate_average_block_size_m()
 
         # Street density (km per km²)
         # Rough calculation - would need bbox for accurate result
@@ -291,6 +282,64 @@ class SizeOptimizer:
             average_block_size_m=avg_block_size,
             street_density=street_density,
         )
+
+    def _estimate_average_block_size_m(self) -> float:
+        """Estimate a representative block side length from enclosed street polygons."""
+        if self.graph is None or self.graph.number_of_edges() == 0:
+            return 100
+
+        longitudes = []
+        latitudes = []
+        undirected_lines: dict[tuple[int, int], LineString] = {}
+
+        for u, v, data in self.graph.edges(data=True):
+            u_data = self.graph.nodes.get(u, {})
+            v_data = self.graph.nodes.get(v, {})
+            if "x" not in u_data or "x" not in v_data:
+                continue
+
+            longitudes.extend([u_data["x"], v_data["x"]])
+            latitudes.extend([u_data["y"], v_data["y"]])
+
+            geom = data.get("geometry")
+            if geom is None:
+                geom = LineString([
+                    (u_data["x"], u_data["y"]),
+                    (v_data["x"], v_data["y"]),
+                ])
+
+            edge_key = (min(u, v), max(u, v))
+            current = undirected_lines.get(edge_key)
+            if current is None or geom.length > current.length:
+                undirected_lines[edge_key] = geom
+
+        if not undirected_lines or not longitudes or not latitudes:
+            return 100
+
+        center_lon = sum(longitudes) / len(longitudes)
+        center_lat = sum(latitudes) / len(latitudes)
+        utm_zone = min(60, max(1, int((center_lon + 180) / 6) + 1))
+        epsg = 32600 + utm_zone if center_lat >= 0 else 32700 + utm_zone
+        transformer = pyproj.Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+
+        projected_lines = [
+            transform(transformer.transform, line)
+            for line in undirected_lines.values()
+        ]
+        polygons = list(polygonize(unary_union(projected_lines)))
+
+        block_side_lengths = []
+        for polygon in polygons:
+            area = polygon.area
+            if area < 250 or area > 120000:
+                continue
+            block_side_lengths.append(math.sqrt(area))
+
+        if not block_side_lengths:
+            avg_edge_length = np.mean([line.length for line in projected_lines]) if projected_lines else 100
+            return max(40.0, float(avg_edge_length))
+
+        return float(np.median(block_side_lengths))
 
     def _grid_adjustment_factor(self) -> float:
         """Calculate adjustment factor based on grid regularity."""

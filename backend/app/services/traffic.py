@@ -41,6 +41,22 @@ DEFAULT_LOAD_FACTORS = {
 }
 
 
+def _normalize_lanes(value) -> int:
+    """Normalize OSM lane metadata to a bounded positive integer."""
+    if isinstance(value, list):
+        value = value[0] if value else 1
+
+    if isinstance(value, str):
+        value = value.split(";")[0].strip()
+
+    try:
+        lanes = int(float(value))
+    except (TypeError, ValueError):
+        return 1
+
+    return max(1, min(8, lanes))
+
+
 def estimate_traffic(network: StreetNetworkResponse) -> StreetNetworkResponse:
     """
     Add traffic capacity and load estimates to street network features.
@@ -65,7 +81,8 @@ def estimate_traffic(network: StreetNetworkResponse) -> StreetNetworkResponse:
     for feature in network.features:
         props = feature["properties"]
         highway = props.get("highway", "unclassified")
-        lanes = props.get("lanes", 1)
+        lanes = _normalize_lanes(props.get("lanes", 1))
+        props["lanes"] = lanes
 
         # Calculate capacity
         base_capacity = ROAD_CAPACITY.get(highway, 200)
@@ -109,6 +126,9 @@ def apply_real_traffic_data(
     Returns:
         Network with updated traffic data where real counts are available
     """
+    total_capacity = 0
+    total_volume = 0
+
     for feature in network.features:
         props = feature["properties"]
         osmid = props.get("osmid")
@@ -127,5 +147,12 @@ def apply_real_traffic_data(
             props["traffic_intensity"] = min(100, int((real_volume / max_intensity_volume) * 100))
         else:
             props["is_real_data"] = False
+
+        total_capacity += props.get("capacity", 0)
+        total_volume += props.get("estimated_volume", 0)
+
+    network.metadata["total_capacity"] = total_capacity
+    network.metadata["total_estimated_volume"] = total_volume
+    network.metadata["average_load"] = round(total_volume / total_capacity, 3) if total_capacity > 0 else 0
 
     return network

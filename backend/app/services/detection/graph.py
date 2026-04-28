@@ -5,6 +5,7 @@ Finds areas bounded by major roads that could be converted to superblocks.
 """
 import networkx as nx
 import osmnx as ox
+import math
 from shapely.geometry import Polygon, MultiPolygon, mapping
 from shapely.ops import polygonize, unary_union
 import uuid
@@ -92,13 +93,14 @@ def detect_superblocks(
         if poly.is_empty:
             continue
 
-        # Calculate area in hectares
-        # Project to Web Mercator for accurate area calculation
+        # Calculate area in hectares with a local UTM projection
         from shapely.ops import transform
         import pyproj
 
+        utm_zone = min(60, max(1, int((poly.centroid.x + 180) / 6) + 1))
+        epsg = 32600 + utm_zone if poly.centroid.y >= 0 else 32700 + utm_zone
         project = pyproj.Transformer.from_crs(
-            "EPSG:4326", "EPSG:3857", always_xy=True
+            "EPSG:4326", f"EPSG:{epsg}", always_xy=True
         ).transform
         poly_projected = transform(project, poly)
         area_m2 = poly_projected.area
@@ -208,7 +210,7 @@ def calculate_superblock_score(
     # Compactness score (isoperimetric quotient)
     # 1.0 = perfect circle, lower = more irregular
     if polygon.is_valid and polygon.area > 0:
-        compactness = 4 * 3.14159 * polygon.area / (polygon.length ** 2)
+        compactness = 4 * math.pi * polygon.area / (polygon.length ** 2)
         if compactness > 0.7:
             score += 10
         elif compactness > 0.5:

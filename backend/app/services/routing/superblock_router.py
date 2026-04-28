@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 SPEED_ARTERIAL = 40
 SPEED_INTERIOR = 20
 SPEED_RESIDENTIAL = 25
+METERS_PER_DEGREE_LON = 111320
+METERS_PER_DEGREE_LAT = 110540
 
 
 @dataclass(order=True)
@@ -72,6 +74,7 @@ class SuperblockRouter:
 
         # Build auxiliary data structures
         self.arterial_set = set(partition.arterial_network)
+        self.arterial_node_ids = self._build_arterial_node_ids()
         self.superblock_index = self._build_superblock_index()
         self.modified_graph = self._build_modified_graph()
 
@@ -124,6 +127,32 @@ class SuperblockRouter:
                             modified.remove_edge(mod.v, mod.u, k)
 
         return modified
+
+    def _build_arterial_node_ids(self) -> set[int]:
+        """Collect nodes that belong to arterial edges."""
+        arterial_nodes: set[int] = set()
+        arterial_highways = {
+            "motorway", "motorway_link",
+            "trunk", "trunk_link",
+            "primary", "primary_link",
+            "secondary", "secondary_link",
+            "tertiary", "tertiary_link",
+        }
+
+        for u, v, data in self.graph.edges(data=True):
+            osmid = data.get("osmid", 0)
+            if isinstance(osmid, list):
+                osmid = osmid[0] if osmid else 0
+
+            highway = data.get("highway", "")
+            if isinstance(highway, list):
+                highway = highway[0] if highway else ""
+
+            if osmid in self.arterial_set or highway in arterial_highways:
+                arterial_nodes.add(u)
+                arterial_nodes.add(v)
+
+        return arterial_nodes
 
     def route(self, request: RouteRequest) -> RouteResult:
         """
@@ -190,9 +219,12 @@ class SuperblockRouter:
             if "x" not in data or "y" not in data:
                 continue
 
-            dx = data["x"] - coords.lon
-            dy = data["y"] - coords.lat
-            dist = dx*dx + dy*dy
+            dist = self._distance_squared_m(
+                coords.lon,
+                coords.lat,
+                data["x"],
+                data["y"],
+            )
 
             if dist < best_dist:
                 best_dist = dist
@@ -337,7 +369,12 @@ class SuperblockRouter:
             entry_path = [dest_node] if arterial_entry != dest_node else []
 
         # Combine paths
-        full_path = exit_path[:-1] + arterial_path + entry_path[1:] if entry_path else exit_path[:-1] + arterial_path
+        full_path = exit_path[:-1] + arterial_path
+        if entry_path:
+            if full_path and entry_path[0] == full_path[-1]:
+                full_path += entry_path[1:]
+            else:
+                full_path += entry_path
         full_path = self._deduplicate_path(full_path)
 
         segments = self._path_to_segments(full_path)
@@ -401,9 +438,12 @@ class SuperblockRouter:
 
         def heuristic(node: int) -> float:
             node_data = self.modified_graph.nodes.get(node, {})
-            dx = (node_data.get("x", 0) - goal_x) * 111000  # Approximate meters
-            dy = (node_data.get("y", 0) - goal_y) * 111000
-            return math.sqrt(dx*dx + dy*dy)
+            return self._distance_m(
+                node_data.get("x", 0),
+                node_data.get("y", 0),
+                goal_x,
+                goal_y,
+            )
 
         # A* implementation
         open_set = [PriorityNode(f_score=heuristic(start), node_id=start)]
@@ -488,22 +528,36 @@ class SuperblockRouter:
         best_node = None
         best_dist = float("inf")
 
-        # Check nodes connected to arterial edges
-        for sb in self.partition.superblocks:
-            for ep in sb.entry_points:
-                if ep.node_id not in self.graph.nodes:
-                    continue
+        for arterial_node in self.arterial_node_ids:
+            if arterial_node not in self.graph.nodes:
+                continue
 
-                ep_data = self.graph.nodes[ep.node_id]
-                dx = ep_data.get("x", 0) - nx_coord
-                dy = ep_data.get("y", 0) - ny_coord
-                dist = dx*dx + dy*dy
+            arterial_data = self.graph.nodes[arterial_node]
+            dist = self._distance_squared_m(
+                nx_coord,
+                ny_coord,
+                arterial_data.get("x", 0),
+                arterial_data.get("y", 0),
+            )
 
-                if dist < best_dist:
-                    best_dist = dist
-                    best_node = ep.node_id
+            if dist < best_dist:
+                best_dist = dist
+                best_node = arterial_node
 
         return best_node
+
+    @staticmethod
+    def _distance_squared_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+        """Approximate squared local metric distance."""
+        mid_lat = math.radians((lat1 + lat2) / 2)
+        dx = (lon2 - lon1) * METERS_PER_DEGREE_LON * math.cos(mid_lat)
+        dy = (lat2 - lat1) * METERS_PER_DEGREE_LAT
+        return dx * dx + dy * dy
+
+    @classmethod
+    def _distance_m(cls, lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+        """Approximate local metric distance."""
+        return math.sqrt(cls._distance_squared_m(lon1, lat1, lon2, lat2))
 
     def _path_to_segments(self, path: list[int]) -> list[RouteSegment]:
         """Convert node path to route segments."""
