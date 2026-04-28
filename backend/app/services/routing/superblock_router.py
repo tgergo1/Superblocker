@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 SPEED_ARTERIAL = 40
 SPEED_INTERIOR = 20
 SPEED_RESIDENTIAL = 25
+METERS_PER_DEGREE_LON = 111320
+METERS_PER_DEGREE_LAT = 110540
 
 
 @dataclass(order=True)
@@ -548,8 +550,8 @@ class SuperblockRouter:
     def _distance_squared_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
         """Approximate squared local metric distance."""
         mid_lat = math.radians((lat1 + lat2) / 2)
-        dx = (lon2 - lon1) * 111320 * math.cos(mid_lat)
-        dy = (lat2 - lat1) * 110540
+        dx = (lon2 - lon1) * METERS_PER_DEGREE_LON * math.cos(mid_lat)
+        dy = (lat2 - lat1) * METERS_PER_DEGREE_LAT
         return dx * dx + dy * dy
 
     @classmethod

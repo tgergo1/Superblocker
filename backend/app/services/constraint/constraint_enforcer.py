@@ -188,7 +188,7 @@ class ConstraintEnforcer:
         self, angle: float, sector_angles: list[tuple[float, float]]
     ) -> int:
         """Convert an angle to a sector index."""
-        if self.num_sectors <= 0:
+        if self.num_sectors < 1:
             return 0
 
         sector_size = 2 * math.pi / self.num_sectors
