@@ -204,6 +204,9 @@ class SuperblockAnalyzer:
         "service": 150,
     }
 
+    # Typical share of nominal capacity used by each road class in the absence
+    # of observed counts. These values convert edge capacity into a heuristic
+    # hourly traffic volume for candidate scoring and rerouting estimates.
     LOAD_FACTOR_MAP = {
         "motorway": 0.70,
         "trunk": 0.65,
@@ -234,7 +237,18 @@ class SuperblockAnalyzer:
 
     @staticmethod
     def _normalize_lanes(value: Any) -> int:
-        """Normalize OSM lane metadata to a bounded positive integer."""
+        """Normalize OSM lane metadata to a bounded positive integer.
+
+        Args:
+            value: Raw OSM lane metadata, which may be missing, string encoded,
+                semicolon-separated, or list based.
+
+        Returns:
+            A lane count between 1 and 8 inclusive.
+
+        The upper bound avoids implausible OSM tag values from dominating
+        downstream capacity heuristics while still covering very wide arterials.
+        """
         if isinstance(value, list):
             value = value[0] if value else 1
 
@@ -249,7 +263,15 @@ class SuperblockAnalyzer:
         return max(1, min(8, lanes))
 
     def _estimate_edge_capacity(self, highway: Any, lanes: Any) -> int:
-        """Estimate capacity for a candidate edge."""
+        """Estimate hourly vehicle capacity for a candidate edge.
+
+        Args:
+            highway: Raw OSM highway classification for the edge.
+            lanes: Raw OSM lane metadata for the edge.
+
+        Returns:
+            Estimated vehicle capacity in vehicles per hour.
+        """
         if isinstance(highway, list):
             highway = highway[0] if highway else "unclassified"
 
@@ -257,7 +279,15 @@ class SuperblockAnalyzer:
         return self.CAPACITY_MAP.get(highway, 200) * normalized_lanes
 
     def _estimate_edge_volume(self, highway: Any, lanes: Any) -> int:
-        """Estimate per-hour traffic volume for a candidate edge."""
+        """Estimate heuristic hourly traffic volume for a candidate edge.
+
+        Args:
+            highway: Raw OSM highway classification for the edge.
+            lanes: Raw OSM lane metadata for the edge.
+
+        Returns:
+            Estimated traffic volume in vehicles per hour.
+        """
         if isinstance(highway, list):
             highway = highway[0] if highway else "unclassified"
 
@@ -341,12 +371,16 @@ class SuperblockAnalyzer:
                 for segment in interior_segments
             )
             removed_vehicle_km += pair_removed_vehicle_km
-            diverted_volume += max(segment["estimated_volume"] for segment in interior_segments)
+            pair_diverted_volume = max(
+                (segment["estimated_volume"] for segment in interior_segments),
+                default=0.0,
+            )
+            diverted_volume += pair_diverted_volume
 
             try:
                 nx.shortest_path_length(modified_graph, origin, destination, weight="length")
             except (nx.NetworkXNoPath, nx.NodeNotFound):
-                diverted_volume -= max(segment["estimated_volume"] for segment in interior_segments)
+                diverted_volume -= pair_diverted_volume
 
         if affected_od_pairs == 0:
             return None

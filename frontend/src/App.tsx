@@ -20,7 +20,9 @@ import './App.css';
 
 type AnalysisMode = 'candidates' | 'partition';
 
+// Approximate passenger-car emission factor in kg CO₂ per vehicle-km.
 const KG_CO2_PER_VEHICLE_KM = 0.192;
+// Typical curb-to-curb lane widths in meters used to estimate recoverable street area.
 const ROAD_WIDTH_BY_TYPE: Record<string, number> = {
   motorway: 3.75,
   motorway_link: 3.5,
@@ -39,7 +41,7 @@ const ROAD_WIDTH_BY_TYPE: Record<string, number> = {
   pedestrian: 5,
 };
 
-function normalizeOsmIds(osmid: number | number[]): number[] {
+function toOsmIdArray(osmid: number | number[]): number[] {
   return Array.isArray(osmid) ? osmid : [osmid];
 }
 
@@ -121,7 +123,7 @@ function App() {
 
     const roadSegmentsByOsmId = new Map<number, RoadProperties[]>();
     streetNetwork?.features.forEach((feature) => {
-      normalizeOsmIds(feature.properties.osmid).forEach((osmid) => {
+      toOsmIdArray(feature.properties.osmid).forEach((osmid) => {
         const segments = roadSegmentsByOsmId.get(osmid) ?? [];
         segments.push(feature.properties);
         roadSegmentsByOsmId.set(osmid, segments);
