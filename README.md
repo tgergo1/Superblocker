@@ -26,15 +26,25 @@ Run the analysis to automatically detect superblock candidates using centrality-
 
 ![Superblock Analysis Results](docs/screenshots/superblock-analysis-results.png)
 
+### 🔄 Candidate Intervention Preview
+Select a superblock candidate and switch to Changes mode to inspect pedestrianized streets, one-way conversions, and modal filters before moving to a full city-wide partition.
+
+![Changes Mode](docs/screenshots/changes-mode.png)
+
 ### ⚙️ Configurable Analysis
-Fine-tune detection parameters such as minimum and maximum superblock area (Barcelona-style defaults: 4–25 ha). Toggle between Road Type, Traffic, and Changes color modes to explore different perspectives.
+Fine-tune detection parameters such as minimum and maximum superblock area (Barcelona-style defaults: 4–25 ha). Toggle between Road Type, Traffic, and Changes color modes to compare the network, traffic intensity, and proposed interventions.
 
 ![Analysis Settings](docs/screenshots/analysis-settings.png)
 
 ### 📐 Full City Partitioning
-Go beyond individual candidates with the Full Partition mode. Configure target superblock size, angular sectors, and enter-exit constraints to generate a complete city-wide partitioning plan with modal filters, street cuts, and one-way street conversions.
+Go beyond individual candidates with the Full Partition mode. Generate a city-wide partitioning plan, inspect individual superblock details, and review entry points, modal filters, street cuts, one-way conversions, and accessibility warnings.
 
 ![Full Partition Mode](docs/screenshots/full-partition-mode.png)
+
+### 🚗 Route Validation
+Validate routes against the generated partition using either address search or manual coordinates. Compare paths while respecting superblock constraints and review distance, travel time, arterial share, and traversed superblocks.
+
+![Route Validator](docs/screenshots/route-validator.png)
 
 ### Coming Soon
 
@@ -115,7 +125,9 @@ This will start both backend and frontend services.
 2. **Select from results**: Click on a search result to zoom to that location
 3. **Load street network**: Click "Load Street Network" to fetch road data from OpenStreetMap
 4. **Explore the map**: Hover over roads to see details (name, type, capacity, traffic estimates)
-5. **Toggle color mode**: Switch between "Road Type" and "Traffic" coloring
+5. **Analyze candidates**: Run the candidate workflow and review impact metrics plus proposed street changes
+6. **Partition the city**: Generate a full partition with modal filters, street cuts, and entry points
+7. **Validate routes**: Test origin-destination trips against the generated superblock plan
 
 ## API Endpoints
 
