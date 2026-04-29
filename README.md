@@ -22,7 +22,7 @@ Switch to Traffic mode to see estimated traffic intensity across the network. A 
 ![Traffic Intensity Mode](docs/screenshots/traffic-intensity-mode.png)
 
 ### 🏙️ Superblock Detection & Impact Metrics
-Run the analysis to automatically detect superblock candidates using centrality-based algorithms. View estimated impact metrics including through-traffic reduction, CO₂ savings, and pedestrian area gains.
+Run the analysis to automatically detect superblock candidates using centrality-based algorithms. View heuristic impact metrics including through-traffic reduction, avoided interior vehicle-kilometers / CO₂, and recoverable pedestrian street area.
 
 ![Superblock Analysis Results](docs/screenshots/superblock-analysis-results.png)
 
@@ -39,7 +39,7 @@ Go beyond individual candidates with the Full Partition mode. Configure target s
 ### Coming Soon
 
 - Export to PDF/GeoJSON
-- Real traffic data import
+- Real traffic count import for calibration
 
 ## Tech Stack
 

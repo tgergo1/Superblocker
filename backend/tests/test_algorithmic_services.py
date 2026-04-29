@@ -10,6 +10,7 @@ from app.models.schemas import (
 )
 from app.services.constraint.accessibility_validator import AccessibilityValidator
 from app.services.constraint.constraint_enforcer import ConstraintEnforcer
+from app.services.detection.superblock_analyzer import SuperblockAnalyzer
 from app.services.sizing.size_optimizer import SizeOptimizer
 from app.services.traffic import apply_real_traffic_data, estimate_traffic
 
@@ -194,3 +195,28 @@ def test_size_optimizer_estimates_block_size_from_polygonized_blocks():
     analysis = optimizer._analyze_grid()
 
     assert 90 <= analysis.average_block_size_m <= 130
+
+
+def test_superblock_analyzer_estimates_graph_based_traffic_impact():
+    graph = nx.MultiDiGraph()
+    graph.add_edge(1, 2, key=0, length=100.0)
+    graph.add_edge(2, 3, key=0, length=100.0)
+    graph.add_edge(1, 4, key=0, length=250.0)
+    graph.add_edge(4, 3, key=0, length=250.0)
+
+    analyzer = SuperblockAnalyzer()
+    impact = analyzer._estimate_traffic_impact(
+        G=graph,
+        interior_edges=[
+            {"u": 1, "v": 2, "key": 0, "length_m": 100.0, "estimated_volume": 100},
+            {"u": 2, "v": 3, "key": 0, "length_m": 100.0, "estimated_volume": 100},
+        ],
+        boundary_capacity=1000,
+        access_nodes={1, 3},
+    )
+
+    assert impact is not None
+    assert impact.removed_through_traffic_pct == 100.0
+    assert impact.boundary_load_increase_pct == 10.0
+    assert impact.estimated_vmt_reduction == 20.0
+    assert impact.affected_od_pairs == 1

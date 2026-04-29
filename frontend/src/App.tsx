@@ -8,10 +8,49 @@ import { useSearch } from './hooks/useSearch';
 import { useStreetNetwork } from './hooks/useStreetNetwork';
 import { useSuperblocks } from './hooks/useSuperblocks';
 import { usePartition } from './hooks/usePartition';
-import type { BoundingBox, ViewState, EnforcedSuperblock, RouteResult, SearchResult } from './types';
+import type {
+  BoundingBox,
+  ViewState,
+  EnforcedSuperblock,
+  RouteResult,
+  SearchResult,
+  RoadProperties,
+} from './types';
 import './App.css';
 
 type AnalysisMode = 'candidates' | 'partition';
+
+// Approximate passenger-car emission factor in kg CO₂ per vehicle-km.
+const KG_CO2_PER_VEHICLE_KM = 0.192;
+// Typical curb-to-curb lane widths in meters used to estimate recoverable street area.
+const ROAD_WIDTH_BY_TYPE: Record<string, number> = {
+  motorway: 3.75,
+  motorway_link: 3.5,
+  trunk: 3.5,
+  trunk_link: 3.25,
+  primary: 3.25,
+  primary_link: 3.25,
+  secondary: 3.1,
+  secondary_link: 3.0,
+  tertiary: 3.0,
+  tertiary_link: 2.9,
+  residential: 2.75,
+  living_street: 2.5,
+  unclassified: 2.75,
+  service: 2.5,
+  pedestrian: 5,
+};
+
+function toOsmIdArray(osmid: number | number[]): number[] {
+  return Array.isArray(osmid) ? osmid : [osmid];
+}
+
+function estimateStreetWidthMeters(properties: RoadProperties): number {
+  const baseWidth = ROAD_WIDTH_BY_TYPE[properties.highway] ?? 2.75;
+  const laneCount = Math.max(1, properties.lanes ?? 1);
+  const shoulderAllowance = properties.highway === 'pedestrian' ? 0 : 1;
+  return baseWidth * laneCount + shoulderAllowance;
+}
 
 function App() {
   const {
@@ -79,20 +118,47 @@ function App() {
     const candidates = superblockData.candidates;
     const totalArea = candidates.reduce((sum, c) => sum + c.area_hectares, 0);
     const avgTrafficReduction = candidates.reduce((sum, c) => {
-      const trafficImpact = c.traffic_impact?.removed_through_traffic_pct ?? (c.score * 0.6);
-      return sum + trafficImpact;
+      return sum + (c.traffic_impact?.removed_through_traffic_pct ?? 0);
     }, 0) / candidates.length;
-    const pollutionReduction = Math.round(avgTrafficReduction * 0.8);
-    const interiorRoadsCount = candidates.reduce((sum, c) => sum + (c.interior_roads?.length ?? 0), 0);
-    const pedestrianAreaGain = Math.round((interiorRoadsCount * 0.05) * 10) / 10;
+
+    const roadSegmentsByOsmId = new Map<number, RoadProperties[]>();
+    streetNetwork?.features.forEach((feature) => {
+      toOsmIdArray(feature.properties.osmid).forEach((osmid) => {
+        const segments = roadSegmentsByOsmId.get(osmid) ?? [];
+        segments.push(feature.properties);
+        roadSegmentsByOsmId.set(osmid, segments);
+      });
+    });
+
+    const uniqueInteriorRoadIds = new Set<number>();
+    candidates.forEach((candidate) => {
+      candidate.interior_roads?.forEach((osmId) => uniqueInteriorRoadIds.add(osmId));
+    });
+
+    const pedestrianAreaGain = Math.round(
+      Array.from(uniqueInteriorRoadIds).reduce((sum, osmId) => {
+        const segments = roadSegmentsByOsmId.get(osmId) ?? [];
+        return sum + segments.reduce(
+          (segmentSum, segment) => segmentSum + ((segment.length_m * estimateStreetWidthMeters(segment)) / 10000),
+          0,
+        );
+      }, 0) * 10,
+    ) / 10;
+
+    const co2ReductionKgPerHour = Math.round(
+      candidates.reduce(
+        (sum, candidate) => sum + ((candidate.traffic_impact?.estimated_vmt_reduction ?? 0) * KG_CO2_PER_VEHICLE_KM),
+        0,
+      ),
+    );
 
     return {
       trafficReduction: Math.round(avgTrafficReduction),
-      pollutionReduction,
+      co2ReductionKgPerHour,
       pedestrianArea: pedestrianAreaGain,
       totalArea: Math.round(totalArea * 10) / 10,
     };
-  }, [superblockData?.candidates]);
+  }, [streetNetwork, superblockData?.candidates]);
 
   const handleFetchNetwork = useCallback(() => {
     if (bbox) {

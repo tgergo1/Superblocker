@@ -30,6 +30,7 @@ import math
 from typing import Any, Optional
 from dataclasses import dataclass, field, asdict
 from enum import Enum
+from itertools import combinations
 
 from app.models.schemas import BoundingBox
 from app.services.cache_service import get_cache_service
@@ -203,6 +204,23 @@ class SuperblockAnalyzer:
         "service": 150,
     }
 
+    # Typical share of nominal capacity used by each road class in the absence
+    # of observed counts. These values convert edge capacity into a heuristic
+    # hourly traffic volume for candidate scoring and rerouting estimates.
+    LOAD_FACTOR_MAP = {
+        "motorway": 0.70,
+        "trunk": 0.65,
+        "primary": 0.60,
+        "secondary": 0.50,
+        "tertiary": 0.40,
+        "residential": 0.30,
+        "living_street": 0.20,
+        "unclassified": 0.35,
+        "service": 0.25,
+    }
+
+    MAX_TRAFFIC_IMPACT_ACCESS_POINTS = 12
+
     def __init__(
         self,
         min_area: float = 4.0,
@@ -216,6 +234,173 @@ class SuperblockAnalyzer:
         # Projection for accurate area calculations
         self.proj_wgs84 = pyproj.CRS("EPSG:4326")
         self.proj_mercator = pyproj.CRS("EPSG:3857")
+
+    @staticmethod
+    def _normalize_lanes(value: Any) -> int:
+        """Normalize OSM lane metadata to a bounded positive integer.
+
+        Args:
+            value: Raw OSM lane metadata, which may be missing, string encoded,
+                semicolon-separated, or list based.
+
+        Returns:
+            A lane count between 1 and 8 inclusive.
+
+        The upper bound avoids implausible OSM tag values from dominating
+        downstream capacity heuristics while still covering very wide arterials.
+        """
+        if isinstance(value, list):
+            value = value[0] if value else 1
+
+        if isinstance(value, str):
+            value = value.split(";")[0].strip()
+
+        try:
+            lanes = int(float(value))
+        except (TypeError, ValueError):
+            return 1
+
+        return max(1, min(8, lanes))
+
+    def _estimate_edge_capacity(self, highway: Any, lanes: Any) -> int:
+        """Estimate hourly vehicle capacity for a candidate edge.
+
+        Args:
+            highway: Raw OSM highway classification for the edge.
+            lanes: Raw OSM lane metadata for the edge.
+
+        Returns:
+            Estimated vehicle capacity in vehicles per hour.
+        """
+        if isinstance(highway, list):
+            highway = highway[0] if highway else "unclassified"
+
+        normalized_lanes = self._normalize_lanes(lanes)
+        return self.CAPACITY_MAP.get(highway, 200) * normalized_lanes
+
+    def _estimate_edge_volume(self, highway: Any, lanes: Any) -> int:
+        """Estimate heuristic hourly traffic volume for a candidate edge.
+
+        Args:
+            highway: Raw OSM highway classification for the edge.
+            lanes: Raw OSM lane metadata for the edge.
+
+        Returns:
+            Estimated traffic volume in vehicles per hour.
+        """
+        if isinstance(highway, list):
+            highway = highway[0] if highway else "unclassified"
+
+        capacity = self._estimate_edge_capacity(highway, lanes)
+        load_factor = self.LOAD_FACTOR_MAP.get(highway, 0.30)
+        return int(capacity * load_factor)
+
+    def _estimate_traffic_impact(
+        self,
+        G: nx.MultiDiGraph,
+        interior_edges: list[dict[str, Any]],
+        boundary_capacity: float,
+        access_nodes: set[int],
+    ) -> Optional[TrafficImpact]:
+        """
+        Estimate interior through-traffic removal using shortest-path rerouting.
+
+        The metric is still heuristic because no city-wide OD matrix is available,
+        but it is graph-based and uses actual interior edge lengths, capacities,
+        and entry-point connectivity instead of fixed multipliers.
+        """
+        if len(interior_edges) == 0 or len(access_nodes) < 2:
+            return None
+
+        modified_graph = G.copy()
+        interior_edge_lookup: dict[tuple[int, int], dict[str, float]] = {}
+        total_interior_vehicle_km = 0.0
+
+        for edge in interior_edges:
+            u = edge["u"]
+            v = edge["v"]
+            key = edge["key"]
+            length_m = float(edge["length_m"])
+            estimated_volume = float(edge["estimated_volume"])
+            pair = (u, v)
+
+            current = interior_edge_lookup.get(pair)
+            if current is None:
+                interior_edge_lookup[pair] = {
+                    "length_m": length_m,
+                    "estimated_volume": estimated_volume,
+                }
+            else:
+                current["length_m"] = max(current["length_m"], length_m)
+                current["estimated_volume"] = max(current["estimated_volume"], estimated_volume)
+
+            total_interior_vehicle_km += (length_m / 1000.0) * estimated_volume
+
+            if modified_graph.has_edge(u, v, key):
+                modified_graph.remove_edge(u, v, key)
+
+        if total_interior_vehicle_km <= 0:
+            return None
+
+        ranked_access_nodes = sorted(access_nodes, key=lambda node: (-G.degree(node), node))
+        sampled_access_nodes = ranked_access_nodes[: self.MAX_TRAFFIC_IMPACT_ACCESS_POINTS]
+
+        affected_od_pairs = 0
+        removed_vehicle_km = 0.0
+        diverted_volume = 0.0
+
+        for origin, destination in combinations(sampled_access_nodes, 2):
+            try:
+                baseline_path = nx.shortest_path(G, origin, destination, weight="length")
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                continue
+
+            baseline_pairs = list(zip(baseline_path, baseline_path[1:]))
+            interior_segments = [
+                interior_edge_lookup[pair]
+                for pair in baseline_pairs
+                if pair in interior_edge_lookup
+            ]
+
+            if not interior_segments:
+                continue
+
+            affected_od_pairs += 1
+            pair_removed_vehicle_km = sum(
+                (segment["length_m"] / 1000.0) * segment["estimated_volume"]
+                for segment in interior_segments
+            )
+            removed_vehicle_km += pair_removed_vehicle_km
+            pair_diverted_volume = max(
+                (segment["estimated_volume"] for segment in interior_segments),
+                default=0.0,
+            )
+            diverted_volume += pair_diverted_volume
+
+            try:
+                nx.shortest_path_length(modified_graph, origin, destination, weight="length")
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                diverted_volume -= pair_diverted_volume
+
+        if affected_od_pairs == 0:
+            return None
+
+        removed_through_traffic_pct = min(
+            100.0,
+            (removed_vehicle_km / total_interior_vehicle_km) * 100,
+        )
+        boundary_load_increase_pct = (
+            min(100.0, (diverted_volume / boundary_capacity) * 100)
+            if boundary_capacity > 0
+            else 0.0
+        )
+
+        return TrafficImpact(
+            removed_through_traffic_pct=round(removed_through_traffic_pct, 1),
+            boundary_load_increase_pct=round(boundary_load_increase_pct, 1),
+            estimated_vmt_reduction=round(removed_vehicle_km, 1),
+            affected_od_pairs=affected_od_pairs,
+        )
 
     async def analyze(
         self,
@@ -526,6 +711,7 @@ class SuperblockAnalyzer:
                 progress_callback("detection", percent, message)
 
         nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
+        edges = edges.reset_index()
 
         if edges.empty:
             return []
@@ -697,6 +883,10 @@ class SuperblockAnalyzer:
         boundary_centralities = []
         interior_centralities = []
         boundary_capacity = 0
+        boundary_nodes = set()
+        interior_nodes = set()
+        interior_edges = []
+        public_transport_affected = False
 
         # Single-pass iteration using itertuples for performance
         for row in edges.itertuples(index=False):
@@ -708,25 +898,39 @@ class SuperblockAnalyzer:
                 # Collect boundary data
                 centrality = getattr(row, "centrality", 0)
                 boundary_centralities.append(centrality)
-                
-                # Calculate capacity
-                highway = getattr(row, "highway", "unclassified")
-                if isinstance(highway, list):
-                    highway = highway[0]
-                lanes = getattr(row, "lanes", 1)
-                if isinstance(lanes, list):
-                    lanes = lanes[0]
-                try:
-                    lanes = int(lanes)
-                except (ValueError, TypeError):
-                    lanes = 1
-                capacity = self.CAPACITY_MAP.get(highway, 200) * lanes
-                boundary_capacity += capacity
+                boundary_capacity += self._estimate_edge_capacity(
+                    getattr(row, "highway", "unclassified"),
+                    getattr(row, "lanes", 1),
+                )
+                boundary_nodes.add(getattr(row, "u"))
+                boundary_nodes.add(getattr(row, "v"))
+                public_transport_affected = public_transport_affected or any(
+                    bool(getattr(row, attr, None))
+                    for attr in ("bus", "route", "psv", "public_transport")
+                )
                 
             elif osmid in interior_set:
                 # Collect interior data
                 centrality = getattr(row, "centrality", 0)
                 interior_centralities.append(centrality)
+                interior_nodes.add(getattr(row, "u"))
+                interior_nodes.add(getattr(row, "v"))
+                interior_edges.append(
+                    {
+                        "u": getattr(row, "u"),
+                        "v": getattr(row, "v"),
+                        "key": getattr(row, "key", 0),
+                        "length_m": getattr(row, "length", 0) or 0,
+                        "estimated_volume": self._estimate_edge_volume(
+                            getattr(row, "highway", "unclassified"),
+                            getattr(row, "lanes", 1),
+                        ),
+                    }
+                )
+                public_transport_affected = public_transport_affected or any(
+                    bool(getattr(row, attr, None))
+                    for attr in ("bus", "route", "psv", "public_transport")
+                )
 
         # Calculate traffic score from collected data
         boundary_mean = sum(boundary_centralities) / len(boundary_centralities) if boundary_centralities else 0
@@ -757,9 +961,14 @@ class SuperblockAnalyzer:
             accessibility_score = max(0, 100 - (boundary_distance_m - 200) * 0.2)
 
         # Count access points (boundary road intersections)
-        candidate.num_access_points = min(len(candidate.perimeter_roads), 20)
+        access_nodes = boundary_nodes & interior_nodes
+        candidate.num_access_points = min(len(access_nodes), 20)
         if candidate.num_access_points >= 8:
             accessibility_score = min(100, accessibility_score + 10)
+        elif candidate.num_access_points == 0 and len(candidate.interior_roads) > 0:
+            accessibility_score = min(accessibility_score, 40)
+        elif candidate.num_access_points <= 2 and len(candidate.interior_roads) > 0:
+            accessibility_score = min(accessibility_score, 70)
 
         # 5. Connectivity score (internal network density)
         if len(candidate.interior_roads) > 0:
@@ -821,21 +1030,19 @@ class SuperblockAnalyzer:
         # Accessibility metrics
         candidate.accessibility = AccessibilityMetrics(
             max_walking_distance_to_boundary=round(boundary_distance_m, 0),
-            emergency_access_maintained=True,  # Assumed with modal filters
-            delivery_access_points=max(4, candidate.num_access_points // 2),
-            residential_access_maintained=True,
-            public_transport_affected=False,  # Would need transit data
+            emergency_access_maintained=bool(access_nodes) or len(candidate.interior_roads) == 0,
+            delivery_access_points=candidate.num_access_points,
+            residential_access_maintained=bool(access_nodes) or len(candidate.interior_roads) == 0,
+            public_transport_affected=public_transport_affected,
         )
 
         # Traffic impact estimate
-        if len(candidate.interior_roads) > 0:
-            through_traffic_reduction = min(80, traffic_score * 0.8)
-            candidate.traffic_impact = TrafficImpact(
-                removed_through_traffic_pct=round(through_traffic_reduction, 1),
-                boundary_load_increase_pct=round(through_traffic_reduction * 0.3, 1),
-                estimated_vmt_reduction=round(area * through_traffic_reduction * 0.5, 0),
-                affected_od_pairs=len(candidate.interior_roads) * 2,
-            )
+        candidate.traffic_impact = self._estimate_traffic_impact(
+            G,
+            interior_edges,
+            boundary_capacity,
+            access_nodes,
+        )
 
         return candidate
 
