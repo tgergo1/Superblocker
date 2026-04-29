@@ -35,7 +35,7 @@ interface LayerControlsProps {
   // Impact metrics
   impactMetrics?: {
     trafficReduction: number;
-    pollutionReduction: number;
+    co2ReductionKgPerHour: number;
     pedestrianArea: number;
     totalArea: number;
   };
@@ -272,15 +272,15 @@ export function LayerControls({
               <div className="impact-metric">
                 <span className="impact-icon">🌿</span>
                 <div className="impact-data">
-                  <span className="impact-value">-{impactMetrics.pollutionReduction}%</span>
-                  <span className="impact-label">CO₂ Emissions</span>
+                  <span className="impact-value">~{impactMetrics.co2ReductionKgPerHour} kg/h</span>
+                  <span className="impact-label">CO₂ Avoided</span>
                 </div>
               </div>
               <div className="impact-metric">
                 <span className="impact-icon">🚶</span>
                 <div className="impact-data">
                   <span className="impact-value">+{impactMetrics.pedestrianArea} ha</span>
-                  <span className="impact-label">Pedestrian Area</span>
+                  <span className="impact-label">Recoverable Street Space</span>
                 </div>
               </div>
               <div className="impact-metric">
@@ -291,6 +291,7 @@ export function LayerControls({
                 </div>
               </div>
             </div>
+            <small>Approximate values based on rerouted interior traffic and mapped street geometry.</small>
           </div>
         </div>
       )}
