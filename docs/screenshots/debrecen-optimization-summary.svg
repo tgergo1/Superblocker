@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title2 desc2">
+<title id="title2">Debrecen optimization summary diagram</title>
+<desc id="desc2">An infographic summarizing what changed after the Debrecen full-city superblock partition and the measured outcomes.</desc>
+<defs>
+  <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#fcfdff"/>
+    <stop offset="100%" stop-color="#eef5fb"/>
+  </linearGradient>
+  <linearGradient id="flow" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0%" stop-color="#7c83fd"/>
+    <stop offset="50%" stop-color="#38bdf8"/>
+    <stop offset="100%" stop-color="#2dd4bf"/>
+  </linearGradient>
+  <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+    <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#7b93ad" flood-opacity="0.16"/>
+  </filter>
+</defs>
+<rect width="1600" height="900" fill="url(#bg2)"/>
+<text x="70" y="86" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="38" font-weight="800" fill="#0f2944" text-anchor="start" >What changed in Debrecen?</text>
+<text x="70" y="118" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="400" fill="#496683" text-anchor="start" >Full-city superblock partition results generated from the streaming optimizer and distilled into outcome metrics.</text>
+
+<g filter="url(#softShadow)">
+  <rect x="70" y="170" width="390" height="260" rx="30" fill="#ffffff"/>
+  <text x="102" y="214" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="26" font-weight="800" fill="#0f2944" text-anchor="start" >Before optimization</text>
+  <text x="102" y="252" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="16" font-weight="400" fill="#5d7893" text-anchor="start" >The baseline network lets local streets act as through-routes across the city.</text>
+  <text x="102" y="306" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="54" font-weight="800" fill="#0f2944" text-anchor="start" >13,693</text>
+  <text x="102" y="336" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="16" font-weight="400" fill="#5d7893" text-anchor="start" >drivable street segments in the baseline graph</text>
+  <text x="102" y="382" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="700" fill="#1d4f7a" text-anchor="start" >2,451.4 km of roads feed a citywide movement web</text>
+  <rect x="102" y="396" width="300" height="10" rx="5" fill="#dfe9f3"/>
+  <rect x="102" y="396" width="300" height="10" rx="5" fill="#94a9bf"/>
+</g>
+
+<g>
+  <path d="M 505 296 C 620 296, 680 296, 790 296" fill="none" stroke="url(#flow)" stroke-width="22" stroke-linecap="round"/>
+  <polygon points="790,296 742,268 742,324" fill="#2dd4bf"/>
+  <text x="572" y="266" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="700" fill="#365b7d" text-anchor="start" >full-city partition</text>
+  <text x="560" y="338" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="16" font-weight="500" fill="#5d7893" text-anchor="start" >45.3 s runtime</text>
+</g>
+
+<g filter="url(#softShadow)">
+  <rect x="860" y="170" width="670" height="260" rx="30" fill="#0f2944"/>
+  <text x="894" y="214" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="26" font-weight="800" fill="#f8fbff" text-anchor="start" >After optimization</text>
+  <text x="894" y="250" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="16" font-weight="400" fill="#bfd7ea" text-anchor="start" >Through-traffic is redirected to the arterial spine while interior streets become calmer local-access cells.</text>
+  <text x="894" y="312" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="58" font-weight="800" fill="#ffffff" text-anchor="start" >107</text>
+  <text x="1008" y="312" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="20" font-weight="500" fill="#c6dbef" text-anchor="start" >superblocks stitched into the urban fabric</text>
+  <text x="894" y="358" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="700" fill="#72e3d2" text-anchor="start" >2,978 ha restructured · 127.3 km calmed · 715 managed entries</text>
+</g>
+
+<g filter="url(#softShadow)">
+  <rect x="70" y="480" width="460" height="300" rx="30" fill="#ffffff"/>
+  <text x="104" y="524" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="24" font-weight="800" fill="#0f2944" text-anchor="start" >How the network improved</text>
+  <rect x="104" y="566" width="350" height="18" rx="9" fill="#e8eef5"/>
+  <rect x="104" y="566" width="312" height="18" rx="9" fill="#7c83fd"/>
+  <text x="104" y="556" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="700" fill="#496683" text-anchor="start" >validated superblocks</text>
+  <text x="470" y="580" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="700" fill="#233f5a" text-anchor="end" >107/107</text>
+
+  <rect x="104" y="624" width="350" height="18" rx="9" fill="#e8eef5"/>
+  <rect x="104" y="624" width="294.4" height="18" rx="9" fill="#2dd4bf"/>
+  <text x="104" y="614" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="700" fill="#496683" text-anchor="start" >fully reachable superblocks</text>
+  <text x="470" y="638" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="700" fill="#233f5a" text-anchor="end" >90/107</text>
+
+  <rect x="104" y="682" width="350" height="18" rx="9" fill="#e8eef5"/>
+  <rect x="104" y="682" width="18.2" height="18" rx="9" fill="#ff9f43"/>
+  <text x="104" y="672" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="700" fill="#496683" text-anchor="start" >baseline road length directly calmed</text>
+  <text x="470" y="696" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="700" fill="#233f5a" text-anchor="end" >127.3 km</text>
+
+  <text x="104" y="742" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="16" font-weight="400" fill="#5d7893" text-anchor="start" >The strongest signal is structural: more than a hundred low-traffic cells now sit on top of an arterial movement skeleton.</text>
+</g>
+
+<g filter="url(#softShadow)">
+  <rect x="570" y="480" width="430" height="300" rx="30" fill="#ffffff"/>
+  <text x="604" y="524" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="24" font-weight="800" fill="#0f2944" text-anchor="start" >Intervention mix</text>
+  <rect x="604" y="556" width="170" height="96" rx="22" fill="#10263f" fill-opacity="0.92" stroke="#ff9f43" stroke-opacity="0.35"/>
+<text x="628" y="590" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" font-weight="700" fill="#93b8dd" text-anchor="start" >MODAL FILTERS</text>
+<text x="628" y="634" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="34" font-weight="800" fill="#f8fbff" text-anchor="start" >433</text>
+<text x="628" y="660" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="400" fill="#bfd7ea" text-anchor="start" >primary traffic calming tool</text>
+<rect x="756" y="572" width="6" height="64" rx="3" fill="#ff9f43"/>
+  <rect x="796" y="556" width="170" height="96" rx="22" fill="#10263f" fill-opacity="0.92" stroke="#fb7185" stroke-opacity="0.35"/>
+<text x="820" y="590" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" font-weight="700" fill="#93b8dd" text-anchor="start" >STREET CUTS</text>
+<text x="820" y="634" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="34" font-weight="800" fill="#f8fbff" text-anchor="start" >9</text>
+<text x="820" y="660" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="400" fill="#bfd7ea" text-anchor="start" >hard barriers where needed</text>
+<rect x="948" y="572" width="6" height="64" rx="3" fill="#fb7185"/>
+  <rect x="604" y="668" width="170" height="96" rx="22" fill="#10263f" fill-opacity="0.92" stroke="#38bdf8" stroke-opacity="0.35"/>
+<text x="628" y="702" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" font-weight="700" fill="#93b8dd" text-anchor="start" >ARTERIAL SPINE</text>
+<text x="628" y="746" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="34" font-weight="800" fill="#f8fbff" text-anchor="start" >952.9 km</text>
+<text x="628" y="772" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="400" fill="#bfd7ea" text-anchor="start" >kept available for movement</text>
+<rect x="756" y="684" width="6" height="64" rx="3" fill="#38bdf8"/>
+  <rect x="796" y="668" width="170" height="96" rx="22" fill="#10263f" fill-opacity="0.92" stroke="#7c83fd" stroke-opacity="0.35"/>
+<text x="820" y="702" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" font-weight="700" fill="#93b8dd" text-anchor="start" >CORE BLOCK</text>
+<text x="820" y="746" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="34" font-weight="800" fill="#f8fbff" text-anchor="start" >43.0 ha</text>
+<text x="820" y="772" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="400" fill="#bfd7ea" text-anchor="start" >downtown example superblock</text>
+<rect x="948" y="684" width="6" height="64" rx="3" fill="#7c83fd"/>
+</g>
+
+<g filter="url(#softShadow)">
+  <rect x="1040" y="480" width="490" height="300" rx="30" fill="#0f2944"/>
+  <text x="1076" y="524" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="24" font-weight="800" fill="#f8fbff" text-anchor="start" >Important caveat</text>
+  <text x="1076" y="564" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="700" fill="#ffd08a" text-anchor="start" >54 addresses were flagged for manual review after automated enforcement.</text>
+  <text x="1076" y="604" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="16" font-weight="400" fill="#bfd7ea" text-anchor="start" >That means the optimization is already useful as a strategic plan, but still needs street-level refinement before implementation.</text>
+  <rect x="1076" y="640" width="418" height="88" rx="20" fill="#17385c"/>
+  <text x="1100" y="680" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="16" font-weight="800" fill="#ffffff" text-anchor="start" >Big picture</text>
+  <text x="1100" y="710" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="16" font-weight="400" fill="#d6e6f5" text-anchor="start" >Debrecen shifts from a fully permeable driving mesh to a managed street hierarchy with calmer local cells and clearer access rules.</text>
+</g>
+
+<text x="70" y="846" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="500" fill="#647d95" text-anchor="start" >Metric basis: /api/v1/network + /api/v1/partition/stream for Debrecen administrative bounds with default full-partition settings.</text>
+</svg>
