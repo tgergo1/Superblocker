@@ -50,7 +50,7 @@ Validate routes against the generated partition using either address search or m
 
 Using the default **Full Partition** settings on Debrecen's administrative bounds, Superblocker generated a city-wide superblock plan that redirects through-traffic to the arterial backbone while calming local street cells.
 
-![Debrecen Full-City Optimization](docs/screenshots/debrecen-full-city-optimization.svg)
+![Debrecen Full-City Optimization](docs/screenshots/debrecen-full-city-optimization.png)
 
 ### Debrecen outcome snapshot
 
@@ -59,8 +59,6 @@ Using the default **Full Partition** settings on Debrecen's administrative bound
 - **127.3 km** of street length directly calmed through **433 modal filters** and **9 street cuts**
 - **715 managed entry points** preserved access to the new cells
 - **90 / 107** superblocks kept all addresses reachable automatically; **54 addresses** were flagged for manual follow-up
-
-![Debrecen Optimization Summary](docs/screenshots/debrecen-optimization-summary.svg)
 
 ### Coming Soon
 
