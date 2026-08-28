@@ -12,29 +12,27 @@ The algorithm:
 5. Validate coverage and accessibility
 """
 
+import logging
+import math
+import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
+
 import networkx as nx
 import osmnx as ox
-import logging
-import uuid
-import math
-from typing import Optional, Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
-from shapely.geometry import Polygon, Point, MultiPolygon, LineString, box
-from shapely.ops import polygonize, unary_union
-from shapely.strtree import STRtree
 import pyproj
-from shapely.ops import transform
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
+from shapely.ops import polygonize, transform, unary_union
 
 from app.models.schemas import (
     BoundingBox,
-    Coordinates,
-    EntryPoint,
-    EnforcedSuperblock,
     CityPartition,
+    Coordinates,
+    EnforcedSuperblock,
+    EntryPoint,
+    PartitionProgress,
     StreetModification,
     UnreachableAddress,
-    PartitionProgress,
 )
 from app.services.constraint.constraint_enforcer import ConstraintEnforcer
 
@@ -42,15 +40,27 @@ logger = logging.getLogger(__name__)
 
 
 # Road types considered as arterials (boundaries)
-ARTERIAL_TYPES = {"primary", "secondary", "tertiary", "primary_link", "secondary_link", "tertiary_link"}
+ARTERIAL_TYPES = {
+    "primary",
+    "secondary",
+    "tertiary",
+    "primary_link",
+    "secondary_link",
+    "tertiary_link",
+}
 
 # Road hierarchy for boundary suitability
 HIERARCHY_MAP = {
-    "motorway": 1, "motorway_link": 1,
-    "trunk": 2, "trunk_link": 2,
-    "primary": 3, "primary_link": 3,
-    "secondary": 4, "secondary_link": 4,
-    "tertiary": 5, "tertiary_link": 5,
+    "motorway": 1,
+    "motorway_link": 1,
+    "trunk": 2,
+    "trunk_link": 2,
+    "primary": 3,
+    "primary_link": 3,
+    "secondary": 4,
+    "secondary_link": 4,
+    "tertiary": 5,
+    "tertiary_link": 5,
     "residential": 6,
     "living_street": 7,
     "unclassified": 8,
@@ -61,6 +71,7 @@ HIERARCHY_MAP = {
 @dataclass
 class SuperblockCell:
     """Intermediate representation of a potential superblock."""
+
     polygon: Polygon
     area_hectares: float
     boundary_edges: list[tuple[int, int, int]]  # (u, v, key)
@@ -93,7 +104,9 @@ class CityPartitioner:
         min_area_ha: float = DEFAULT_MIN_HA,
         max_area_ha: float = DEFAULT_MAX_HA,
         num_sectors: int = 4,
-        progress_callback: Optional[Callable[[PartitionProgress], None]] = None,
+        arterial_road_types: set[str] | None = None,
+        enforce_constraints: bool = True,
+        progress_callback: Callable[[PartitionProgress], None] | None = None,
     ):
         """
         Initialize the city partitioner.
@@ -113,6 +126,11 @@ class CityPartitioner:
         self.min_area_ha = min_area_ha
         self.max_area_ha = max_area_ha
         self.num_sectors = num_sectors
+        configured_types = arterial_road_types or {"primary", "secondary", "tertiary"}
+        self.arterial_types = configured_types | {
+            f"{road_type}_link" for road_type in configured_types
+        }
+        self.enforce_constraints = enforce_constraints
         self.progress_callback = progress_callback
 
         # Convert graph to GeoDataFrames for spatial operations
@@ -197,7 +215,7 @@ class CityPartitioner:
             highway = data.get("highway", "")
             if isinstance(highway, list):
                 highway = highway[0]
-            if highway in ARTERIAL_TYPES:
+            if highway in self.arterial_types:
                 type_arterials.add((u, v, key))
 
         # Criterion 2: Betweenness centrality (for larger networks)
@@ -221,9 +239,7 @@ class CityPartitioner:
 
                 # Compute centrality (approximate for large networks)
                 k = min(500, num_nodes) if num_nodes > 1000 else None
-                centrality = nx.edge_betweenness_centrality(
-                    G_simple, k=k, weight="weight", seed=42
-                )
+                centrality = nx.edge_betweenness_centrality(G_simple, k=k, weight="weight", seed=42)
 
                 # Find threshold
                 values = list(centrality.values())
@@ -265,10 +281,12 @@ class CityPartitioner:
                     # Create line from node coordinates
                     u_data = self.graph.nodes[u]
                     v_data = self.graph.nodes[v]
-                    line = LineString([
-                        (u_data["x"], u_data["y"]),
-                        (v_data["x"], v_data["y"]),
-                    ])
+                    line = LineString(
+                        [
+                            (u_data["x"], u_data["y"]),
+                            (v_data["x"], v_data["y"]),
+                        ]
+                    )
                     arterial_lines.append(line)
 
         if not arterial_lines:
@@ -276,10 +294,7 @@ class CityPartitioner:
             return
 
         # Add bbox boundary to ensure edge cells are created
-        bbox_polygon = box(
-            self.bbox.west, self.bbox.south,
-            self.bbox.east, self.bbox.north
-        )
+        bbox_polygon = box(self.bbox.west, self.bbox.south, self.bbox.east, self.bbox.north)
         arterial_lines.append(bbox_polygon.exterior)
 
         # Union and polygonize
@@ -292,8 +307,20 @@ class CityPartitioner:
 
         logger.info(f"Polygonized {len(arterial_lines)} lines into {len(polygons)} polygons")
 
-        # Filter and create cells
+        # Filter and create cells. OSMnx retains boundary-crossing edges, so
+        # polygonization can also produce small polygons just outside the
+        # requested area. Clip every candidate before accepting it.
+        clipped_polygons: list[Polygon] = []
         for polygon in polygons:
+            clipped = polygon.intersection(bbox_polygon)
+            if isinstance(clipped, Polygon):
+                clipped_polygons.append(clipped)
+            elif isinstance(clipped, MultiPolygon):
+                clipped_polygons.extend(clipped.geoms)
+
+        for polygon in clipped_polygons:
+            if polygon.is_empty:
+                continue
             if not polygon.is_valid:
                 polygon = polygon.buffer(0)
 
@@ -311,16 +338,20 @@ class CityPartitioner:
             # Find entry nodes (nodes on boundary that connect to interior)
             entry_nodes = self._find_entry_nodes(polygon, boundary_edges, interior_edges)
 
-            self.cells.append(SuperblockCell(
-                polygon=polygon,
-                area_hectares=area_ha,
-                boundary_edges=boundary_edges,
-                interior_edges=interior_edges,
-                entry_nodes=entry_nodes,
-            ))
+            self.cells.append(
+                SuperblockCell(
+                    polygon=polygon,
+                    area_hectares=area_ha,
+                    boundary_edges=boundary_edges,
+                    interior_edges=interior_edges,
+                    entry_nodes=entry_nodes,
+                )
+            )
 
     def _calculate_area_hectares(self, polygon: Polygon) -> float:
         """Calculate polygon area in hectares using appropriate projection."""
+        if polygon.is_empty:
+            return 0.0
         try:
             # Use UTM projection for accurate area calculation
             centroid = polygon.centroid
@@ -363,10 +394,12 @@ class CityPartitioner:
                 v_data = self.graph.nodes.get(v, {})
                 if "x" not in u_data or "x" not in v_data:
                     continue
-                geom = LineString([
-                    (u_data["x"], u_data["y"]),
-                    (v_data["x"], v_data["y"]),
-                ])
+                geom = LineString(
+                    [
+                        (u_data["x"], u_data["y"]),
+                        (v_data["x"], v_data["y"]),
+                    ]
+                )
 
             # Check if edge is inside or on boundary of polygon
             if polygon.contains(geom) or polygon.boundary.intersects(geom):
@@ -402,6 +435,16 @@ class CityPartitioner:
 
         # Entry nodes are the intersection
         entry_nodes = boundary_nodes.intersection(interior_nodes)
+
+        # Floating-point polygon boundaries can miss a topologically valid
+        # junction. Any interior node attached to the global arterial network is
+        # also a genuine entry, even if that arterial edge was classified just
+        # outside this cell's geometry.
+        arterial_nodes: set[int] = set()
+        for u, v, _key in self.arterial_edges:
+            arterial_nodes.add(u)
+            arterial_nodes.add(v)
+        entry_nodes.update(interior_nodes.intersection(arterial_nodes))
 
         # Also include nodes that are on the polygon boundary
         boundary_buffer = polygon.boundary.buffer(0.0001)  # Small buffer for tolerance
@@ -444,47 +487,41 @@ class CityPartitioner:
     def _merge_small_cells(self) -> bool:
         """Merge cells smaller than min_area_ha with neighbors."""
         merged = False
-        new_cells = []
-        skip_indices = set()
+        new_cells: list[SuperblockCell] = []
+        remaining_indices = set(range(len(self.cells)))
 
         # Build adjacency
         cell_adjacency = self._build_cell_adjacency()
 
         for i, cell in enumerate(self.cells):
-            if i in skip_indices:
+            if i not in remaining_indices or cell.area_hectares >= self.min_area_ha:
                 continue
 
-            if cell.area_hectares < self.min_area_ha:
-                # Find best neighbor to merge with
-                best_neighbor = None
-                best_score = float("inf")
+            # Find the best neighbor among cells that have not already been
+            # consumed. Delaying unmerged cells until the end prevents an
+            # earlier large neighbor from being emitted and then emitted again
+            # as part of a later merge.
+            best_neighbor = None
+            best_score = float("inf")
+            for j in cell_adjacency.get(i, []):
+                if j == i or j not in remaining_indices:
+                    continue
 
-                for j in cell_adjacency.get(i, []):
-                    if j in skip_indices:
-                        continue
+                neighbor = self.cells[j]
+                combined_area = cell.area_hectares + neighbor.area_hectares
+                if combined_area <= self.max_area_ha:
+                    size_diff = abs(combined_area - self.target_size_ha)
+                    if size_diff < best_score:
+                        best_score = size_diff
+                        best_neighbor = j
 
-                    neighbor = self.cells[j]
-                    combined_area = cell.area_hectares + neighbor.area_hectares
+            if best_neighbor is not None:
+                new_cells.append(self._merge_cells(cell, self.cells[best_neighbor]))
+                remaining_indices.remove(i)
+                remaining_indices.remove(best_neighbor)
+                merged = True
 
-                    # Prefer merging with similar-sized neighbors
-                    # that don't exceed max size
-                    if combined_area <= self.max_area_ha:
-                        size_diff = abs(combined_area - self.target_size_ha)
-                        if size_diff < best_score:
-                            best_score = size_diff
-                            best_neighbor = j
-
-                if best_neighbor is not None:
-                    # Merge cells
-                    merged_cell = self._merge_cells(cell, self.cells[best_neighbor])
-                    new_cells.append(merged_cell)
-                    skip_indices.add(i)
-                    skip_indices.add(best_neighbor)
-                    merged = True
-                else:
-                    new_cells.append(cell)
-            else:
-                new_cells.append(cell)
+        new_cells.extend(self.cells[index] for index in sorted(remaining_indices))
 
         self.cells = new_cells
         return merged
@@ -519,8 +556,9 @@ class CityPartitioner:
                     continue
 
                 # Check if cells share a boundary
-                if cell_i.polygon.touches(cell_j.polygon) or \
-                   cell_i.polygon.boundary.intersects(cell_j.polygon.boundary):
+                if cell_i.polygon.touches(cell_j.polygon) or cell_i.polygon.boundary.intersects(
+                    cell_j.polygon.boundary
+                ):
                     adjacency[i].append(j)
                     adjacency[j].append(i)
 
@@ -576,10 +614,12 @@ class CityPartitioner:
                 v_data = self.graph.nodes.get(v, {})
                 if "x" not in u_data or "x" not in v_data:
                     continue
-                geom = LineString([
-                    (u_data["x"], u_data["y"]),
-                    (v_data["x"], v_data["y"]),
-                ])
+                geom = LineString(
+                    [
+                        (u_data["x"], u_data["y"]),
+                        (v_data["x"], v_data["y"]),
+                    ]
+                )
 
             # Try to split polygon with this line
             try:
@@ -617,32 +657,32 @@ class CityPartitioner:
             boundary_edges, interior_edges = self._classify_edges(polygon)
             entry_nodes = self._find_entry_nodes(polygon, boundary_edges, interior_edges)
 
-            new_cells.append(SuperblockCell(
-                polygon=polygon,
-                area_hectares=self._calculate_area_hectares(polygon),
-                boundary_edges=boundary_edges,
-                interior_edges=interior_edges,
-                entry_nodes=entry_nodes,
-            ))
+            new_cells.append(
+                SuperblockCell(
+                    polygon=polygon,
+                    area_hectares=self._calculate_area_hectares(polygon),
+                    boundary_edges=boundary_edges,
+                    interior_edges=interior_edges,
+                    entry_nodes=entry_nodes,
+                )
+            )
 
         return new_cells
 
-    def _extend_line_to_boundary(
-        self, line: LineString, polygon: Polygon
-    ) -> Optional[LineString]:
+    def _extend_line_to_boundary(self, line: LineString, polygon: Polygon) -> LineString | None:
         """Extend a line to intersect the polygon boundary on both ends."""
         try:
             coords = list(line.coords)
             if len(coords) < 2:
                 return None
 
-            start = Point(coords[0])
-            end = Point(coords[-1])
+            Point(coords[0])
+            Point(coords[-1])
 
             # Direction vectors
             dx = coords[-1][0] - coords[0][0]
             dy = coords[-1][1] - coords[0][1]
-            length = math.sqrt(dx*dx + dy*dy)
+            length = math.sqrt(dx * dx + dy * dy)
             if length == 0:
                 return None
 
@@ -656,7 +696,7 @@ class CityPartitioner:
             new_start = (coords[0][0] - dx * extend, coords[0][1] - dy * extend)
             new_end = (coords[-1][0] + dx * extend, coords[-1][1] + dy * extend)
 
-            extended = LineString([new_start] + list(coords) + [new_end])
+            extended = LineString([new_start, *list(coords), new_end])
 
             # Clip to polygon
             clipped = extended.intersection(polygon)
@@ -671,9 +711,7 @@ class CityPartitioner:
         except Exception:
             return None
 
-    def _split_polygon_with_line(
-        self, polygon: Polygon, line: LineString
-    ) -> Optional[list[Polygon]]:
+    def _split_polygon_with_line(self, polygon: Polygon, line: LineString) -> list[Polygon] | None:
         """Split a polygon with a line."""
         try:
             from shapely.ops import split as shapely_split
@@ -706,12 +744,12 @@ class CityPartitioner:
 
     def _enforce_cell_constraints(
         self, cell: SuperblockCell, index: int
-    ) -> Optional[EnforcedSuperblock]:
+    ) -> EnforcedSuperblock | None:
         """
         Enforce constraints for a single cell and create an EnforcedSuperblock.
         """
-        if len(cell.entry_nodes) < 2:
-            # Not enough entry points to have cross-sector paths
+        if not cell.entry_nodes:
+            # No vehicle connection to the boundary network is available.
             return self._create_simple_superblock(cell, index)
 
         # Build interior subgraph
@@ -728,12 +766,18 @@ class CityPartitioner:
             num_sectors=self.num_sectors,
         )
 
-        # Enforce constraints
+        # Enforce constraints, or validate the unmodified design when enforcement
+        # was explicitly disabled.
         try:
-            modifications, violations = enforcer.enforce_constraints()
+            if self.enforce_constraints:
+                modifications, violations = enforcer.enforce_constraints()
+            else:
+                enforcer.sectors = enforcer._assign_sectors()
+                modifications = []
+                violations = enforcer._find_violations()
         except Exception as e:
             logger.warning(f"Constraint enforcement failed for cell {index}: {e}")
-            return self._create_simple_superblock(cell, index)
+            return self._create_simple_superblock(cell, index, constraint_validated=False)
 
         # Build entry points with sector info
         entry_points = []
@@ -741,15 +785,17 @@ class CityPartitioner:
             for sector, nodes in enforcer.sectors.entry_points_by_sector.items():
                 for node_id in nodes:
                     node_data = self.graph.nodes.get(node_id, {})
-                    entry_points.append(EntryPoint(
-                        node_id=node_id,
-                        sector=sector,
-                        coordinates=Coordinates(
-                            lat=node_data.get("y", 0),
-                            lon=node_data.get("x", 0),
-                        ),
-                        boundary_road_id=0,
-                    ))
+                    entry_points.append(
+                        EntryPoint(
+                            node_id=node_id,
+                            sector=sector,
+                            coordinates=Coordinates(
+                                lat=node_data.get("y", 0),
+                                lon=node_data.get("x", 0),
+                            ),
+                            boundary_road_id=self._boundary_road_id_for_node(cell, node_id),
+                        )
+                    )
 
         # Check accessibility (find unreachable addresses)
         unreachable = self._find_unreachable_addresses(
@@ -770,35 +816,61 @@ class CityPartitioner:
             unreachable_addresses=unreachable,
             interior_roads_count=len(cell.interior_edges),
             modal_filter_count=sum(
-                1 for m in modifications
-                if m.modification_type.value == "modal_filter"
+                1 for m in modifications if m.modification_type.value == "modal_filter"
             ),
             one_way_conversion_count=sum(
-                1 for m in modifications
-                if m.modification_type.value == "one_way"
+                1 for m in modifications if m.modification_type.value == "one_way"
             ),
             street_cut_count=sum(
-                1 for m in modifications
-                if m.modification_type.value == "full_closure"
+                1 for m in modifications if m.modification_type.value == "full_closure"
+            ),
+            two_way_conversion_count=sum(
+                1 for m in modifications if m.modification_type.value == "two_way"
             ),
         )
 
     def _create_simple_superblock(
-        self, cell: SuperblockCell, index: int
+        self,
+        cell: SuperblockCell,
+        index: int,
+        *,
+        constraint_validated: bool = True,
     ) -> EnforcedSuperblock:
         """Create a superblock without constraint enforcement (no cross-sector paths possible)."""
+        interior_graph = self._build_interior_subgraph(cell)
+        sector_by_node: dict[int, int] = {}
+        sectors = None
+        if cell.entry_nodes:
+            enforcer = ConstraintEnforcer(
+                interior_graph=interior_graph,
+                boundary_polygon=cell.polygon,
+                entry_node_ids=cell.entry_nodes,
+                num_sectors=self.num_sectors,
+            )
+            sectors = enforcer._assign_sectors()
+            sector_by_node = sectors.node_to_sector
+
         entry_points = []
         for node_id in cell.entry_nodes:
             node_data = self.graph.nodes.get(node_id, {})
-            entry_points.append(EntryPoint(
-                node_id=node_id,
-                sector=0,
-                coordinates=Coordinates(
-                    lat=node_data.get("y", 0),
-                    lon=node_data.get("x", 0),
-                ),
-                boundary_road_id=0,
-            ))
+            entry_points.append(
+                EntryPoint(
+                    node_id=node_id,
+                    sector=sector_by_node.get(node_id, 0),
+                    coordinates=Coordinates(
+                        lat=node_data.get("y", 0),
+                        lon=node_data.get("x", 0),
+                    ),
+                    boundary_road_id=self._boundary_road_id_for_node(cell, node_id),
+                )
+            )
+
+        unreachable = self._find_unreachable_addresses(
+            interior_graph,
+            [],
+            cell.entry_nodes,
+            sectors,
+        )
 
         return EnforcedSuperblock(
             id=f"sb_{index}_{uuid.uuid4().hex[:8]}",
@@ -808,18 +880,51 @@ class CityPartitioner:
             boundary_roads=self._collect_boundary_osm_ids(cell.boundary_edges),
             entry_points=entry_points,
             modifications=[],
-            constraint_validated=True,
-            all_addresses_reachable=True,
-            unreachable_addresses=[],
+            constraint_validated=constraint_validated,
+            all_addresses_reachable=len(unreachable) == 0,
+            unreachable_addresses=unreachable,
             interior_roads_count=len(cell.interior_edges),
             modal_filter_count=0,
             one_way_conversion_count=0,
             street_cut_count=0,
+            two_way_conversion_count=0,
         )
+
+    def _boundary_road_id_for_node(self, cell: SuperblockCell, node_id: int) -> int:
+        """Return a connected boundary way ID for an entry point when available."""
+        node_data = self.graph.nodes.get(node_id, {})
+        point = Point(node_data.get("x", 0), node_data.get("y", 0))
+        for u, v, key in cell.boundary_edges:
+            if not self.graph.has_edge(u, v, key):
+                continue
+            edge_data = self.graph[u][v][key]
+            geometry = edge_data.get("geometry")
+            touches_entry = node_id in (u, v) or (
+                geometry is not None and geometry.distance(point) <= 0.0001
+            )
+            if not touches_entry:
+                continue
+            osm_ids = self._normalize_osm_ids(edge_data.get("osmid"))
+            if osm_ids:
+                return osm_ids[0]
+
+        # Use the global arterial grid as a topology fallback when geometric
+        # classification put a touching edge just outside this cell.
+        for u, v, key in self.arterial_edges:
+            if node_id not in (u, v) or not self.graph.has_edge(u, v, key):
+                continue
+            osm_ids = self._normalize_osm_ids(self.graph[u][v][key].get("osmid"))
+            if osm_ids:
+                return osm_ids[0]
+        return 0
 
     def _build_interior_subgraph(self, cell: SuperblockCell) -> nx.MultiDiGraph:
         """Build a subgraph containing only interior edges."""
         subgraph = nx.MultiDiGraph()
+
+        for node_id in cell.entry_nodes:
+            if node_id in self.graph:
+                subgraph.add_node(node_id, **self.graph.nodes[node_id])
 
         for u, v, key in cell.interior_edges:
             if not self.graph.has_edge(u, v, key):
@@ -847,7 +952,18 @@ class CityPartitioner:
         Find interior nodes that become unreachable after modifications.
         """
         if not entry_nodes:
-            return []
+            return [
+                UnreachableAddress(
+                    node_id=node,
+                    coordinates=Coordinates(
+                        lat=data.get("y", 0),
+                        lon=data.get("x", 0),
+                    ),
+                    nearest_entry_sector=0,
+                    reason="No entry point connects this superblock to the arterial network",
+                )
+                for node, data in graph.nodes(data=True)
+            ]
 
         # Apply modifications
         modified_graph = graph.copy()
@@ -876,6 +992,14 @@ class CityPartitioner:
                 if modified_graph.has_edge(mod.v, mod.u):
                     for k in list(modified_graph[mod.v][mod.u].keys()):
                         modified_graph.remove_edge(mod.v, mod.u, k)
+            elif mod.modification_type.value == "two_way":
+                if not graph.has_edge(mod.u, mod.v):
+                    continue
+                edge_data = graph[mod.u][mod.v].get(mod.key)
+                if edge_data is None:
+                    edge_data = next(iter(graph[mod.u][mod.v].values()), None)
+                if edge_data is not None and not modified_graph.has_edge(mod.v, mod.u):
+                    modified_graph.add_edge(mod.v, mod.u, **dict(edge_data))
 
         # Find all nodes reachable from any entry point
         reachable = set()
@@ -901,21 +1025,24 @@ class CityPartitioner:
                             nearest_sector = sector
                             break
 
-                unreachable.append(UnreachableAddress(
-                    node_id=node,
-                    coordinates=Coordinates(
-                        lat=node_data.get("y", 0),
-                        lon=node_data.get("x", 0),
-                    ),
-                    nearest_entry_sector=nearest_sector,
-                    reason="No path from any entry point after modifications",
-                ))
+                unreachable.append(
+                    UnreachableAddress(
+                        node_id=node,
+                        coordinates=Coordinates(
+                            lat=node_data.get("y", 0),
+                            lon=node_data.get("x", 0),
+                        ),
+                        nearest_entry_sector=nearest_sector,
+                        reason="No path from any entry point after modifications",
+                    )
+                )
 
         return unreachable
 
     def _polygon_to_geojson(self, polygon: Polygon) -> dict:
         """Convert Shapely Polygon to GeoJSON dict."""
         from shapely.geometry import mapping
+
         return mapping(polygon)
 
     @staticmethod
@@ -934,9 +1061,7 @@ class CityPartitioner:
             return []
         return [value] if value > 0 else []
 
-    def _collect_boundary_osm_ids(
-        self, boundary_edges: list[tuple[int, int, int]]
-    ) -> list[int]:
+    def _collect_boundary_osm_ids(self, boundary_edges: list[tuple[int, int, int]]) -> list[int]:
         """Collect and deduplicate boundary road OSM IDs."""
         osm_ids: list[int] = []
         for u, v, key in boundary_edges:
@@ -957,18 +1082,22 @@ class CityPartitioner:
 
     def _build_result(self) -> CityPartition:
         """Build the final CityPartition result."""
-        # Calculate statistics
-        total_area = sum(sb.area_hectares for sb in self.superblocks)
+        # Calculate covered area from the geometric union rather than summing
+        # cells. This keeps overlapping boundaries from inflating coverage.
+        bbox_polygon = box(self.bbox.west, self.bbox.south, self.bbox.east, self.bbox.north)
+        covered_geometry = (
+            unary_union([cell.polygon for cell in self.cells]).intersection(bbox_polygon)
+            if self.cells
+            else Polygon()
+        )
+        total_area = self._calculate_area_hectares(covered_geometry)
+        bbox_area = self._calculate_area_hectares(bbox_polygon)
 
-        bbox_area = self._calculate_area_hectares(box(
-            self.bbox.west, self.bbox.south,
-            self.bbox.east, self.bbox.north
-        ))
-
-        coverage = (total_area / bbox_area * 100) if bbox_area > 0 else 0
+        coverage = min(100.0, (total_area / bbox_area * 100)) if bbox_area > 0 else 0
 
         total_filters = sum(sb.modal_filter_count for sb in self.superblocks)
         total_oneway = sum(sb.one_way_conversion_count for sb in self.superblocks)
+        total_twoway = sum(sb.two_way_conversion_count for sb in self.superblocks)
         total_cuts = sum(sb.street_cut_count for sb in self.superblocks)
         total_unreachable = sum(len(sb.unreachable_addresses) for sb in self.superblocks)
 
@@ -990,4 +1119,5 @@ class CityPartitioner:
             total_one_way_conversions=total_oneway,
             total_street_cuts=total_cuts,
             total_unreachable_addresses=total_unreachable,
+            total_two_way_conversions=total_twoway,
         )

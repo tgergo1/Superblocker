@@ -9,19 +9,21 @@ The algorithm uses minimum edge cuts to identify which edges need to be
 modified (modal filters or one-way conversions) to eliminate cross-sector paths.
 """
 
-import networkx as nx
+import heapq
+import itertools
 import logging
 import math
-from typing import Optional
-from dataclasses import dataclass, field
-from shapely.geometry import Polygon, Point, LineString
+from dataclasses import dataclass
+
+import networkx as nx
+from shapely.geometry import Polygon
 
 from app.models.schemas import (
-    EntryPoint,
-    StreetModification,
-    ModificationType,
-    Coordinates,
     ConstraintViolation,
+    Coordinates,
+    EntryPoint,
+    ModificationType,
+    StreetModification,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,11 +31,16 @@ logger = logging.getLogger(__name__)
 
 # Road hierarchy for determining modification type (lower = more important)
 HIERARCHY_MAP = {
-    "motorway": 1, "motorway_link": 1,
-    "trunk": 2, "trunk_link": 2,
-    "primary": 3, "primary_link": 3,
-    "secondary": 4, "secondary_link": 4,
-    "tertiary": 5, "tertiary_link": 5,
+    "motorway": 1,
+    "motorway_link": 1,
+    "trunk": 2,
+    "trunk_link": 2,
+    "primary": 3,
+    "primary_link": 3,
+    "secondary": 4,
+    "secondary_link": 4,
+    "tertiary": 5,
+    "tertiary_link": 5,
     "residential": 6,
     "living_street": 7,
     "unclassified": 8,
@@ -44,6 +51,7 @@ HIERARCHY_MAP = {
 @dataclass
 class SectorAssignment:
     """Entry points organized by sector."""
+
     num_sectors: int
     entry_points_by_sector: dict[int, list[int]]  # sector -> node IDs
     node_to_sector: dict[int, int]  # node_id -> sector
@@ -53,6 +61,7 @@ class SectorAssignment:
 @dataclass
 class ModificationPlan:
     """Plan for modifying a superblock's interior to enforce constraints."""
+
     modal_filters: list[tuple[int, int, int]]  # (u, v, key) edges to add filters
     one_way_conversions: dict[tuple[int, int, int], str]  # edge -> direction
     full_closures: list[tuple[int, int, int]]  # Street cuts / closures
@@ -96,7 +105,7 @@ class ConstraintEnforcer:
         self.centroid = boundary_polygon.centroid
 
         # Sector assignment
-        self.sectors: Optional[SectorAssignment] = None
+        self.sectors: SectorAssignment | None = None
 
     def enforce_constraints(self) -> tuple[list[StreetModification], list[ConstraintViolation]]:
         """
@@ -110,33 +119,265 @@ class ConstraintEnforcer:
 
         if len(self.entry_nodes) < 2:
             logger.info("Less than 2 entry points, no constraints to enforce")
-            return [], []
 
         # Step 2: Find all cross-sector violations
         violations = self._find_violations()
 
-        if not violations:
-            logger.info("No cross-sector paths found, constraints already satisfied")
-            return [], []
+        modifications: list[StreetModification] = []
+        remaining_violations: list[ConstraintViolation] = []
+        if violations:
+            logger.info(f"Found {len(violations)} cross-sector path violations")
 
-        logger.info(f"Found {len(violations)} cross-sector path violations")
+            # Step 3: Compute minimum edge cuts
+            plan = self._compute_modification_plan(violations)
 
-        # Step 3: Compute minimum edge cuts
-        plan = self._compute_modification_plan(violations)
+            # Step 4: Generate modifications
+            modifications = self._generate_modifications(plan)
 
-        # Step 4: Generate modifications
-        modifications = self._generate_modifications(plan)
+            # Step 5: Apply modifications and validate
+            remaining_violations = self._validate_modifications(modifications)
 
-        # Step 5: Apply modifications and validate
-        remaining_violations = self._validate_modifications(modifications)
+            if remaining_violations:
+                modifications, remaining_violations = self._repair_remaining_violations(
+                    modifications,
+                    remaining_violations,
+                )
+        else:
+            logger.info("No cross-sector paths found before modifications")
 
-        if remaining_violations:
-            modifications, remaining_violations = self._repair_remaining_violations(
-                modifications,
-                remaining_violations,
-            )
+        # Minimum cuts optimize the number/cost of interventions, but a union of
+        # pairwise cuts can occasionally strand streets that were reachable before
+        # the plan. Fall back to directional entry territories when either the
+        # cross-traffic invariant or the original access envelope is not preserved.
+        if (
+            remaining_violations
+            or not self._preserves_entry_access(modifications)
+            or not self._all_nodes_reachable(modifications)
+        ):
+            fallback = self._build_directional_territory_modifications()
+            fallback = self._restore_local_entry_access(fallback)
+            fallback_violations = self._validate_modifications(fallback)
+            if (
+                not fallback_violations
+                and self._preserves_entry_access(fallback)
+                and self._all_nodes_reachable(fallback)
+            ):
+                logger.info(
+                    "Using connectivity-preserving territory plan (%s modifications)",
+                    len(fallback),
+                )
+                modifications = fallback
+                remaining_violations = []
+
+        deduplicated = self._deduplicate_physical_modifications(modifications)
+        if len(deduplicated) != len(modifications):
+            modifications = deduplicated
+            remaining_violations = self._validate_modifications(modifications)
 
         return modifications, remaining_violations
+
+    @staticmethod
+    def _deduplicate_physical_modifications(
+        modifications: list[StreetModification],
+    ) -> list[StreetModification]:
+        """Return one implementable action per physical street connection."""
+        seen: set[tuple[ModificationType, int, int, str | None]] = set()
+        deduplicated: list[StreetModification] = []
+        for modification in modifications:
+            physical_u, physical_v = sorted((modification.u, modification.v))
+            direction = (
+                modification.direction
+                if modification.modification_type
+                in {ModificationType.ONE_WAY, ModificationType.TURN_RESTRICTION}
+                else None
+            )
+            signature = (
+                modification.modification_type,
+                physical_u,
+                physical_v,
+                direction,
+            )
+            if signature in seen:
+                continue
+            seen.add(signature)
+            deduplicated.append(modification)
+        return deduplicated
+
+    def _build_directional_territory_modifications(self) -> list[StreetModification]:
+        """
+        Build a guaranteed no-cross-traffic plan without losing existing access.
+
+        A directed multi-source shortest-path expansion assigns every node that
+        was originally reachable from an entry to that entry's cardinal sector.
+        Every physical connection between different territories is then blocked.
+        Shortest-path parent edges always stay inside one territory, so every
+        originally reachable node remains reachable from at least one entry.
+        """
+        if not self.sectors:
+            return []
+
+        fixed_sectors = {
+            node: sector
+            for node, sector in self.sectors.node_to_sector.items()
+            if node in self.graph
+        }
+        if not fixed_sectors:
+            return []
+
+        territory: dict[int, int] = dict(fixed_sectors)
+        distances: dict[int, float] = {node: 0.0 for node in fixed_sectors}
+        frontier: list[tuple[float, int, int]] = [
+            (0.0, sector, node) for node, sector in fixed_sectors.items()
+        ]
+        heapq.heapify(frontier)
+
+        while frontier:
+            distance, sector, node = heapq.heappop(frontier)
+            if distance != distances.get(node) or territory.get(node) != sector:
+                continue
+
+            for _u, neighbor, _key, edge_data in self.graph.out_edges(node, keys=True, data=True):
+                fixed_sector = fixed_sectors.get(neighbor)
+                if fixed_sector is not None and fixed_sector != sector:
+                    continue
+
+                length = max(0.001, float(edge_data.get("length", 1.0) or 1.0))
+                candidate = distance + length
+                current = distances.get(neighbor, float("inf"))
+                current_sector = territory.get(neighbor, self.num_sectors)
+                if candidate < current or (
+                    math.isclose(candidate, current) and sector < current_sector
+                ):
+                    distances[neighbor] = candidate
+                    territory[neighbor] = sector
+                    heapq.heappush(frontier, (candidate, sector, neighbor))
+
+        # One hard vehicle block removes all parallel edges in both directions,
+        # so keep only the least disruptive representative per physical link.
+        cross_territory_edges: dict[tuple[int, int], tuple[int, int, int, dict]] = {}
+        for u, v, key, edge_data in self.graph.edges(keys=True, data=True):
+            if u == v or u not in territory or v not in territory:
+                continue
+            if territory[u] == territory[v]:
+                continue
+
+            physical_edge = (min(u, v), max(u, v))
+            current = cross_territory_edges.get(physical_edge)
+            if current is None or self._edge_cut_cost(edge_data) < self._edge_cut_cost(current[3]):
+                cross_territory_edges[physical_edge] = (u, v, key, edge_data)
+
+        modifications: list[StreetModification] = []
+        for u, v, key, edge_data in cross_territory_edges.values():
+            mod_type = (
+                "full_closure" if self._should_use_street_cut(u, v, edge_data) else "modal_filter"
+            )
+            modification = self._build_single_modification(
+                u,
+                v,
+                key,
+                edge_data,
+                mod_type,
+                None,
+            )
+            if modification is not None:
+                modification.rationale = (
+                    "Directional territory boundary: blocks cross-traffic while "
+                    "preserving access from the assigned entry side"
+                )
+                modifications.append(modification)
+
+        return modifications
+
+    def _preserves_entry_access(self, modifications: list[StreetModification]) -> bool:
+        """Return True when no node loses access from the set of entry points."""
+        original_reachable = self._nodes_reachable_from_entries(self.graph)
+        modified = self._apply_vehicle_modifications(modifications)
+        modified_reachable = self._nodes_reachable_from_entries(modified)
+        return original_reachable.issubset(modified_reachable)
+
+    def _all_nodes_reachable(self, modifications: list[StreetModification]) -> bool:
+        """Return True when every interior node can be entered from a boundary side."""
+        modified = self._apply_vehicle_modifications(modifications)
+        return self._nodes_reachable_from_entries(modified) == set(modified.nodes)
+
+    def _restore_local_entry_access(
+        self, modifications: list[StreetModification]
+    ) -> list[StreetModification]:
+        """
+        Open missing local travel directions inside each separated territory.
+
+        The territory filters are applied first. Shortest paths are then found in
+        the remaining physical network, so a two-way conversion can never bridge
+        a cross-sector filter. Revalidation still runs after these additions.
+        """
+        updated = list(modifications)
+        modified = self._apply_vehicle_modifications(updated)
+        sources = [entry for entry in self.entry_nodes if entry in modified]
+        if not sources:
+            return updated
+
+        physical = modified.to_undirected()
+        try:
+            paths = nx.multi_source_dijkstra_path(physical, sources, weight="length")
+        except nx.NetworkXError:
+            return updated
+
+        planned_links: set[tuple[int, int]] = set()
+        unreachable = set(modified.nodes) - self._nodes_reachable_from_entries(modified)
+        for target in sorted(unreachable):
+            path = paths.get(target)
+            if not path:
+                continue
+            for source, destination in itertools.pairwise(path):
+                if modified.has_edge(source, destination):
+                    continue
+                physical_link = (min(source, destination), max(source, destination))
+                if physical_link in planned_links:
+                    continue
+                if not self.graph.has_edge(destination, source):
+                    continue
+
+                edge_key, edge_data = min(
+                    self.graph[destination][source].items(),
+                    key=lambda item: float(item[1].get("length", 0) or 0),
+                )
+                source_node = self.graph.nodes.get(source, {})
+                destination_node = self.graph.nodes.get(destination, {})
+                intervention_location = Coordinates(
+                    lat=(source_node.get("y", 0) + destination_node.get("y", 0)) / 2,
+                    lon=(source_node.get("x", 0) + destination_node.get("x", 0)) / 2,
+                )
+                modification = StreetModification(
+                    u=destination,
+                    v=source,
+                    key=edge_key,
+                    osm_id=self._normalize_osm_id(edge_data.get("osmid", 0)),
+                    name=self._normalize_edge_name(edge_data.get("name")),
+                    modification_type=ModificationType.TWO_WAY,
+                    filter_location=intervention_location,
+                    rationale=(
+                        "Open the missing local-access direction so this street can "
+                        "be entered and exited within its directional territory"
+                    ),
+                )
+                updated.append(modification)
+                planned_links.add(physical_link)
+                modified = self._apply_vehicle_modifications(updated)
+
+        return updated
+
+    def _nodes_reachable_from_entries(self, graph: nx.MultiDiGraph) -> set[int]:
+        """Collect nodes reachable by vehicles from at least one entry."""
+        reachable: set[int] = set()
+        for entry in self.entry_nodes:
+            if entry not in graph:
+                continue
+            reachable.add(entry)
+            try:
+                reachable.update(nx.descendants(graph, entry))
+            except nx.NetworkXError:
+                continue
+        return reachable
 
     def _assign_sectors(self) -> SectorAssignment:
         """
@@ -154,9 +395,7 @@ class ConstraintEnforcer:
             end = start + sector_size
             sector_angles.append((start, end))
 
-        entry_points_by_sector: dict[int, list[int]] = {
-            i: [] for i in range(self.num_sectors)
-        }
+        entry_points_by_sector: dict[int, list[int]] = {i: [] for i in range(self.num_sectors)}
         node_to_sector: dict[int, int] = {}
 
         cx, cy = self.centroid.x, self.centroid.y
@@ -184,9 +423,7 @@ class ConstraintEnforcer:
             sector_angles=sector_angles,
         )
 
-    def _angle_to_sector(
-        self, angle: float, sector_angles: list[tuple[float, float]]
-    ) -> int:
+    def _angle_to_sector(self, angle: float, sector_angles: list[tuple[float, float]]) -> int:
         """Convert an angle to a sector index."""
         if self.num_sectors < 1:
             return 0
@@ -250,7 +487,7 @@ class ConstraintEnforcer:
                     continue
 
                 path = nx.shortest_path(self.graph, source, target)
-                path_edges = list(zip(path[:-1], path[1:]))
+                path_edges = list(itertools.pairwise(path))
 
                 violations.append(
                     ConstraintViolation(
@@ -278,9 +515,7 @@ class ConstraintEnforcer:
             boundary_road_id=0,  # Not available at this level
         )
 
-    def _compute_modification_plan(
-        self, violations: list[ConstraintViolation]
-    ) -> ModificationPlan:
+    def _compute_modification_plan(self, violations: list[ConstraintViolation]) -> ModificationPlan:
         """
         Compute the minimum set of edge modifications to eliminate all violations.
 
@@ -291,7 +526,7 @@ class ConstraintEnforcer:
 
         # Convert to undirected simple graph for min-cut calculation
         G_simple = nx.Graph()
-        for u, v, key, data in self.graph.edges(keys=True, data=True):
+        for u, v, _key, data in self.graph.edges(keys=True, data=True):
             if G_simple.has_edge(u, v):
                 # Keep the edge with minimum capacity (most cuttable)
                 existing_capacity = G_simple[u][v].get("capacity", 1)
@@ -317,9 +552,7 @@ class ConstraintEnforcer:
             entries_b = self.sectors.entry_points_by_sector.get(sector_b, [])
 
             # Find minimum cut that disconnects all a-b pairs
-            sector_cuts = self._find_sector_disconnect_cut(
-                G_simple, entries_a, entries_b
-            )
+            sector_cuts = self._find_sector_disconnect_cut(G_simple, entries_a, entries_b)
             cut_edges.update(sector_cuts)
             processed_pairs.add(pair_key)
 
@@ -334,9 +567,7 @@ class ConstraintEnforcer:
             # Find the actual edge in the multigraph
             if self.graph.has_edge(u, v):
                 for key, data in self.graph[u][v].items():
-                    mod_type, direction = self._determine_modification_type(
-                        u, v, key, data
-                    )
+                    mod_type, direction = self._determine_modification_type(u, v, key, data)
                     if mod_type == "modal_filter":
                         modal_filters.append((u, v, key))
                     elif mod_type == "one_way":
@@ -348,9 +579,7 @@ class ConstraintEnforcer:
             # Also check reverse direction
             if self.graph.has_edge(v, u):
                 for key, data in self.graph[v][u].items():
-                    mod_type, direction = self._determine_modification_type(
-                        v, u, key, data
-                    )
+                    mod_type, direction = self._determine_modification_type(v, u, key, data)
                     if mod_type == "modal_filter":
                         if (v, u, key) not in modal_filters:
                             modal_filters.append((v, u, key))
@@ -360,9 +589,8 @@ class ConstraintEnforcer:
                         if (v, u, key) not in one_way_conversions:
                             one_way_conversions[(v, u, key)] = direction
                             one_way_planned = True
-                    elif mod_type == "full_closure":
-                        if (v, u, key) not in full_closures:
-                            full_closures.append((v, u, key))
+                    elif mod_type == "full_closure" and (v, u, key) not in full_closures:
+                        full_closures.append((v, u, key))
 
         return ModificationPlan(
             modal_filters=modal_filters,
@@ -424,7 +652,7 @@ class ConstraintEnforcer:
 
         try:
             # Find minimum cut
-            cut_value, partition = nx.minimum_cut(
+            _cut_value, partition = nx.minimum_cut(
                 G_augmented, super_source, super_sink, capacity="capacity"
             )
 
@@ -447,7 +675,7 @@ class ConstraintEnforcer:
 
     def _determine_modification_type(
         self, u: int, v: int, key: int, edge_data: dict
-    ) -> tuple[str, Optional[str]]:
+    ) -> tuple[str, str | None]:
         """
         Determine whether to use modal filter or one-way conversion.
 
@@ -554,18 +782,14 @@ class ConstraintEnforcer:
                     if other_sector == sector:
                         continue
 
-                    other_entries = self.sectors.entry_points_by_sector.get(
-                        other_sector, []
-                    )
+                    other_entries = self.sectors.entry_points_by_sector.get(other_sector, [])
                     for other_entry in other_entries:
                         if other_entry in reachable:
                             score -= 1000  # Heavy penalty
 
         return score
 
-    def _generate_modifications(
-        self, plan: ModificationPlan
-    ) -> list[StreetModification]:
+    def _generate_modifications(self, plan: ModificationPlan) -> list[StreetModification]:
         """Generate StreetModification objects from the modification plan."""
         modifications = []
 
@@ -633,6 +857,11 @@ class ConstraintEnforcer:
             edge_data = self.graph[u][v][key]
             osmid = self._normalize_osm_id(edge_data.get("osmid", 0))
             name = self._normalize_edge_name(edge_data.get("name"))
+            node_u = self.graph.nodes.get(u, {})
+            conversion_coords = Coordinates(
+                lat=(node_u.get("y", 0) + self.graph.nodes.get(v, {}).get("y", 0)) / 2,
+                lon=(node_u.get("x", 0) + self.graph.nodes.get(v, {}).get("x", 0)) / 2,
+            )
 
             modifications.append(
                 StreetModification(
@@ -643,6 +872,7 @@ class ConstraintEnforcer:
                     name=name,
                     modification_type=ModificationType.ONE_WAY,
                     direction=direction,
+                    filter_location=conversion_coords,
                     rationale=f"One-way conversion ({direction}) to block cross-sector paths",
                 )
             )
@@ -726,10 +956,10 @@ class ConstraintEnforcer:
     def _select_repair_edge(
         self,
         violation: ConstraintViolation,
-        existing_edges: set[tuple[int, int, int, ModificationType, Optional[str]]],
-    ) -> Optional[tuple[int, int, int]]:
+        existing_edges: set[tuple[int, int, int, ModificationType, str | None]],
+    ) -> tuple[int, int, int] | None:
         """Choose the cheapest non-entry edge on a violating path."""
-        best_edge: Optional[tuple[int, int, int]] = None
+        best_edge: tuple[int, int, int] | None = None
         best_cost = float("inf")
         blocked_nodes = {
             violation.from_entry.node_id,
@@ -777,8 +1007,8 @@ class ConstraintEnforcer:
         key: int,
         edge_data: dict,
         mod_type: str,
-        direction: Optional[str],
-    ) -> Optional[StreetModification]:
+        direction: str | None,
+    ) -> StreetModification | None:
         """Create a StreetModification for a single edge."""
         osmid = self._normalize_osm_id(edge_data.get("osmid", 0))
         name = self._normalize_edge_name(edge_data.get("name"))
@@ -821,6 +1051,7 @@ class ConstraintEnforcer:
                 name=name,
                 modification_type=ModificationType.ONE_WAY,
                 direction=direction,
+                filter_location=midpoint,
                 rationale=f"Additional one-way conversion ({direction}) to eliminate remaining cross-sector routing",
             )
 
@@ -834,44 +1065,7 @@ class ConstraintEnforcer:
 
         Returns list of violations that still exist after modifications.
         """
-        # Create modified graph
-        modified_graph = self.graph.copy()
-
-        for mod in modifications:
-            if mod.modification_type == ModificationType.MODAL_FILTER:
-                # Remove all edges between u and v (both directions)
-                if modified_graph.has_edge(mod.u, mod.v):
-                    edges = list(modified_graph[mod.u][mod.v].keys())
-                    for k in edges:
-                        modified_graph.remove_edge(mod.u, mod.v, k)
-                if modified_graph.has_edge(mod.v, mod.u):
-                    edges = list(modified_graph[mod.v][mod.u].keys())
-                    for k in edges:
-                        modified_graph.remove_edge(mod.v, mod.u, k)
-
-            elif mod.modification_type == ModificationType.ONE_WAY:
-                # Remove edges in blocked direction
-                if mod.direction == "u_to_v":
-                    # Keep u->v, remove v->u
-                    if modified_graph.has_edge(mod.v, mod.u):
-                        edges = list(modified_graph[mod.v][mod.u].keys())
-                        for k in edges:
-                            modified_graph.remove_edge(mod.v, mod.u, k)
-                else:
-                    # Keep v->u, remove u->v
-                    if modified_graph.has_edge(mod.u, mod.v):
-                        edges = list(modified_graph[mod.u][mod.v].keys())
-                        for k in edges:
-                            modified_graph.remove_edge(mod.u, mod.v, k)
-            elif mod.modification_type == ModificationType.FULL_CLOSURE:
-                if modified_graph.has_edge(mod.u, mod.v):
-                    edges = list(modified_graph[mod.u][mod.v].keys())
-                    for k in edges:
-                        modified_graph.remove_edge(mod.u, mod.v, k)
-                if modified_graph.has_edge(mod.v, mod.u):
-                    edges = list(modified_graph[mod.v][mod.u].keys())
-                    for k in edges:
-                        modified_graph.remove_edge(mod.v, mod.u, k)
+        modified_graph = self._apply_vehicle_modifications(modifications)
 
         # Re-run violation detection on modified graph
         original_graph = self.graph
@@ -882,11 +1076,45 @@ class ConstraintEnforcer:
         self.graph = original_graph
 
         if remaining_violations:
-            logger.warning(
-                f"{len(remaining_violations)} violations remain after modifications"
-            )
+            logger.warning(f"{len(remaining_violations)} violations remain after modifications")
 
         return remaining_violations
+
+    def _apply_vehicle_modifications(
+        self, modifications: list[StreetModification]
+    ) -> nx.MultiDiGraph:
+        """Apply a plan to the vehicle graph used for validation and routing."""
+        modified_graph = self.graph.copy()
+
+        for mod in modifications:
+            if mod.modification_type in {
+                ModificationType.MODAL_FILTER,
+                ModificationType.FULL_CLOSURE,
+            }:
+                if modified_graph.has_edge(mod.u, mod.v):
+                    for key in list(modified_graph[mod.u][mod.v].keys()):
+                        modified_graph.remove_edge(mod.u, mod.v, key)
+                if modified_graph.has_edge(mod.v, mod.u):
+                    for key in list(modified_graph[mod.v][mod.u].keys()):
+                        modified_graph.remove_edge(mod.v, mod.u, key)
+            elif mod.modification_type == ModificationType.ONE_WAY:
+                if mod.direction == "u_to_v":
+                    if modified_graph.has_edge(mod.v, mod.u):
+                        for key in list(modified_graph[mod.v][mod.u].keys()):
+                            modified_graph.remove_edge(mod.v, mod.u, key)
+                elif modified_graph.has_edge(mod.u, mod.v):
+                    for key in list(modified_graph[mod.u][mod.v].keys()):
+                        modified_graph.remove_edge(mod.u, mod.v, key)
+            elif mod.modification_type == ModificationType.TWO_WAY:
+                if not self.graph.has_edge(mod.u, mod.v):
+                    continue
+                edge_data = self.graph[mod.u][mod.v].get(mod.key)
+                if edge_data is None:
+                    edge_data = next(iter(self.graph[mod.u][mod.v].values()), None)
+                if edge_data is not None and not modified_graph.has_edge(mod.v, mod.u):
+                    modified_graph.add_edge(mod.v, mod.u, **dict(edge_data))
+
+        return modified_graph
 
     @staticmethod
     def _normalize_osm_id(osmid) -> int:
@@ -906,7 +1134,7 @@ class ConstraintEnforcer:
         return value if value > 0 else 0
 
     @staticmethod
-    def _normalize_edge_name(name) -> Optional[str]:
+    def _normalize_edge_name(name) -> str | None:
         """Normalize edge name to a string or None."""
         if name is None:
             return None
@@ -916,7 +1144,7 @@ class ConstraintEnforcer:
             parts: list[str] = []
             items = name
             if isinstance(name, set):
-                items = sorted((str(item) for item in name if item))
+                items = sorted(str(item) for item in name if item)
             for item in items:
                 if not item:
                     continue
@@ -938,9 +1166,7 @@ class ConstraintEnforcer:
             return " / ".join(unique)
         return str(name)
 
-    def get_modified_graph(
-        self, modifications: list[StreetModification]
-    ) -> nx.MultiDiGraph:
+    def get_modified_graph(self, modifications: list[StreetModification]) -> nx.MultiDiGraph:
         """
         Return a copy of the graph with modifications applied.
 
@@ -969,6 +1195,14 @@ class ConstraintEnforcer:
                         edges = list(modified_graph[mod.u][mod.v].keys())
                         for k in edges:
                             modified_graph.remove_edge(mod.u, mod.v, k)
+            elif mod.modification_type == ModificationType.TWO_WAY:
+                if not self.graph.has_edge(mod.u, mod.v):
+                    continue
+                edge_data = self.graph[mod.u][mod.v].get(mod.key)
+                if edge_data is None:
+                    edge_data = next(iter(self.graph[mod.u][mod.v].values()), None)
+                if edge_data is not None and not modified_graph.has_edge(mod.v, mod.u):
+                    modified_graph.add_edge(mod.v, mod.u, **dict(edge_data))
             elif mod.modification_type == ModificationType.FULL_CLOSURE:
                 if modified_graph.has_edge(mod.u, mod.v):
                     edges = list(modified_graph[mod.u][mod.v].keys())

@@ -1,43 +1,49 @@
 import axios from 'axios';
 import type {
-  SearchResponse,
-  StreetNetworkResponse,
   BoundingBox,
-  Coordinates,
   CityPartition,
+  Coordinates,
   PartitionProgress,
   RouteResult,
+  SearchResponse,
   SizeRecommendation,
+  StreetNetworkResponse,
 } from '../types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+export const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  headers: { 'Content-Type': 'application/json' },
 });
 
-export async function searchPlaces(query: string, limit = 5): Promise<SearchResponse> {
+export async function searchPlaces(
+  query: string,
+  limit = 5,
+  signal?: AbortSignal,
+): Promise<SearchResponse> {
+  const normalizedQuery = query.trim();
+  if (normalizedQuery.length < 2) return { results: [] };
   const response = await api.get<SearchResponse>('/search', {
-    params: { q: query, limit },
+    params: { q: normalizedQuery, limit },
+    signal,
   });
   return response.data;
 }
 
 export async function getStreetNetwork(
   bbox: BoundingBox,
-  networkType = 'drive'
+  networkType = 'drive',
+  signal?: AbortSignal,
 ): Promise<StreetNetworkResponse> {
-  const response = await api.post<StreetNetworkResponse>('/network', {
-    bbox,
-    network_type: networkType,
-  });
+  const response = await api.post<StreetNetworkResponse>(
+    '/network',
+    { bbox, network_type: networkType },
+    { signal },
+  );
   return response.data;
 }
 
-// Enhanced types for the new analysis system
 export interface ScoreBreakdown {
   size_score: number;
   shape_score: number;
@@ -68,7 +74,7 @@ export interface AccessibilityMetrics {
 export interface TrafficImpact {
   removed_through_traffic_pct: number;
   boundary_load_increase_pct: number;
-  estimated_vmt_reduction: number;
+  estimated_vehicle_km_reduction: number;
   affected_od_pairs: number;
 }
 
@@ -80,7 +86,6 @@ export interface SuperblockCandidate {
   interior_roads: number[];
   score: number;
   algorithm: string;
-  // Enhanced analysis data
   score_breakdown?: ScoreBreakdown;
   interventions?: StreetIntervention[];
   accessibility?: AccessibilityMetrics;
@@ -107,6 +112,7 @@ export interface AnalyzeResponse {
     min_area_hectares: number;
     max_area_hectares: number;
     algorithms: string[];
+    boundary_road_types?: string[];
   };
 }
 
@@ -116,13 +122,9 @@ export interface AnalysisProgress {
   message: string;
 }
 
-// Regular (non-streaming) analysis
 export async function analyzeArea(
   bbox: BoundingBox,
-  options?: {
-    minAreaHectares?: number;
-    maxAreaHectares?: number;
-  }
+  options?: { minAreaHectares?: number; maxAreaHectares?: number },
 ): Promise<AnalyzeResponse> {
   const response = await api.post<AnalyzeResponse>('/analyze', {
     bbox,
@@ -134,139 +136,117 @@ export async function analyzeArea(
   return response.data;
 }
 
-// Streaming analysis with progress updates
+type SsePayload = Record<string, unknown> & { type?: string; message?: string };
+
+async function streamPost(
+  path: string,
+  body: unknown,
+  onEvent: (event: SsePayload) => boolean,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok) {
+    let message = `Request failed (${response.status})`;
+    try {
+      const errorBody = await response.json() as { detail?: string };
+      if (errorBody.detail) message = errorBody.detail;
+    } catch {
+      // Keep the safe status-based fallback.
+    }
+    throw new Error(message);
+  }
+  if (!response.body) throw new Error('The server returned no response stream');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const frames = buffer.split(/\r?\n\r?\n/);
+      buffer = frames.pop() ?? '';
+      for (const frame of frames) {
+        const data = frame
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
+          .join('\n');
+        if (!data) continue;
+        let event: SsePayload;
+        try {
+          event = JSON.parse(data) as SsePayload;
+        } catch {
+          throw new Error('The server returned an invalid response. Please try again.');
+        }
+        if (event.type === 'error') throw new Error(event.message || 'The operation failed');
+        if (onEvent(event)) return;
+      }
+      if (done) throw new Error('The response stream ended before completion');
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
 export async function analyzeAreaWithProgress(
   bbox: BoundingBox,
   options: {
     minAreaHectares?: number;
     maxAreaHectares?: number;
     onProgress?: (progress: AnalysisProgress) => void;
-  } = {}
+    signal?: AbortSignal;
+  } = {},
 ): Promise<AnalyzeResponse> {
-  const { minAreaHectares = 4, maxAreaHectares = 25, onProgress } = options;
-
-  console.log('[Superblock] Starting streaming analysis...');
-
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify({
+  const { minAreaHectares = 4, maxAreaHectares = 25, onProgress, signal } = options;
+  let result: AnalyzeResponse | undefined;
+  await streamPost(
+    '/analyze/stream',
+    {
       bbox,
       algorithms: ['centrality_based'],
       min_area_hectares: minAreaHectares,
       max_area_hectares: maxAreaHectares,
       boundary_road_types: ['primary', 'secondary', 'tertiary'],
-    });
-
-    const url = `${API_BASE_URL}/analyze/stream`;
-    console.log('[Superblock] Fetching:', url);
-
-    fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'text/event-stream',
-      },
-      body,
-    })
-      .then(response => {
-        console.log('[Superblock] Response status:', response.status);
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const reader = response.body?.getReader();
-        if (!reader) {
-          throw new Error('No response body');
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        const processStream = async (): Promise<void> => {
-          try {
-            const { done, value } = await reader.read();
-
-            if (done) {
-              console.log('[Superblock] Stream ended');
-              // If stream ends without complete message, reject
-              reject(new Error('Stream ended without completion'));
-              return;
-            }
-
-            const chunk = decoder.decode(value, { stream: true });
-            buffer += chunk;
-            console.log('[Superblock] Received chunk:', chunk.substring(0, 100));
-
-            // Process complete SSE messages
-            const lines = buffer.split('\n\n');
-            buffer = lines.pop() || '';
-
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                try {
-                  const data = JSON.parse(line.slice(6));
-                  console.log('[Superblock] Parsed event:', data.type, data.percent ?? '');
-
-                  if (data.type === 'progress') {
-                    onProgress?.({
-                      stage: data.stage,
-                      percent: data.percent,
-                      message: data.message,
-                    });
-                  } else if (data.type === 'complete') {
-                    console.log('[Superblock] Analysis complete!', data.total_found, 'candidates');
-                    resolve({
-                      candidates: data.candidates,
-                      total_found: data.total_found,
-                      bbox,
-                      network_stats: data.network_stats,
-                      parameters: {
-                        min_area_hectares: minAreaHectares,
-                        max_area_hectares: maxAreaHectares,
-                        algorithms: ['centrality_based'],
-                      },
-                    });
-                    return;
-                } else if (data.type === 'error') {
-                  console.error('[Superblock] Server error:', data.message);
-                  reject(new Error(data.message));
-                  return;
-                }
-              } catch (e) {
-                console.error('[Superblock] Failed to parse SSE data:', e, line);
-              }
-            }
-          }
-
-          return processStream();
-          } catch (streamError) {
-            console.error('[Superblock] Stream processing error:', streamError);
-            reject(streamError);
-          }
+    },
+    (event) => {
+      if (event.type === 'progress') {
+        onProgress?.(event as unknown as AnalysisProgress);
+      } else if (event.type === 'complete') {
+        result = {
+          candidates: event.candidates as SuperblockCandidate[],
+          total_found: event.total_found as number,
+          bbox,
+          network_stats: event.network_stats as unknown as NetworkStats,
+          parameters: {
+            min_area_hectares: minAreaHectares,
+            max_area_hectares: maxAreaHectares,
+            algorithms: ['centrality_based'],
+            boundary_road_types: ['primary', 'secondary', 'tertiary'],
+          },
         };
-
-        processStream().catch((err) => {
-          console.error('[Superblock] Stream error:', err);
-          reject(err);
-        });
-      })
-      .catch((err) => {
-        console.error('[Superblock] Fetch error:', err);
-        reject(err);
-      });
-  });
+        return true;
+      }
+      return false;
+    },
+    signal,
+  );
+  if (!result) throw new Error('Analysis completed without a result');
+  return result;
 }
-
-// =============================================================================
-// City Partitioning API
-// =============================================================================
 
 export interface PartitionRequest {
   bbox: BoundingBox;
   target_size_hectares?: number;
   min_area_hectares?: number;
   max_area_hectares?: number;
-  enforce_constraints?: boolean;
   num_sectors?: number;
+  arterial_road_types?: string[];
 }
 
 export interface PartitionResponse {
@@ -275,137 +255,57 @@ export interface PartitionResponse {
   processing_time_seconds: number;
 }
 
-// Regular (non-streaming) partitioning
-export async function partitionCity(request: PartitionRequest): Promise<PartitionResponse> {
-  const response = await api.post<PartitionResponse>('/partition', {
+function partitionBody(request: PartitionRequest): Record<string, unknown> {
+  return {
     bbox: request.bbox,
     target_size_hectares: request.target_size_hectares ?? 12,
     min_area_hectares: request.min_area_hectares ?? 6,
     max_area_hectares: request.max_area_hectares ?? 20,
-    enforce_constraints: request.enforce_constraints ?? true,
+    enforce_constraints: true,
     num_sectors: request.num_sectors ?? 4,
-  });
+    arterial_road_types: request.arterial_road_types ?? ['primary', 'secondary', 'tertiary'],
+  };
+}
+
+export async function partitionCity(request: PartitionRequest): Promise<PartitionResponse> {
+  const response = await api.post<PartitionResponse>('/partition', partitionBody(request));
   return response.data;
 }
 
-// Streaming partitioning with progress updates
 export async function partitionCityWithProgress(
   request: PartitionRequest,
-  onProgress?: (progress: PartitionProgress) => void
+  onProgress?: (progress: PartitionProgress) => void,
+  signal?: AbortSignal,
 ): Promise<PartitionResponse> {
-  console.log('[Partition] Starting streaming partition...');
-
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify({
-      bbox: request.bbox,
-      target_size_hectares: request.target_size_hectares ?? 12,
-      min_area_hectares: request.min_area_hectares ?? 6,
-      max_area_hectares: request.max_area_hectares ?? 20,
-      enforce_constraints: request.enforce_constraints ?? true,
-      num_sectors: request.num_sectors ?? 4,
-    });
-
-    const url = `${API_BASE_URL}/partition/stream`;
-    console.log('[Partition] Fetching:', url);
-
-    fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'text/event-stream',
-      },
-      body,
-    })
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const reader = response.body?.getReader();
-        if (!reader) {
-          throw new Error('No response body');
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        const processStream = async (): Promise<void> => {
-          try {
-            const { done, value } = await reader.read();
-
-            if (done) {
-              reject(new Error('Stream ended without completion'));
-              return;
-            }
-
-            const chunk = decoder.decode(value, { stream: true });
-            buffer += chunk;
-
-            const lines = buffer.split('\n\n');
-            buffer = lines.pop() || '';
-
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                try {
-                  const data = JSON.parse(line.slice(6));
-
-                  if (data.type === 'progress') {
-                    onProgress?.({
-                      stage: data.stage,
-                      percent: data.percent,
-                      message: data.message,
-                      current_superblock: data.current_superblock,
-                      total_superblocks: data.total_superblocks,
-                    });
-                  } else if (data.type === 'complete') {
-                    console.log('[Partition] Complete!', data.partition?.total_superblocks, 'superblocks');
-                    resolve({
-                      partition: data.partition,
-                      street_network: {
-                        type: 'FeatureCollection',
-                        features: [],
-                        metadata: {
-                          bbox: request.bbox,
-                          total_edges: 0,
-                          total_length_km: 0,
-                          road_type_counts: {},
-                          network_type: 'drive',
-                        },
-                      },
-                      processing_time_seconds: data.processing_time_seconds,
-                    });
-                    return;
-                  } else if (data.type === 'error') {
-                    reject(new Error(data.message));
-                    return;
-                  }
-                } catch (e) {
-                  console.error('[Partition] Failed to parse SSE data:', e);
-                }
-              }
-            }
-
-            return processStream();
-          } catch (streamError) {
-            reject(streamError);
-          }
+  let result: PartitionResponse | undefined;
+  await streamPost(
+    '/partition/stream',
+    partitionBody(request),
+    (event) => {
+      if (event.type === 'progress') {
+        onProgress?.(event as unknown as PartitionProgress);
+      } else if (event.type === 'complete') {
+        result = {
+          partition: event.partition as unknown as CityPartition,
+          street_network: event.street_network as unknown as StreetNetworkResponse,
+          processing_time_seconds: event.processing_time_seconds as number,
         };
-
-        processStream().catch(reject);
-      })
-      .catch(reject);
-  });
+        return true;
+      }
+      return false;
+    },
+    signal,
+  );
+  if (!result) throw new Error('Partitioning completed without a result');
+  return result;
 }
-
-// =============================================================================
-// Routing API
-// =============================================================================
 
 export interface RouteRequest {
   origin: Coordinates;
   destination: Coordinates;
   respect_superblocks?: boolean;
   prefer_arterials?: boolean;
+  partition?: CityPartition;
 }
 
 export async function computeRoute(request: RouteRequest): Promise<RouteResult> {
@@ -414,17 +314,14 @@ export async function computeRoute(request: RouteRequest): Promise<RouteResult> 
     destination: request.destination,
     respect_superblocks: request.respect_superblocks ?? true,
     prefer_arterials: request.prefer_arterials ?? true,
+    partition: request.partition,
   });
   return response.data;
 }
 
-// =============================================================================
-// Size Optimization API
-// =============================================================================
-
 export async function getOptimalSize(
   bbox: BoundingBox,
-  populationDensity?: number
+  populationDensity?: number,
 ): Promise<SizeRecommendation> {
   const response = await api.get<SizeRecommendation>('/optimize/size', {
     params: {

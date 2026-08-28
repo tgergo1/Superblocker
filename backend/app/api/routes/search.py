@@ -1,9 +1,10 @@
-from fastapi import APIRouter, HTTPException, Query
 import httpx
+from fastapi import APIRouter, HTTPException, Query
 
 from app.core.config import get_settings
-from app.models.schemas import SearchResponse, SearchResult, BoundingBox
+from app.models.schemas import BoundingBox, SearchResponse, SearchResult
 from app.services.cache_service import get_cache_service
+from app.services.nominatim_service import nominatim_get
 
 router = APIRouter()
 settings = get_settings()
@@ -11,7 +12,12 @@ settings = get_settings()
 
 @router.get("/search", response_model=SearchResponse)
 async def search_places(
-    q: str = Query(..., min_length=2, description="Search query for city/place name"),
+    q: str = Query(
+        ...,
+        min_length=2,
+        max_length=200,
+        description="Search query submitted explicitly by the user",
+    ),
     limit: int = Query(default=5, ge=1, le=20, description="Maximum number of results"),
 ):
     """
@@ -21,32 +27,38 @@ async def search_places(
 
     Returns a list of matching places with their coordinates and bounding boxes.
     """
+    query = q.strip()
+    if len(query) < 2:
+        raise HTTPException(
+            status_code=422,
+            detail="Search query must contain at least two non-whitespace characters",
+        )
+
     # Check cache first
-    cache_params = {"query": q.lower().strip(), "limit": limit}
+    cache_params = {"query": query.lower(), "limit": limit}
     cache_service = get_cache_service()
     cached_data = cache_service.get("search", cache_params)
 
     if cached_data is not None:
         return SearchResponse(results=[SearchResult(**r) for r in cached_data])
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                f"{settings.nominatim_url}/search",
-                params={
-                    "q": q,
-                    "format": "json",
-                    "limit": limit,
-                    "addressdetails": 1,
-                    "extratags": 1,
-                },
-                headers={"User-Agent": settings.nominatim_user_agent},
-                timeout=10.0,
-            )
-            response.raise_for_status()
-        except httpx.TimeoutException:
-            raise HTTPException(status_code=504, detail="Nominatim request timed out")
-        except httpx.HTTPError as e:
-            raise HTTPException(status_code=502, detail=f"Nominatim error: {str(e)}")
+    try:
+        response = await nominatim_get(
+            "/search",
+            params={
+                "q": query,
+                "format": "json",
+                "limit": limit,
+                "addressdetails": 1,
+                "extratags": 1,
+            },
+        )
+        response.raise_for_status()
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="Place search timed out") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502, detail="Place search is temporarily unavailable"
+        ) from exc
 
     data = response.json()
 
@@ -65,10 +77,10 @@ async def search_places(
             # Fallback: create small bbox around point
             lat, lon = float(item["lat"]), float(item["lon"])
             bounding_box = BoundingBox(
-                south=lat - 0.01,
-                north=lat + 0.01,
-                west=lon - 0.01,
-                east=lon + 0.01,
+                south=max(-90, lat - 0.01),
+                north=min(90, lat + 0.01),
+                west=max(-180, lon - 0.01),
+                east=min(180, lon + 0.01),
             )
 
         results.append(
@@ -104,20 +116,30 @@ async def reverse_geocode(
     """
     Reverse geocode coordinates to get place information.
     """
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                f"{settings.nominatim_url}/reverse",
-                params={
-                    "lat": lat,
-                    "lon": lon,
-                    "format": "json",
-                },
-                headers={"User-Agent": settings.nominatim_user_agent},
-                timeout=10.0,
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as e:
-            raise HTTPException(status_code=502, detail=f"Nominatim error: {str(e)}")
+    cache_params = {"lat": round(lat, 5), "lon": round(lon, 5)}
+    cache_service = get_cache_service()
+    cached_data = cache_service.get("reverse_search", cache_params)
+    if cached_data is not None:
+        return cached_data
 
-    return response.json()
+    try:
+        response = await nominatim_get(
+            "/reverse",
+            params={"lat": lat, "lon": lon, "format": "json"},
+        )
+        response.raise_for_status()
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="Reverse geocoding timed out") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502, detail="Reverse geocoding is temporarily unavailable"
+        ) from exc
+
+    data = response.json()
+    cache_service.set(
+        "reverse_search",
+        cache_params,
+        data,
+        ttl_seconds=settings.cache_search_ttl_seconds,
+    )
+    return data

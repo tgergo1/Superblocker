@@ -1,26 +1,15 @@
-# FastAPI and server
-fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
-python-multipart>=0.0.6
+# Runtime dependencies verified together on Python 3.12.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+python-multipart==0.0.32
 
-# Geospatial
-osmnx>=1.9.0
-networkx>=3.2
-geopandas>=0.14.0
-shapely>=2.0.0
-pyproj>=3.6.0
+osmnx==2.1.1
+networkx==3.6.1
+geopandas==1.1.4
+shapely==2.1.2
+pyproj==3.7.2
 
-# Database (optional, for future caching)
-# sqlalchemy>=2.0.0
-# geoalchemy2>=0.14.0
-# psycopg2-binary>=2.9.0
-
-# HTTP client
-httpx>=0.26.0
-
-# Data validation
-pydantic>=2.5.0
-pydantic-settings>=2.1.0
-
-# Utilities
-python-dotenv>=1.0.0
+httpx==0.28.1
+pydantic==2.13.4
+pydantic-settings==2.15.0
+python-dotenv==1.2.3

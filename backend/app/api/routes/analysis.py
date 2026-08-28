@@ -1,45 +1,83 @@
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
-from typing import Optional
-import json
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-import threading
-import queue
+import json
 import logging
+import math
+import queue
+import threading
 import time
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
+
+from app.core.config import get_settings
+from app.core.workload import guard_expensive_request
 from app.models.schemas import (
-    StreetNetworkRequest,
-    StreetNetworkResponse,
     AnalysisRequest,
     AnalysisResponse,
     BoundingBox,
+    Coordinates,
+    PartitionProgress,
     PartitionRequest,
     PartitionResponse,
-    PartitionProgress,
     RouteRequest,
     RouteResult,
-    ValidationRequest,
-    ValidationResult,
-    Coordinates,
+    StreetNetworkRequest,
+    StreetNetworkResponse,
 )
-from app.services.osm_service import get_street_network, get_street_network_graph
-from app.services.traffic import estimate_traffic
 from app.services.detection.superblock_analyzer import SuperblockAnalyzer
+from app.services.osm_service import (
+    get_street_network,
+    get_street_network_graph,
+    graph_to_street_network,
+)
 from app.services.partitioning.city_partitioner import CityPartitioner
 from app.services.routing.superblock_router import SuperblockRouter
 from app.services.sizing.size_optimizer import calculate_optimal_superblock_size
+from app.services.traffic import estimate_traffic
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 # Thread pool for CPU-bound analysis
-analysis_executor = ThreadPoolExecutor(max_workers=2)
+analysis_executor = ThreadPoolExecutor(
+    max_workers=settings.analysis_max_workers,
+    thread_name_prefix="superblock-work",
+)
+
+
+class WorkCancelled(RuntimeError):
+    """Raised inside a worker when its streaming client disconnects."""
+
+
+def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise WorkCancelled("Analysis cancelled after client disconnect")
+
+
+def _json_safe(value):
+    """Recursively replace non-finite numeric values before public serialization."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _sse_data(payload: dict) -> str:
+    return f"data: {json.dumps(_json_safe(payload), allow_nan=False)}\n\n"
 
 
 @router.post("/network", response_model=StreetNetworkResponse)
-async def fetch_street_network(request: StreetNetworkRequest):
+async def fetch_street_network(
+    request: StreetNetworkRequest,
+    _permit: None = Depends(guard_expensive_request),
+):
     """
     Fetch street network for a bounding box.
 
@@ -56,38 +94,56 @@ async def fetch_street_network(request: StreetNetworkRequest):
 
         return network
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching network: {str(e)}")
+        logger.exception("Unhandled error fetching street network")
+        raise HTTPException(status_code=500, detail="Unable to fetch the street network") from e
 
 
-def run_analysis_sync(bbox: BoundingBox, min_area: float, max_area: float, progress_queue: queue.Queue):
+def run_analysis_sync(
+    bbox: BoundingBox,
+    min_area: float,
+    max_area: float,
+    boundary_road_types: set[str],
+    progress_queue: queue.Queue,
+    cancel_event: threading.Event | None = None,
+):
     """
     Run the analysis synchronously in a thread.
     Uses a thread-safe queue for progress updates.
     """
+
     def progress_callback(stage: str, percent: int, message: str):
+        _raise_if_cancelled(cancel_event)
         try:
-            progress_queue.put_nowait({
-                "type": "progress",
-                "stage": stage,
-                "percent": percent,
-                "message": message,
-            })
+            progress_queue.put_nowait(
+                {
+                    "type": "progress",
+                    "stage": stage,
+                    "percent": percent,
+                    "message": message,
+                }
+            )
             logger.info("Progress update: %s %s%% - %s", stage, percent, message)
         except queue.Full:
             pass
 
+    _raise_if_cancelled(cancel_event)
     logger.info(
         "Analysis thread started (min_area=%.2f max_area=%.2f bbox=%s)",
         min_area,
         max_area,
         bbox.model_dump(),
     )
-    analyzer = SuperblockAnalyzer(min_area=min_area, max_area=max_area)
+    analyzer = SuperblockAnalyzer(
+        min_area=min_area,
+        max_area=max_area,
+        boundary_road_types=boundary_road_types,
+    )
 
     # Run synchronous version of analyze
     import asyncio
+
     loop = asyncio.new_event_loop()
     try:
         start_time = time.time()
@@ -103,8 +159,11 @@ def run_analysis_sync(bbox: BoundingBox, min_area: float, max_area: float, progr
         loop.close()
 
 
-@router.post("/analyze")
-async def analyze_superblocks(request: AnalysisRequest):
+@router.post("/analyze", response_model=AnalysisResponse)
+async def analyze_superblocks(
+    request: AnalysisRequest,
+    _permit: None = Depends(guard_expensive_request),
+):
     """
     Analyze an area for potential superblocks.
 
@@ -119,15 +178,17 @@ async def analyze_superblocks(request: AnalysisRequest):
             request.bbox.model_dump(),
         )
         # Run in thread pool to not block event loop
-        progress_queue = queue.Queue()
-        loop = asyncio.get_event_loop()
+        progress_queue = queue.Queue(maxsize=100)
+        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             analysis_executor,
             run_analysis_sync,
             request.bbox,
             request.min_area_hectares,
             request.max_area_hectares,
+            {road_type.value for road_type in request.boundary_road_types},
             progress_queue,
+            None,
         )
 
         response = {
@@ -138,67 +199,71 @@ async def analyze_superblocks(request: AnalysisRequest):
             "parameters": {
                 "min_area_hectares": request.min_area_hectares,
                 "max_area_hectares": request.max_area_hectares,
-                "algorithms": request.algorithms,
-            }
+                "algorithms": [algorithm.value for algorithm in request.algorithms],
+                "boundary_road_types": [
+                    road_type.value for road_type in request.boundary_road_types
+                ],
+            },
         }
         logger.info("Completed /analyze request (total_found=%s)", response["total_found"])
         return response
     except ValueError as e:
         logger.warning("Validation error in /analyze: %s", e)
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.exception("Unhandled error in /analyze")
-        raise HTTPException(status_code=500, detail=f"Error analyzing area: {str(e)}")
+        raise HTTPException(status_code=500, detail="Unable to analyze this area") from e
 
 
 @router.post("/analyze/stream")
-async def analyze_superblocks_stream(request: AnalysisRequest):
+async def analyze_superblocks_stream(
+    request: AnalysisRequest,
+    http_request: Request,
+    _permit: None = Depends(guard_expensive_request),
+):
     """
     Analyze an area for potential superblocks with streaming progress updates.
 
     Returns Server-Sent Events (SSE) with progress updates followed by final results.
     """
     # Thread-safe queue for cross-thread communication
-    progress_queue = queue.Queue()
-    result_holder = {"result": None, "error": None, "done": False}
-
-    def run_in_thread():
-        """Run the analysis in a separate thread."""
-        try:
-            logger.info(
-                "Stream analysis thread starting (min_area=%.2f max_area=%.2f bbox=%s)",
-                request.min_area_hectares,
-                request.max_area_hectares,
-                request.bbox.model_dump(),
-            )
-            result = run_analysis_sync(
-                request.bbox,
-                request.min_area_hectares,
-                request.max_area_hectares,
-                progress_queue,
-            )
-            result_holder["result"] = result
-            logger.info("Stream analysis thread completed")
-        except Exception as e:
-            logger.exception("Stream analysis thread error")
-            result_holder["error"] = str(e)
-        finally:
-            result_holder["done"] = True
+    progress_queue = queue.Queue(maxsize=100)
 
     async def generate():
-        # Start analysis in background thread
-        thread = threading.Thread(target=run_in_thread)
-        thread.start()
+        loop = asyncio.get_running_loop()
+        cancel_event = threading.Event()
+        stream_task = asyncio.current_task()
+        if stream_task is not None:
+            stream_task.add_done_callback(lambda _task: cancel_event.set())
+        future = loop.run_in_executor(
+            analysis_executor,
+            run_analysis_sync,
+            request.bbox,
+            request.min_area_hectares,
+            request.max_area_hectares,
+            {road_type.value for road_type in request.boundary_road_types},
+            progress_queue,
+            cancel_event,
+        )
         logger.info("Streaming response started")
 
         # Stream progress updates
         last_heartbeat = time.time()
-        while not result_holder["done"]:
+        while not future.done():
+            if await http_request.is_disconnected():
+                cancel_event.set()
+                future.cancel()
+                logger.info("Analysis stream client disconnected")
+                return
             try:
                 # Non-blocking check for progress
                 progress = progress_queue.get_nowait()
-                logger.info("Streaming progress event: %s %s%%", progress.get("stage"), progress.get("percent"))
-                yield f"data: {json.dumps(progress)}\n\n"
+                logger.info(
+                    "Streaming progress event: %s %s%%",
+                    progress.get("stage"),
+                    progress.get("percent"),
+                )
+                yield _sse_data(progress)
             except queue.Empty:
                 # No progress yet, wait a bit
                 now = time.time()
@@ -212,20 +277,17 @@ async def analyze_superblocks_stream(request: AnalysisRequest):
         while True:
             try:
                 progress = progress_queue.get_nowait()
-                logger.info("Streaming final progress event: %s %s%%", progress.get("stage"), progress.get("percent"))
-                yield f"data: {json.dumps(progress)}\n\n"
+                logger.info(
+                    "Streaming final progress event: %s %s%%",
+                    progress.get("stage"),
+                    progress.get("percent"),
+                )
+                yield _sse_data(progress)
             except queue.Empty:
                 break
 
-        # Wait for thread to complete
-        thread.join(timeout=1.0)
-
-        # Send final result
-        if result_holder["error"]:
-            logger.error("Streaming analysis failed: %s", result_holder["error"])
-            yield f"data: {json.dumps({'type': 'error', 'message': result_holder['error']})}\n\n"
-        elif result_holder["result"]:
-            result = result_holder["result"]
+        try:
+            result = await future
             final_data = {
                 "type": "complete",
                 "candidates": result.get("candidates", []),
@@ -233,10 +295,10 @@ async def analyze_superblocks_stream(request: AnalysisRequest):
                 "network_stats": result.get("network_stats", {}),
             }
             logger.info("Streaming analysis complete (total_found=%s)", final_data["total_found"])
-            yield f"data: {json.dumps(final_data)}\n\n"
-        else:
-            logger.error("Streaming analysis completed with no result")
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Analysis completed with no result'})}\n\n"
+            yield _sse_data(final_data)
+        except Exception:
+            logger.exception("Streaming analysis failed")
+            yield _sse_data({"type": "error", "message": "Unable to analyze this area"})
 
     return StreamingResponse(
         generate(),
@@ -245,7 +307,7 @@ async def analyze_superblocks_stream(request: AnalysisRequest):
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
-        }
+        },
     )
 
 
@@ -256,21 +318,87 @@ async def fetch_network_by_bbox(
     east: float,
     west: float,
     network_type: str = "drive",
+    _permit: None = Depends(guard_expensive_request),
 ):
     """
     Fetch street network using query parameters (GET alternative).
     """
-    bbox = BoundingBox(north=north, south=south, east=east, west=west)
-    request = StreetNetworkRequest(bbox=bbox, network_type=network_type)
-    return await fetch_street_network(request)
+    try:
+        bbox = BoundingBox(north=north, south=south, east=east, west=west)
+        request = StreetNetworkRequest(bbox=bbox, network_type=network_type)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return await fetch_street_network(request, _permit)
 
 
 # =============================================================================
 # City Partitioning Endpoints
 # =============================================================================
 
-# Storage for partition results (in production, use proper storage)
-partition_cache: dict[str, dict] = {}
+
+@dataclass
+class CachedPartition:
+    partition: object
+    graph: object
+    created_at: float
+
+
+class PartitionStore:
+    """Small TTL/LRU optimization cache; routing does not depend on it."""
+
+    def __init__(self, max_entries: int, ttl_seconds: int) -> None:
+        self._entries: OrderedDict[str, CachedPartition] = OrderedDict()
+        self._max_entries = max(1, max_entries)
+        self._ttl_seconds = max(1, ttl_seconds)
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def key(bbox: BoundingBox) -> str:
+        return "_".join(
+            str(round(value, 6)) for value in (bbox.north, bbox.south, bbox.east, bbox.west)
+        )
+
+    def put(self, partition: object, graph: object, bbox: BoundingBox) -> None:
+        with self._lock:
+            key = self.key(bbox)
+            self._entries[key] = CachedPartition(partition, graph, time.monotonic())
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._max_entries:
+                self._entries.popitem(last=False)
+
+    def find(self, origin: Coordinates, destination: Coordinates) -> CachedPartition | None:
+        now = time.monotonic()
+        with self._lock:
+            for key, cached in list(self._entries.items()):
+                if now - cached.created_at > self._ttl_seconds:
+                    del self._entries[key]
+                    continue
+                bbox = cached.partition.bbox
+                if (
+                    bbox.west <= origin.lon <= bbox.east
+                    and bbox.south <= origin.lat <= bbox.north
+                    and bbox.west <= destination.lon <= bbox.east
+                    and bbox.south <= destination.lat <= bbox.north
+                ):
+                    self._entries.move_to_end(key)
+                    return cached
+        return None
+
+    def get_exact(self, bbox: BoundingBox) -> CachedPartition | None:
+        with self._lock:
+            cached = self._entries.get(self.key(bbox))
+            if cached is None:
+                return None
+            if time.monotonic() - cached.created_at > self._ttl_seconds:
+                del self._entries[self.key(bbox)]
+                return None
+            return cached
+
+
+partition_store = PartitionStore(
+    settings.partition_cache_max_entries,
+    settings.partition_cache_ttl_seconds,
+)
 
 
 def run_partition_sync(
@@ -280,7 +408,9 @@ def run_partition_sync(
     max_area: float,
     num_sectors: int,
     enforce_constraints: bool,
+    arterial_road_types: set[str],
     progress_queue: queue.Queue,
+    cancel_event: threading.Event | None = None,
 ):
     """
     Run city partitioning synchronously in a thread.
@@ -288,22 +418,33 @@ def run_partition_sync(
     import asyncio
 
     def progress_callback(progress: PartitionProgress):
+        _raise_if_cancelled(cancel_event)
         try:
-            progress_queue.put_nowait({
-                "type": "progress",
-                "stage": progress.stage,
-                "percent": progress.percent,
-                "message": progress.message,
-                "current_superblock": progress.current_superblock,
-                "total_superblocks": progress.total_superblocks,
-            })
-            logger.info("Partition progress: %s %s%% - %s", progress.stage, progress.percent, progress.message)
+            progress_queue.put_nowait(
+                {
+                    "type": "progress",
+                    "stage": progress.stage,
+                    "percent": progress.percent,
+                    "message": progress.message,
+                    "current_superblock": progress.current_superblock,
+                    "total_superblocks": progress.total_superblocks,
+                }
+            )
+            logger.info(
+                "Partition progress: %s %s%% - %s",
+                progress.stage,
+                progress.percent,
+                progress.message,
+            )
         except queue.Full:
             pass
 
+    _raise_if_cancelled(cancel_event)
     logger.info(
         "Partition thread started (target_size=%.2f min_area=%.2f max_area=%.2f)",
-        target_size, min_area, max_area,
+        target_size,
+        min_area,
+        max_area,
     )
 
     loop = asyncio.new_event_loop()
@@ -319,31 +460,40 @@ def run_partition_sync(
             min_area_ha=min_area,
             max_area_ha=max_area,
             num_sectors=num_sectors,
-            progress_callback=progress_callback if enforce_constraints else None,
+            arterial_road_types=arterial_road_types,
+            enforce_constraints=enforce_constraints,
+            progress_callback=progress_callback,
         )
 
         # Run partitioning
         start_time = time.time()
         partition = partitioner.partition()
         elapsed = time.time() - start_time
+        network = estimate_traffic(graph_to_street_network(graph, bbox))
 
         logger.info(
             "Partition completed in %.1fs (superblocks=%s coverage=%.1f%%)",
-            elapsed, partition.total_superblocks, partition.coverage_percent,
+            elapsed,
+            partition.total_superblocks,
+            partition.coverage_percent,
         )
 
         return {
             "partition": partition,
             "graph": graph,
             "processing_time": elapsed,
+            "network": network,
         }
 
     finally:
         loop.close()
 
 
-@router.post("/partition")
-async def partition_city(request: PartitionRequest):
+@router.post("/partition", response_model=PartitionResponse)
+async def partition_city(
+    request: PartitionRequest,
+    _permit: None = Depends(guard_expensive_request),
+):
     """
     Partition a city area into superblocks with enforced enter-exit constraints.
 
@@ -365,8 +515,8 @@ async def partition_city(request: PartitionRequest):
             request.num_sectors,
         )
 
-        progress_queue = queue.Queue()
-        loop = asyncio.get_event_loop()
+        progress_queue = queue.Queue(maxsize=100)
+        loop = asyncio.get_running_loop()
 
         result = await loop.run_in_executor(
             analysis_executor,
@@ -377,72 +527,73 @@ async def partition_city(request: PartitionRequest):
             request.max_area_hectares,
             request.num_sectors,
             request.enforce_constraints,
+            {road_type.value for road_type in request.arterial_road_types},
             progress_queue,
+            None,
         )
 
         partition = result["partition"]
 
         # Cache the result for routing
-        cache_key = f"{request.bbox.north}_{request.bbox.south}_{request.bbox.east}_{request.bbox.west}"
-        partition_cache[cache_key] = {
-            "partition": partition,
-            "graph": result["graph"],
-        }
-
-        # Get street network for response
-        network = await get_street_network(request.bbox)
+        partition_store.put(partition, result["graph"], request.bbox)
 
         return {
             "partition": partition.model_dump(),
-            "street_network": network.model_dump(),
+            "street_network": result["network"].model_dump(),
             "processing_time_seconds": result["processing_time"],
         }
 
     except ValueError as e:
         logger.warning("Validation error in /partition: %s", e)
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.exception("Unhandled error in /partition")
-        raise HTTPException(status_code=500, detail=f"Error partitioning city: {str(e)}")
+        raise HTTPException(status_code=500, detail="Unable to partition this area") from e
 
 
 @router.post("/partition/stream")
-async def partition_city_stream(request: PartitionRequest):
+async def partition_city_stream(
+    request: PartitionRequest,
+    http_request: Request,
+    _permit: None = Depends(guard_expensive_request),
+):
     """
     Partition a city with streaming progress updates.
 
     Returns Server-Sent Events (SSE) with progress updates followed by final results.
     """
-    progress_queue = queue.Queue()
-    result_holder = {"result": None, "error": None, "done": False}
-
-    def run_in_thread():
-        try:
-            result = run_partition_sync(
-                request.bbox,
-                request.target_size_hectares,
-                request.min_area_hectares,
-                request.max_area_hectares,
-                request.num_sectors,
-                request.enforce_constraints,
-                progress_queue,
-            )
-            result_holder["result"] = result
-        except Exception as e:
-            logger.exception("Partition stream thread error")
-            result_holder["error"] = str(e)
-        finally:
-            result_holder["done"] = True
+    progress_queue = queue.Queue(maxsize=100)
 
     async def generate():
-        thread = threading.Thread(target=run_in_thread)
-        thread.start()
+        loop = asyncio.get_running_loop()
+        cancel_event = threading.Event()
+        stream_task = asyncio.current_task()
+        if stream_task is not None:
+            stream_task.add_done_callback(lambda _task: cancel_event.set())
+        future = loop.run_in_executor(
+            analysis_executor,
+            run_partition_sync,
+            request.bbox,
+            request.target_size_hectares,
+            request.min_area_hectares,
+            request.max_area_hectares,
+            request.num_sectors,
+            request.enforce_constraints,
+            {road_type.value for road_type in request.arterial_road_types},
+            progress_queue,
+            cancel_event,
+        )
         logger.info("Partition streaming started")
 
-        while not result_holder["done"]:
+        while not future.done():
+            if await http_request.is_disconnected():
+                cancel_event.set()
+                future.cancel()
+                logger.info("Partition stream client disconnected")
+                return
             try:
                 progress = progress_queue.get_nowait()
-                yield f"data: {json.dumps(progress)}\n\n"
+                yield _sse_data(progress)
             except queue.Empty:
                 await asyncio.sleep(0.1)
                 continue
@@ -451,32 +602,25 @@ async def partition_city_stream(request: PartitionRequest):
         while True:
             try:
                 progress = progress_queue.get_nowait()
-                yield f"data: {json.dumps(progress)}\n\n"
+                yield _sse_data(progress)
             except queue.Empty:
                 break
 
-        thread.join(timeout=1.0)
-
-        if result_holder["error"]:
-            yield f"data: {json.dumps({'type': 'error', 'message': result_holder['error']})}\n\n"
-        elif result_holder["result"]:
-            partition = result_holder["result"]["partition"]
-
-            # Cache for routing
-            cache_key = f"{request.bbox.north}_{request.bbox.south}_{request.bbox.east}_{request.bbox.west}"
-            partition_cache[cache_key] = {
-                "partition": partition,
-                "graph": result_holder["result"]["graph"],
-            }
+        try:
+            result = await future
+            partition = result["partition"]
+            partition_store.put(partition, result["graph"], request.bbox)
 
             final_data = {
                 "type": "complete",
                 "partition": partition.model_dump(),
-                "processing_time_seconds": result_holder["result"]["processing_time"],
+                "street_network": result["network"].model_dump(),
+                "processing_time_seconds": result["processing_time"],
             }
-            yield f"data: {json.dumps(final_data)}\n\n"
-        else:
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Partition completed with no result'})}\n\n"
+            yield _sse_data(final_data)
+        except Exception:
+            logger.exception("Partition stream failed")
+            yield _sse_data({"type": "error", "message": "Unable to partition this area"})
 
     return StreamingResponse(
         generate(),
@@ -485,7 +629,7 @@ async def partition_city_stream(request: PartitionRequest):
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
-        }
+        },
     )
 
 
@@ -495,7 +639,10 @@ async def partition_city_stream(request: PartitionRequest):
 
 
 @router.post("/route", response_model=RouteResult)
-async def compute_route(request: RouteRequest):
+async def compute_route(
+    request: RouteRequest,
+    _permit: None = Depends(guard_expensive_request),
+):
     """
     Compute a route that respects superblock constraints.
 
@@ -507,41 +654,52 @@ async def compute_route(request: RouteRequest):
     Requires a partition to have been computed first for this area.
     """
     try:
-        # Find cached partition that contains origin and destination
-        origin_point = (request.origin.lon, request.origin.lat)
-        dest_point = (request.destination.lon, request.destination.lat)
+        partition = request.partition
+        cached = partition_store.get_exact(partition.bbox) if partition else None
+        if partition is None:
+            cached = partition_store.find(request.origin, request.destination)
+            partition = cached.partition if cached else None
 
-        matching_cache = None
-        for cache_key, cached in partition_cache.items():
-            bbox = cached["partition"].bbox
-            if (bbox.west <= origin_point[0] <= bbox.east and
-                bbox.south <= origin_point[1] <= bbox.north and
-                bbox.west <= dest_point[0] <= bbox.east and
-                bbox.south <= dest_point[1] <= bbox.north):
-                matching_cache = cached
-                break
-
-        if matching_cache is None:
+        if partition is None:
             return RouteResult(
                 success=False,
-                blocked_reason="No partition found for this area. Run /partition first.",
+                blocked_reason=(
+                    "No partition supplied for this area. Run /partition first and "
+                    "include its partition in the route request."
+                ),
             )
+
+        bbox = partition.bbox
+        if not (
+            bbox.west <= request.origin.lon <= bbox.east
+            and bbox.south <= request.origin.lat <= bbox.north
+            and bbox.west <= request.destination.lon <= bbox.east
+            and bbox.south <= request.destination.lat <= bbox.north
+        ):
+            return RouteResult(
+                success=False,
+                blocked_reason="Origin and destination must be inside the partition bounds.",
+            )
+
+        graph = cached.graph if cached else await get_street_network_graph(bbox)
+        if cached is None:
+            partition_store.put(partition, graph, bbox)
 
         # Create router
         router_instance = SuperblockRouter(
-            graph=matching_cache["graph"],
-            partition=matching_cache["partition"],
+            graph=graph,
+            partition=partition,
         )
 
         # Compute route
         result = router_instance.route(request)
         return result
 
-    except Exception as e:
+    except Exception:
         logger.exception("Error computing route")
         return RouteResult(
             success=False,
-            blocked_reason=f"Error computing route: {str(e)}",
+            blocked_reason="Unable to compute a route for these points.",
         )
 
 
@@ -552,6 +710,7 @@ async def test_route_get(
     dest_lat: float,
     dest_lon: float,
     respect_superblocks: bool = True,
+    _permit: None = Depends(guard_expensive_request),
 ):
     """
     Test route computation (GET alternative for easy testing).
@@ -561,7 +720,7 @@ async def test_route_get(
         destination=Coordinates(lat=dest_lat, lon=dest_lon),
         respect_superblocks=respect_superblocks,
     )
-    return await compute_route(request)
+    return await compute_route(request, _permit)
 
 
 # =============================================================================
@@ -575,7 +734,8 @@ async def get_optimal_size(
     south: float,
     east: float,
     west: float,
-    population_density: Optional[float] = None,
+    population_density: float | None = Query(default=None, ge=0),
+    _permit: None = Depends(guard_expensive_request),
 ):
     """
     Calculate optimal superblock size for an area.
@@ -610,6 +770,8 @@ async def get_optimal_size(
             "rationale": recommendation.rationale,
         }
 
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.exception("Error calculating optimal size")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Unable to calculate an optimal size") from e

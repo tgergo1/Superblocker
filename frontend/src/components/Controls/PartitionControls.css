@@ -1,11 +1,75 @@
 .partition-controls {
   position: relative;
   background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.15);
   width: 100%;
   max-width: 100%;
   overflow: hidden;
+}
+
+.partition-controls .planner-intro {
+  padding: 16px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(59, 130, 246, 0.13), transparent 46%),
+    linear-gradient(145deg, #f8fbff 0%, #ffffff 72%);
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.partition-controls .planner-kicker {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.partition-controls .planner-intro h2 {
+  margin: 9px 0 5px;
+  color: #0f172a;
+  font-size: 17px;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+}
+
+.partition-controls .planner-intro p {
+  margin: 0;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.48;
+}
+
+.partition-controls .planner-rule {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 11px;
+  padding: 9px 10px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: rgba(239, 246, 255, 0.86);
+  color: #1e3a8a;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.partition-controls .planner-rule > span {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: #2563eb;
+  color: white;
+  font-size: 11px;
 }
 
 /* Settings Toggle */
@@ -15,7 +79,7 @@
   align-items: center;
   gap: 8px;
   padding: 12px 16px;
-  background: #f9fafb;
+  background: #f8fafc;
   border: none;
   border-bottom: 1px solid #e5e7eb;
   font-size: 13px;
@@ -38,6 +102,7 @@
 .partition-controls .settings-panel {
   padding: 12px 16px;
   border-bottom: 1px solid #e5e7eb;
+  overflow-y: auto;
 }
 
 .partition-controls .param-group {
@@ -93,6 +158,16 @@
   font-size: 10px;
   color: #9ca3af;
   margin-top: 4px;
+}
+
+.partition-controls .settings-note {
+  display: block;
+  padding: 8px 9px;
+  border-radius: 6px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 /* Checkbox styling */
@@ -205,6 +280,7 @@
 .partition-controls .action-button {
   width: calc(100% - 32px);
   margin: 12px 16px;
+  min-height: 42px;
   padding: 10px 16px;
   border: none;
   border-radius: 6px;
@@ -216,6 +292,13 @@
   justify-content: center;
   gap: 8px;
   transition: all 0.2s ease;
+}
+
+.partition-controls .action-hint {
+  margin: -5px 16px 12px;
+  color: #94a3b8;
+  font-size: 10px;
+  text-align: center;
 }
 
 .partition-controls .partition-button {
@@ -238,6 +321,27 @@
   cursor: wait;
 }
 
+.partition-controls .cancel-button {
+  border: 1px solid #fecaca;
+  background: white;
+  color: #b91c1c;
+}
+
+.partition-controls .cancel-button:hover {
+  background: #fef2f2;
+}
+
+.partition-controls .control-error {
+  margin: 0 16px 12px;
+  padding: 9px 10px;
+  border: 1px solid #fecaca;
+  border-radius: 7px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 /* Spinner */
 .partition-controls .spinner {
   width: 14px;
@@ -256,8 +360,72 @@
 
 /* Results Summary */
 .partition-controls .results-summary {
-  padding: 12px 16px;
+  padding: 14px 16px;
   background: #f9fafb;
+  border-top: 1px solid #e5e7eb;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.partition-controls .validation-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 13px;
+  padding: 9px 10px;
+  border: 1px solid;
+  border-radius: 8px;
+}
+
+.partition-controls .validation-banner.success {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.partition-controls .validation-banner.failure {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.partition-controls .validation-icon {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  color: white;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.partition-controls .validation-banner.success .validation-icon {
+  background: #16a34a;
+}
+
+.partition-controls .validation-banner.failure .validation-icon {
+  background: #dc2626;
+}
+
+.partition-controls .validation-banner > span:last-child {
+  min-width: 0;
+}
+
+.partition-controls .validation-banner strong,
+.partition-controls .validation-banner small {
+  display: block;
+}
+
+.partition-controls .validation-banner strong {
+  font-size: 11px;
+}
+
+.partition-controls .validation-banner small {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 9px;
+  line-height: 1.35;
 }
 
 .partition-controls .summary-title {
@@ -273,6 +441,23 @@
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 12px;
+}
+
+.partition-controls .modification-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.partition-controls .modification-breakdown span {
+  padding: 3px 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: white;
+  color: #64748b;
+  font-size: 9px;
 }
 
 .partition-controls .summary-item {
@@ -304,4 +489,226 @@
   font-size: 11px;
   color: #92400e;
   text-align: center;
+}
+
+/* Street-by-street implementation schedule */
+.partition-controls .street-action-plan {
+  padding: 15px 12px 13px;
+  border-bottom: 1px solid #e5e7eb;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(99, 102, 241, 0.08), transparent 38%),
+    #ffffff;
+}
+
+.partition-controls .action-plan-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 4px;
+}
+
+.partition-controls .action-plan-kicker {
+  color: #6366f1;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.partition-controls .action-plan-header h3 {
+  margin: 3px 0 0;
+  color: #0f172a;
+  font-size: 13px;
+  letter-spacing: -0.015em;
+}
+
+.partition-controls .action-plan-count {
+  display: grid;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 7px;
+  place-items: center;
+  border: 1px solid #c7d2fe;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.partition-controls .action-plan-intro {
+  margin: 7px 4px 10px;
+  color: #64748b;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.partition-controls .street-action-list {
+  display: flex;
+  max-height: 330px;
+  margin: 0;
+  padding: 1px 4px 1px 3px;
+  flex-direction: column;
+  gap: 7px;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.partition-controls .street-action-item {
+  --action-color: #d97706;
+  --action-tint: #fffbeb;
+  position: relative;
+  display: grid;
+  grid-template-columns: 25px minmax(0, 1fr);
+  gap: 9px;
+  padding: 9px 9px 9px 8px;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid var(--action-color);
+  border-radius: 9px;
+  background: linear-gradient(110deg, var(--action-tint), white 58%);
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.045);
+}
+
+.partition-controls .street-action-item.modal_filter {
+  --action-color: #dc2626;
+  --action-tint: #fef2f2;
+}
+
+.partition-controls .street-action-item.one_way {
+  --action-color: #2563eb;
+  --action-tint: #eff6ff;
+}
+
+.partition-controls .street-action-item.two_way {
+  --action-color: #0d9488;
+  --action-tint: #f0fdfa;
+}
+
+.partition-controls .street-action-item.turn_restriction {
+  --action-color: #d97706;
+  --action-tint: #fffbeb;
+}
+
+.partition-controls .street-action-item.full_closure {
+  --action-color: #7c3aed;
+  --action-tint: #f5f3ff;
+}
+
+.partition-controls .action-sign {
+  display: grid;
+  width: 23px;
+  height: 23px;
+  place-items: center;
+  align-self: start;
+  border: 2px solid white;
+  border-radius: 50%;
+  background: var(--action-color);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.22);
+  color: white;
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.partition-controls .action-sign.one_way,
+.partition-controls .action-sign.two_way {
+  border-color: var(--action-color);
+  background: white;
+  color: var(--action-color);
+}
+
+.partition-controls .action-sign.two_way {
+  font-size: 8px;
+  letter-spacing: -2px;
+  text-indent: -1px;
+}
+
+.partition-controls .street-action-copy {
+  min-width: 0;
+}
+
+.partition-controls .street-action-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.partition-controls .street-action-heading strong {
+  color: var(--action-color);
+  font-size: 9px;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.partition-controls .street-action-heading span {
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  color: #64748b;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.partition-controls .street-action-copy p {
+  margin: 4px 0 3px;
+  color: #1e293b;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.partition-controls .street-action-copy small {
+  display: block;
+  color: #64748b;
+  font-size: 8.5px;
+  line-height: 1.4;
+}
+
+@media (max-width: 560px) {
+  .partition-controls .planner-intro {
+    padding: 12px 14px;
+  }
+
+  .partition-controls .planner-intro h2 {
+    margin-top: 7px;
+    font-size: 15px;
+  }
+
+  .partition-controls .planner-intro p {
+    font-size: 10px;
+    line-height: 1.4;
+  }
+
+  .partition-controls .planner-rule {
+    margin-top: 8px;
+    padding: 7px 8px;
+  }
+
+  .partition-controls.has-results .planner-intro p,
+  .partition-controls.has-results .planner-rule {
+    display: none;
+  }
+
+  .partition-controls.has-results .planner-intro h2 {
+    margin-bottom: 0;
+  }
+
+  .partition-controls .settings-panel {
+    max-height: 158px;
+  }
+
+  .partition-controls .street-action-list {
+    max-height: 230px;
+  }
+
+  .partition-controls .settings-toggle {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+  }
 }

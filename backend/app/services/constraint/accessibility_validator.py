@@ -10,18 +10,17 @@ become unreachable, they are flagged for manual review rather than
 relaxing the no-through-traffic constraint.
 """
 
-import networkx as nx
+import itertools
 import logging
-from typing import Optional
 from dataclasses import dataclass
-from shapely.geometry import Point
+
+import networkx as nx
 
 from app.models.schemas import (
+    Coordinates,
     EnforcedSuperblock,
     StreetModification,
     UnreachableAddress,
-    Coordinates,
-    EntryPoint,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,6 +29,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AccessibilityReport:
     """Report on accessibility within a superblock."""
+
     total_nodes: int
     reachable_nodes: int
     unreachable_nodes: int
@@ -109,6 +109,15 @@ class AccessibilityValidator:
                     for k in list(modified[mod.v][mod.u].keys()):
                         modified.remove_edge(mod.v, mod.u, k)
 
+            elif mod.modification_type.value == "two_way":
+                if not self.graph.has_edge(mod.u, mod.v):
+                    continue
+                edge_data = self.graph[mod.u][mod.v].get(mod.key)
+                if edge_data is None:
+                    edge_data = next(iter(self.graph[mod.u][mod.v].values()), None)
+                if edge_data is not None and not modified.has_edge(mod.v, mod.u):
+                    modified.add_edge(mod.v, mod.u, **dict(edge_data))
+
         return modified
 
     def validate(self) -> AccessibilityReport:
@@ -150,15 +159,17 @@ class AccessibilityValidator:
             node_data = self.modified_graph.nodes.get(node_id, {})
             nearest_sector = self._find_nearest_entry_sector(node_id)
 
-            unreachable_addresses.append(UnreachableAddress(
-                node_id=node_id,
-                coordinates=Coordinates(
-                    lat=node_data.get("y", 0),
-                    lon=node_data.get("x", 0),
-                ),
-                nearest_entry_sector=nearest_sector,
-                reason=self._diagnose_unreachability(node_id, entry_nodes),
-            ))
+            unreachable_addresses.append(
+                UnreachableAddress(
+                    node_id=node_id,
+                    coordinates=Coordinates(
+                        lat=node_data.get("y", 0),
+                        lon=node_data.get("x", 0),
+                    ),
+                    nearest_entry_sector=nearest_sector,
+                    reason=self._diagnose_unreachability(node_id, entry_nodes),
+                )
+            )
 
         # Check emergency access
         emergency_ok = reachability_pct >= (self.EMERGENCY_ACCESS_MIN_NODES * 100)
@@ -219,7 +230,7 @@ class AccessibilityValidator:
         for ep in self.superblock.entry_points:
             dx = ep.coordinates.lon - node_x
             dy = ep.coordinates.lat - node_y
-            dist = dx*dx + dy*dy
+            dist = dx * dx + dy * dy
 
             if dist < best_dist:
                 best_dist = dist
@@ -227,9 +238,7 @@ class AccessibilityValidator:
 
         return best_sector
 
-    def _diagnose_unreachability(
-        self, node_id: int, entry_nodes: set[int]
-    ) -> str:
+    def _diagnose_unreachability(self, node_id: int, entry_nodes: set[int]) -> str:
         """
         Diagnose why a node is unreachable.
 
@@ -261,7 +270,7 @@ class AccessibilityValidator:
 
                 try:
                     path = nx.shortest_path(self.graph, entry, node_id)
-                    path_edges = set(zip(path[:-1], path[1:]))
+                    path_edges = set(itertools.pairwise(path))
 
                     if (mod.u, mod.v) in path_edges or (mod.v, mod.u) in path_edges:
                         blocking_mods.append(mod)
@@ -275,9 +284,7 @@ class AccessibilityValidator:
 
         return "Disconnected after modifications (complex topology)"
 
-    def _suggest_fixes(
-        self, unreachable_nodes: set[int], entry_nodes: set[int]
-    ) -> list[str]:
+    def _suggest_fixes(self, unreachable_nodes: set[int], entry_nodes: set[int]) -> list[str]:
         """
         Suggest fixes for unreachable nodes.
 
@@ -300,8 +307,7 @@ class AccessibilityValidator:
 
         elif len(clusters) > 1:
             fixes.append(
-                f"{len(clusters)} disconnected areas found. "
-                "Review superblock boundary placement."
+                f"{len(clusters)} disconnected areas found. Review superblock boundary placement."
             )
 
         if len(unreachable_nodes) > 10:
@@ -311,25 +317,23 @@ class AccessibilityValidator:
             )
 
         # Check if a single modification is blocking many nodes
-        mod_impact = {}
+        mod_impact: list[tuple[StreetModification, int]] = []
         for mod in self.superblock.modifications:
             impact = self._estimate_modification_impact(mod, unreachable_nodes, entry_nodes)
             if impact > 0:
-                mod_impact[mod] = impact
+                mod_impact.append((mod, impact))
 
         if mod_impact:
-            worst_mod = max(mod_impact, key=mod_impact.get)
-            if mod_impact[worst_mod] > len(unreachable_nodes) * 0.5:
+            worst_mod, worst_impact = max(mod_impact, key=lambda item: item[1])
+            if worst_impact > len(unreachable_nodes) * 0.5:
                 fixes.append(
                     f"Modification at edge ({worst_mod.u}, {worst_mod.v}) "
-                    f"blocks {mod_impact[worst_mod]} nodes. Consider alternative placement."
+                    f"blocks {worst_impact} nodes. Consider alternative placement."
                 )
 
         return fixes
 
-    def _cluster_unreachable_nodes(
-        self, unreachable_nodes: set[int]
-    ) -> list[set[int]]:
+    def _cluster_unreachable_nodes(self, unreachable_nodes: set[int]) -> list[set[int]]:
         """Group unreachable nodes by connectivity in original graph."""
         if not unreachable_nodes:
             return []
@@ -358,15 +362,18 @@ class AccessibilityValidator:
 
         # "Undo" the modification
         if mod.modification_type.value == "modal_filter":
-            # Re-add edges from original
+            # Re-add edges from original and clear the block marker on edges
+            # that remained present in the modified graph.
             if self.graph.has_edge(mod.u, mod.v):
                 for k, data in self.graph[mod.u][mod.v].items():
                     if not test_graph.has_edge(mod.u, mod.v, k):
                         test_graph.add_edge(mod.u, mod.v, key=k, **data)
+                    test_graph[mod.u][mod.v][k]["vehicle_blocked"] = False
             if self.graph.has_edge(mod.v, mod.u):
                 for k, data in self.graph[mod.v][mod.u].items():
                     if not test_graph.has_edge(mod.v, mod.u, k):
                         test_graph.add_edge(mod.v, mod.u, key=k, **data)
+                    test_graph[mod.v][mod.u][k]["vehicle_blocked"] = False
 
         elif mod.modification_type.value == "one_way":
             # Re-add blocked direction
@@ -378,6 +385,19 @@ class AccessibilityValidator:
                 if self.graph.has_edge(mod.u, mod.v):
                     for k, data in self.graph[mod.u][mod.v].items():
                         test_graph.add_edge(mod.u, mod.v, key=k, **data)
+
+        elif mod.modification_type.value == "full_closure":
+            for u, v in ((mod.u, mod.v), (mod.v, mod.u)):
+                if self.graph.has_edge(u, v):
+                    for k, data in self.graph[u][v].items():
+                        test_graph.add_edge(u, v, key=k, **data)
+
+        blocked_edges = [
+            (u, v, key)
+            for u, v, key, data in test_graph.edges(keys=True, data=True)
+            if data.get("vehicle_blocked", False)
+        ]
+        test_graph.remove_edges_from(blocked_edges)
 
         # Count newly reachable nodes
         reachable_after_undo = set()

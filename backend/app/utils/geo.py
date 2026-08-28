@@ -1,7 +1,8 @@
-from shapely.geometry import Polygon, LineString, Point, box
-from shapely.ops import polygonize
 import math
 from typing import Any
+
+from shapely.geometry import LineString, Point, Polygon, box
+from shapely.ops import polygonize
 
 
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -22,8 +23,10 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     delta_phi = math.radians(lat2 - lat1)
     delta_lambda = math.radians(lon2 - lon1)
 
-    a = math.sin(delta_phi / 2) ** 2 + \
-        math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2
+    a = (
+        math.sin(delta_phi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2
+    )
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
     return R * c
@@ -49,6 +52,33 @@ def bbox_area_hectares(north: float, south: float, east: float, west: float) -> 
     return area_m2 / 10000
 
 
+def validate_bbox_size(
+    north: float,
+    south: float,
+    east: float,
+    west: float,
+    *,
+    max_span_degrees: float,
+    max_area_km2: float,
+) -> None:
+    """Reject invalid or excessively expensive geographic requests."""
+    if north <= south or east <= west:
+        raise ValueError("north must be greater than south and east must be greater than west")
+
+    if north - south > max_span_degrees or east - west > max_span_degrees:
+        raise ValueError(
+            f"Bounding box span exceeds the {max_span_degrees:g} degree limit. "
+            "Please select a smaller area."
+        )
+
+    area_km2 = bbox_area_hectares(north, south, east, west) / 100
+    if area_km2 > max_area_km2:
+        raise ValueError(
+            f"Bounding box area exceeds the {max_area_km2:g} km² limit. "
+            "Please select a smaller area."
+        )
+
+
 def polygon_area_hectares(polygon: Polygon) -> float:
     """
     Calculate area of a polygon in hectares.
@@ -63,7 +93,7 @@ def polygon_area_hectares(polygon: Polygon) -> float:
         Approximate area in hectares
     """
     # Get bounding box
-    minx, miny, maxx, maxy = polygon.bounds
+    _minx, miny, _maxx, maxy = polygon.bounds
 
     # Calculate approximate conversion factor at the polygon's center
     center_lat = (miny + maxy) / 2

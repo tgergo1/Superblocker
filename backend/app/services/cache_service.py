@@ -18,11 +18,12 @@ import hashlib
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,7 @@ class CacheService:
         self,
         cache_type: str,
         params: dict,
-    ) -> Optional[Any]:
+    ) -> Any | None:
         """
         Retrieve data from cache.
 
@@ -164,7 +165,7 @@ class CacheService:
                 return None
 
             try:
-                with open(cache_path, "r", encoding="utf-8") as f:
+                with open(cache_path, encoding="utf-8") as f:
                     cache_data = json.load(f)
 
                 entry = CacheEntry(
@@ -176,9 +177,7 @@ class CacheService:
                 )
 
                 if entry.is_expired():
-                    logger.debug(
-                        "Cache expired for %s (key=%s)", cache_type, cache_key[:12]
-                    )
+                    logger.debug("Cache expired for %s (key=%s)", cache_type, cache_key[:12])
                     self._stats.misses += 1
                     # Clean up expired entry
                     self._delete_entry(cache_path)
@@ -196,6 +195,7 @@ class CacheService:
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("Cache read error for %s: %s", cache_key[:12], e)
                 self._stats.misses += 1
+                self._delete_entry(cache_path)
                 return None
 
     def set(
@@ -203,7 +203,7 @@ class CacheService:
         cache_type: str,
         params: dict,
         data: Any,
-        ttl_seconds: Optional[int] = None,
+        ttl_seconds: int | None = None,
     ) -> bool:
         """
         Store data in cache.
@@ -234,9 +234,21 @@ class CacheService:
         }
 
         with self._lock:
+            temporary_path: Path | None = None
             try:
-                with open(cache_path, "w", encoding="utf-8") as f:
-                    json.dump(cache_data, f)
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=self.cache_dir,
+                    prefix=f".{cache_key}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as temporary_file:
+                    json.dump(cache_data, temporary_file)
+                    temporary_file.flush()
+                    os.fsync(temporary_file.fileno())
+                    temporary_path = Path(temporary_file.name)
+                os.replace(temporary_path, cache_path)
 
                 logger.info(
                     "Cached %s (key=%s, ttl=%ds)",
@@ -248,6 +260,8 @@ class CacheService:
 
             except (TypeError, OSError) as e:
                 logger.error("Cache write error for %s: %s", cache_key[:12], e)
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
                 return False
 
     def _delete_entry(self, cache_path: Path) -> bool:
@@ -261,8 +275,8 @@ class CacheService:
 
     def invalidate(
         self,
-        cache_type: Optional[str] = None,
-        params: Optional[dict] = None,
+        cache_type: str | None = None,
+        params: dict | None = None,
     ) -> int:
         """
         Invalidate cache entries.
@@ -294,7 +308,7 @@ class CacheService:
                 try:
                     if cache_type:
                         # Check if entry matches type
-                        with open(cache_file, "r", encoding="utf-8") as f:
+                        with open(cache_file, encoding="utf-8") as f:
                             entry_data = json.load(f)
                         if entry_data.get("cache_type") != cache_type:
                             continue
@@ -306,9 +320,7 @@ class CacheService:
                     if self._delete_entry(cache_file):
                         count += 1
 
-            logger.info(
-                "Invalidated %d cache entries (type=%s)", count, cache_type or "all"
-            )
+            logger.info("Invalidated %d cache entries (type=%s)", count, cache_type or "all")
             return count
 
     def cleanup_expired(self) -> int:
@@ -325,15 +337,18 @@ class CacheService:
         with self._lock:
             for cache_file in self.cache_dir.glob("*.json"):
                 try:
-                    with open(cache_file, "r", encoding="utf-8") as f:
+                    with open(cache_file, encoding="utf-8") as f:
                         entry_data = json.load(f)
 
                     created_at = entry_data.get("created_at", 0)
                     ttl = entry_data.get("ttl_seconds", self.default_ttl)
 
-                    if ttl > 0 and time.time() > (created_at + ttl):
-                        if self._delete_entry(cache_file):
-                            count += 1
+                    if (
+                        ttl > 0
+                        and time.time() > (created_at + ttl)
+                        and self._delete_entry(cache_file)
+                    ):
+                        count += 1
 
                 except (json.JSONDecodeError, OSError):
                     # Delete corrupted entries
@@ -369,7 +384,7 @@ class CacheService:
                     stats.total_size_bytes += file_size
                     stats.entries_count += 1
 
-                    with open(cache_file, "r", encoding="utf-8") as f:
+                    with open(cache_file, encoding="utf-8") as f:
                         entry_data = json.load(f)
 
                     cache_type = entry_data.get("cache_type", "unknown")
@@ -390,7 +405,7 @@ class CacheService:
 
 
 # Global cache service instance - initialized lazily
-_cache_service: Optional[CacheService] = None
+_cache_service: CacheService | None = None
 _cache_lock = threading.Lock()
 
 

@@ -1,235 +1,171 @@
 # Superblocker
 
-A web application for identifying and visualizing potential superblocks in any city worldwide. Combines OpenStreetMap data with traffic modeling to help urban planners, researchers, and citizens explore pedestrian-friendly urban transformations.
+Superblocker is an automated citywide street-network planner. It turns a complete OpenStreetMap driving network into non-overlapping superblocks, proposes the access changes required to remove interior cross-traffic, and keeps travel between superblocks on the arterial boundary network.
 
-![Main Interface](docs/screenshots/main-interface.png)
+![Superblocker main interface](docs/screenshots/main-interface.png)
 
-## Features
+> [!IMPORTANT]
+> The output is an algorithmic planning proposal derived from OpenStreetMap topology. Every plan still requires transport-engineering, emergency-access, accessibility, and on-site validation before implementation.
 
-### 🔍 City Search
-Search and select any city or area worldwide using Nominatim geocoding. Results appear instantly as you type, with location type badges for easy identification.
+## What it does
 
-![City Search](docs/screenshots/city-search.png)
+- Searches for a city or place using a throttled and cached Nominatim client.
+- Downloads and analyzes the complete OpenStreetMap driving network inside the selected boundary.
+- Identifies the arterial grid that becomes the cross-traffic and inter-superblock network.
+- Polygonizes that grid into a complete city partition and optimizes cells toward the selected size range.
+- Assigns entries to four cardinal entry/return sectors and eliminates every directed path between different sectors.
+- Uses minimum-cost modal filters, street cuts, and one-way changes first; if those would lose existing access, a connectivity-preserving directional-territory plan is used instead.
+- Re-validates every superblock and exposes the exact boundary roads, entry directions, access modifications, coverage, and any remaining local-access review items.
+- Tests trips against the finished plan with cross-superblock travel forced onto boundary roads.
+- Streams progress throughout the long-running city analysis.
 
-### 🛣️ Street Network Visualization
-Load the complete road network for any selected area. Roads are color-coded by classification — from motorways (red) down to residential streets (green) — with line width reflecting road importance.
+![Full partition mode](docs/screenshots/full-partition-mode.png)
 
-![Street Network — Road Type Mode](docs/screenshots/street-network-road-type.png)
+## Architecture
 
-### 🚦 Traffic Estimation
-Switch to Traffic mode to see estimated traffic intensity across the network. A green-to-red heat gradient highlights congestion hot-spots based on road capacity, lane count, and speed limits.
+The backend is a Python 3.12 FastAPI application using OSMnx, NetworkX, GeoPandas, Shapely, and PyProj. Expensive OSM and graph work runs through a bounded worker pool with per-client request limits. File-cache writes are atomic, and the optional in-memory partition cache is bounded by size and TTL; route correctness does not depend on that cache because a partition can be included in every route request.
 
-![Traffic Intensity Mode](docs/screenshots/traffic-intensity-mode.png)
+The frontend is React 19 and TypeScript, built by Vite. MapLibre renders an OpenStreetMap raster basemap with no API key, while deck.gl renders the street network, city partition, boundary-road network, directional entries, and access changes. Set `VITE_OSM_TILE_URL` to use another OSM-compatible tile endpoint in a deployment. The development server and production nginx container both proxy `/api` to the backend, so no public backend URL is baked into the production bundle.
 
-### 🏙️ Superblock Detection & Impact Metrics
-Run the analysis to automatically detect superblock candidates using centrality-based algorithms. View heuristic impact metrics including through-traffic reduction, avoided interior vehicle-kilometers / CO₂, and recoverable pedestrian street area.
+## Local development
 
-![Superblock Analysis Results](docs/screenshots/superblock-analysis-results.png)
+Prerequisites:
 
-### 🔄 Candidate Intervention Preview
-Select a superblock candidate and switch to Changes mode to inspect pedestrianized streets, one-way conversions, and modal filters before moving to a full city-wide partition.
+- Python 3.12
+- Node.js 22 and npm
 
-![Changes Mode](docs/screenshots/changes-mode.png)
-
-### ⚙️ Configurable Analysis
-Fine-tune detection parameters such as minimum and maximum superblock area (Barcelona-style defaults: 4–25 ha). Toggle between Road Type, Traffic, and Changes color modes to compare the network, traffic intensity, and proposed interventions.
-
-![Analysis Settings](docs/screenshots/analysis-settings.png)
-
-### 📐 Full City Partitioning
-Go beyond individual candidates with the Full Partition mode. Generate a city-wide partitioning plan, inspect individual superblock details, and review entry points, modal filters, street cuts, one-way conversions, and accessibility warnings.
-
-![Full Partition Mode](docs/screenshots/full-partition-mode.png)
-
-### 🚗 Route Validation
-Validate routes against the generated partition using either address search or manual coordinates. Compare paths while respecting superblock constraints and review distance, travel time, arterial share, and traversed superblocks.
-
-![Route Validator](docs/screenshots/route-validator.png)
-
-### Coming Soon
-
-- Export to PDF/GeoJSON
-- Real traffic count import for calibration
-
-## Tech Stack
-
-### Backend
-- Python 3.11+ with FastAPI
-- OSMnx for street network analysis
-- NetworkX for graph algorithms
-- GeoPandas/Shapely for geospatial operations
-
-### Frontend
-- React 18 with TypeScript
-- deck.gl for high-performance map visualization
-- react-map-gl for Mapbox integration
-- TanStack Query for data fetching
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.11+
-- Node.js 18+
-- npm or yarn
-
-### Backend Setup
+Start the backend:
 
 ```bash
 cd backend
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Copy environment file
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
 cp .env.example .env
-
-# Run the server
 uvicorn app.main:app --reload
 ```
 
-The API will be available at `http://localhost:8000`. API docs at `http://localhost:8000/docs`.
-
-### Frontend Setup
+Start the frontend in a second terminal:
 
 ```bash
 cd frontend
-
-# Install dependencies
-npm install
-
-# Copy environment file
+npm ci
 cp .env.example .env
-
-# Start development server
 npm run dev
 ```
 
-The app will be available at `http://localhost:5173`.
+Open `http://localhost:5173`. FastAPI's interactive API documentation is at `http://localhost:8000/docs`.
 
-### Docker Setup (Alternative)
+## Docker Compose
 
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
-This will start both backend and frontend services.
+Open `http://localhost:5173`. The frontend nginx service proxies API and SSE traffic to the non-root backend container. Both services have health checks, and OSM/application caches use named volumes with non-root-compatible paths.
+
+The Compose backend port is intentionally not published to the host; nginx is its trusted proxy and preserves client addresses for per-client workload limits. Use the local-development setup when you need direct access to port 8000.
+
+To override backend settings, add an `environment` entry or `env_file` to the backend service. Set a long random `ADMIN_API_KEY` before using cache-maintenance endpoints.
 
 ## Usage
 
-1. **Search for a city**: Type a city name (e.g., "Barcelona", "Budapest") in the search box
-2. **Select from results**: Click on a search result to zoom to that location
-3. **Load street network**: Click "Load Street Network" to fetch road data from OpenStreetMap
-4. **Explore the map**: Hover over roads to see details (name, type, capacity, traffic estimates)
-5. **Analyze candidates**: Run the candidate workflow and review impact metrics plus proposed street changes
-6. **Partition the city**: Generate a full partition with modal filters, street cuts, and entry points
-7. **Validate routes**: Test origin-destination trips against the generated superblock plan
+1. Enter a city or district name and submit the search.
+2. Select the correct boundary.
+3. Choose **Analyze entire city**. The road download, arterial detection, partitioning, access design, and validation run as one workflow.
+4. Inspect the highlighted blue boundary-road network, directional entry/return signs, street-action markers and schedule, validation status, and coverage.
+5. Optionally test an origin-destination pair; the planned route will respect superblocks and use boundary roads between them.
 
-## API Endpoints
+Analysis deliberately rejects very large bounding boxes. Tune `MAX_BBOX_SPAN_DEGREES` and `MAX_BBOX_AREA_KM2` only after considering OSM download size and graph-processing cost.
 
-### Search
-- `GET /api/v1/search?q={query}` - Search for places
+## API
 
-### Analysis
-- `POST /api/v1/network` - Fetch street network for a bounding box
-- `POST /api/v1/analyze` - Analyze area for superblock candidates (coming soon)
+All application endpoints are under `/api/v1`:
 
-### Cache Management
-- `GET /api/v1/cache/stats` - Get cache statistics
-- `DELETE /api/v1/cache?cache_type={type}` - Clear cache entries (optional type filter)
-- `POST /api/v1/cache/cleanup` - Remove expired cache entries
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/search` | Forward place search |
+| `GET` | `/search/reverse` | Reverse geocoding |
+| `POST` | `/network` | Download and classify a street network |
+| `GET` | `/network/bbox` | Query-parameter alternative to `/network` |
+| `POST` | `/analyze` | Legacy candidate-analysis compatibility endpoint |
+| `POST` | `/analyze/stream` | Legacy candidate analysis with SSE progress |
+| `POST` | `/partition` | Generate a city-wide partition and its network |
+| `POST` | `/partition/stream` | Generate a partition with SSE progress |
+| `POST` | `/route` | Route with an optional supplied partition |
+| `GET` | `/optimize/size` | Recommend a target size from grid properties |
+| `GET` | `/cache/stats` | Return non-sensitive cache statistics |
+| `DELETE` | `/cache` | Clear cache entries; requires `X-Admin-Key` |
+| `POST` | `/cache/cleanup` | Remove expired entries; requires `X-Admin-Key` |
 
-## Caching
-
-The application includes a robust caching system to improve performance by avoiding redundant API calls and computations.
-
-### What is Cached
-
-- **Street Network Data** (`network`): Downloaded road networks from OpenStreetMap (7 days TTL)
-- **Analysis Results** (`analysis`): Superblock detection and analysis results (24 hours TTL)  
-- **Search Results** (`search`): Nominatim geocoding search results (1 hour TTL)
-
-### Configuration
-
-Cache settings can be configured via environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CACHE_ENABLED` | `true` | Enable or disable caching |
-| `CACHE_DIR` | `cache` | Directory for cache files |
-| `CACHE_TTL_SECONDS` | `86400` | Default cache TTL (24 hours) |
-| `CACHE_NETWORK_TTL_SECONDS` | `604800` | Network data TTL (7 days) |
-| `CACHE_ANALYSIS_TTL_SECONDS` | `86400` | Analysis results TTL (24 hours) |
-| `CACHE_SEARCH_TTL_SECONDS` | `3600` | Search results TTL (1 hour) |
-
-### Cache Management
-
-View cache statistics:
-```bash
-curl http://localhost:8000/api/v1/cache/stats
-```
-
-Clear all cache:
-```bash
-curl -X DELETE http://localhost:8000/api/v1/cache
-```
-
-Clear specific cache type:
-```bash
-curl -X DELETE "http://localhost:8000/api/v1/cache?cache_type=network"
-```
-
-Remove expired entries:
-```bash
-curl -X POST http://localhost:8000/api/v1/cache/cleanup
-```
-
-## Project Structure
-
-```
-superblocker/
-├── backend/
-│   ├── app/
-│   │   ├── main.py              # FastAPI app entry
-│   │   ├── api/routes/          # API endpoints
-│   │   ├── core/                # Configuration
-│   │   ├── models/              # Pydantic schemas
-│   │   ├── services/            # Business logic
-│   │   │   └── cache_service.py # Caching system
-│   │   └── utils/               # Utilities
-│   └── requirements.txt
-├── frontend/
-│   ├── src/
-│   │   ├── components/          # React components
-│   │   ├── hooks/               # Custom hooks
-│   │   ├── services/            # API client
-│   │   └── types/               # TypeScript types
-│   └── package.json
-└── docker-compose.yml
-```
+`GET /health` is the unauthenticated health check. OpenAPI schemas are available at `/openapi.json` and `/docs`.
 
 ## Configuration
 
-### Backend (.env)
-- `DEBUG` - Enable debug mode
-- `CORS_ORIGINS` - Allowed CORS origins
-- `NOMINATIM_USER_AGENT` - User agent for Nominatim requests
-- `CACHE_ENABLED` - Enable/disable caching (default: true)
-- `CACHE_DIR` - Cache directory path (default: cache)
-- `CACHE_*_TTL_SECONDS` - TTL settings for different cache types
+Copy [`backend/.env.example`](backend/.env.example) and [`frontend/.env.example`](frontend/.env.example) for the complete defaults. Important backend settings include:
 
-### Frontend (.env)
-- `VITE_API_URL` - Backend API URL
-- `VITE_MAPBOX_TOKEN` - Optional Mapbox token for premium basemaps
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CORS_ORIGINS` | local frontend origins | Explicit allowed browser origins |
+| `NOMINATIM_USER_AGENT` | project identifier | Required identifying user agent |
+| `NOMINATIM_MIN_INTERVAL_SECONDS` | `1.0` | Aggregate geocoder request throttle |
+| `MAX_BBOX_SPAN_DEGREES` | `0.5` | Maximum latitude/longitude span |
+| `MAX_BBOX_AREA_KM2` | `2500` | Maximum approximate physical area |
+| `ANALYSIS_MAX_WORKERS` | `2` | Bounded graph-analysis worker count |
+| `ANALYSIS_MAX_CONCURRENT_REQUESTS` | `2` | Simultaneous expensive request limit |
+| `ANALYSIS_RATE_LIMIT_PER_MINUTE` | `6` | Per-client expensive request budget |
+| `PARTITION_CACHE_MAX_ENTRIES` | `8` | In-process partition optimization cache size |
+| `PARTITION_CACHE_TTL_SECONDS` | `3600` | Partition optimization cache lifetime |
+| `ADMIN_API_KEY` | unset | Enables authenticated cache maintenance |
+| `CACHE_*_TTL_SECONDS` | varies | File-cache lifetimes by data type |
+
+The frontend defaults to same-origin `/api/v1` and OpenStreetMap's no-key raster tiles. Set `VITE_API_URL` only when the API is intentionally hosted on a different origin. Set `VITE_OSM_TILE_URL` when a deployment uses its own OSM-compatible tile service.
+
+## Quality checks
+
+Backend:
+
+```bash
+cd backend
+.venv/bin/ruff check app tests
+.venv/bin/ruff format --check app tests
+.venv/bin/pytest --cov=app --cov-report=term-missing
+.venv/bin/pip-audit -r requirements.txt
+```
+
+Frontend:
+
+```bash
+cd frontend
+npm test
+npm run lint
+npm run build
+npm audit
+```
+
+The CI workflow runs these checks and builds both production containers. Dependabot tracks Python, npm, and GitHub Actions dependencies.
+
+## Project layout
+
+```text
+Superblocker/
+├── backend/
+│   ├── app/api/routes/       # FastAPI HTTP and SSE endpoints
+│   ├── app/core/             # Settings and workload protection
+│   ├── app/models/           # Validated request/response models
+│   ├── app/services/         # OSM, detection, partitioning, routing, cache
+│   ├── app/utils/            # Geospatial helpers
+│   └── tests/                # Unit, integration, routing, and API tests
+├── frontend/
+│   ├── src/components/       # Search, map, controls, routing UI
+│   ├── src/hooks/            # Abortable data-loading hooks
+│   ├── src/services/         # HTTP and SSE client
+│   └── src/types/            # Shared TypeScript domain types
+├── docs/screenshots/
+├── .github/workflows/ci.yml
+└── docker-compose.yml
+```
 
 ## License
 
-GPL-3.0 - See [LICENSE](LICENSE) for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+Licensed under GPL-3.0. See [LICENSE](LICENSE).

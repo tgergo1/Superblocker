@@ -14,34 +14,36 @@ This module implements:
 6. Multi-criteria evaluation based on urban planning metrics
 """
 
-import networkx as nx
-import osmnx as ox
 import logging
+import math
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from shapely.geometry import Polygon, Point, LineString, MultiPolygon, mapping, shape
-from shapely.ops import polygonize, unary_union
-from shapely.strtree import STRtree
-import pyproj
-from shapely.ops import transform
 import uuid
-import math
-from typing import Any, Optional
-from dataclasses import dataclass, field, asdict
-from enum import Enum
-from itertools import combinations
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, dataclass, field
+from enum import StrEnum
+from itertools import combinations, pairwise
+from typing import Any, ClassVar
 
+import networkx as nx
+import osmnx as ox
+import pyproj
+from shapely.geometry import Point, Polygon, mapping, shape
+from shapely.ops import polygonize, transform, unary_union
+from shapely.strtree import STRtree
+
+from app.core.config import get_settings
 from app.models.schemas import BoundingBox
 from app.services.cache_service import get_cache_service
-from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-class InterventionType(str, Enum):
+class InterventionType(StrEnum):
     """Types of street interventions in a superblock."""
+
     PEDESTRIANIZE = "pedestrianize"  # Full pedestrianization
     ONE_WAY = "one_way"  # Convert to one-way
     MODAL_FILTER = "modal_filter"  # Allow bikes/emergency, block cars
@@ -52,10 +54,11 @@ class InterventionType(str, Enum):
 @dataclass
 class StreetIntervention:
     """Planned intervention for a street segment."""
+
     osm_id: int
-    name: Optional[str]
+    name: str | None
     intervention_type: InterventionType
-    direction: Optional[str] = None  # For one-way: 'forward', 'backward'
+    direction: str | None = None  # For one-way: 'forward', 'backward'
     access_allowed: list[str] = field(default_factory=lambda: ["emergency"])
     rationale: str = ""
 
@@ -63,6 +66,7 @@ class StreetIntervention:
 @dataclass
 class AccessibilityMetrics:
     """Accessibility analysis results."""
+
     max_walking_distance_to_boundary: float  # meters
     emergency_access_maintained: bool
     delivery_access_points: int
@@ -73,15 +77,17 @@ class AccessibilityMetrics:
 @dataclass
 class TrafficImpact:
     """Traffic redistribution analysis."""
+
     removed_through_traffic_pct: float  # % of through traffic removed
     boundary_load_increase_pct: float  # % increase on boundary roads
-    estimated_vmt_reduction: float  # Vehicle miles traveled reduction
+    estimated_vehicle_km_reduction: float
     affected_od_pairs: int  # Origin-destination pairs affected
 
 
 @dataclass
 class SuperblockScore:
     """Multi-criteria scoring breakdown."""
+
     size_score: float  # 0-100: Ideal size (9-16 ha)
     shape_score: float  # 0-100: Compactness/regularity
     traffic_score: float  # 0-100: Through-traffic removal potential
@@ -94,6 +100,7 @@ class SuperblockScore:
 @dataclass
 class SuperblockCandidate:
     """Complete superblock analysis result."""
+
     id: str
     geometry: dict  # GeoJSON polygon
     area_hectares: float
@@ -103,10 +110,10 @@ class SuperblockCandidate:
     algorithm: str
 
     # Enhanced analysis
-    score_breakdown: Optional[SuperblockScore] = None
+    score_breakdown: SuperblockScore | None = None
     interventions: list[StreetIntervention] = field(default_factory=list)
-    accessibility: Optional[AccessibilityMetrics] = None
-    traffic_impact: Optional[TrafficImpact] = None
+    accessibility: AccessibilityMetrics | None = None
+    traffic_impact: TrafficImpact | None = None
 
     # Network metrics
     boundary_centrality_mean: float = 0.0
@@ -175,12 +182,17 @@ class SuperblockAnalyzer:
     NETWORK_HEARTBEAT_SECONDS = 20
 
     # Road hierarchy for boundary suitability (lower = better for boundaries)
-    HIERARCHY_MAP = {
-        "motorway": 1, "motorway_link": 1,
-        "trunk": 2, "trunk_link": 2,
-        "primary": 3, "primary_link": 3,
-        "secondary": 4, "secondary_link": 4,
-        "tertiary": 5, "tertiary_link": 5,
+    HIERARCHY_MAP: ClassVar[dict[str, int]] = {
+        "motorway": 1,
+        "motorway_link": 1,
+        "trunk": 2,
+        "trunk_link": 2,
+        "primary": 3,
+        "primary_link": 3,
+        "secondary": 4,
+        "secondary_link": 4,
+        "tertiary": 5,
+        "tertiary_link": 5,
         "residential": 6,
         "living_street": 7,
         "unclassified": 8,
@@ -192,7 +204,7 @@ class SuperblockAnalyzer:
     }
 
     # Capacity estimates (vehicles/hour/lane) based on Highway Capacity Manual
-    CAPACITY_MAP = {
+    CAPACITY_MAP: ClassVar[dict[str, int]] = {
         "motorway": 2000,
         "trunk": 1800,
         "primary": 900,
@@ -207,7 +219,7 @@ class SuperblockAnalyzer:
     # Typical share of nominal capacity used by each road class in the absence
     # of observed counts. These values convert edge capacity into a heuristic
     # hourly traffic volume for candidate scoring and rerouting estimates.
-    LOAD_FACTOR_MAP = {
+    LOAD_FACTOR_MAP: ClassVar[dict[str, float]] = {
         "motorway": 0.70,
         "trunk": 0.65,
         "primary": 0.60,
@@ -226,14 +238,18 @@ class SuperblockAnalyzer:
         min_area: float = 4.0,
         max_area: float = 25.0,
         centrality_threshold_percentile: float = 70,
+        boundary_road_types: set[str] | None = None,
     ):
         self.min_area = min_area
         self.max_area = max_area
         self.centrality_threshold_pct = centrality_threshold_percentile
+        configured_types = boundary_road_types or {"primary", "secondary", "tertiary"}
+        self.boundary_road_types = configured_types | {
+            f"{road_type}_link" for road_type in configured_types
+        }
 
         # Projection for accurate area calculations
         self.proj_wgs84 = pyproj.CRS("EPSG:4326")
-        self.proj_mercator = pyproj.CRS("EPSG:3857")
 
     @staticmethod
     def _normalize_lanes(value: Any) -> int:
@@ -301,7 +317,7 @@ class SuperblockAnalyzer:
         interior_edges: list[dict[str, Any]],
         boundary_capacity: float,
         access_nodes: set[int],
-    ) -> Optional[TrafficImpact]:
+    ) -> TrafficImpact | None:
         """
         Estimate interior through-traffic removal using shortest-path rerouting.
 
@@ -313,8 +329,8 @@ class SuperblockAnalyzer:
             return None
 
         modified_graph = G.copy()
-        interior_edge_lookup: dict[tuple[int, int], dict[str, float]] = {}
-        total_interior_vehicle_km = 0.0
+        interior_edge_lookup: dict[tuple[int, int], tuple[int, int, int]] = {}
+        physical_interior_edges: dict[tuple[int, int, int], dict[str, float]] = {}
 
         for edge in interior_edges:
             u = edge["u"]
@@ -322,11 +338,14 @@ class SuperblockAnalyzer:
             key = edge["key"]
             length_m = float(edge["length_m"])
             estimated_volume = float(edge["estimated_volume"])
-            pair = (u, v)
+            osmid = int(edge.get("osmid", 0))
+            physical_key = (min(u, v), max(u, v), osmid)
+            interior_edge_lookup[(u, v)] = physical_key
+            interior_edge_lookup[(v, u)] = physical_key
 
-            current = interior_edge_lookup.get(pair)
+            current = physical_interior_edges.get(physical_key)
             if current is None:
-                interior_edge_lookup[pair] = {
+                physical_interior_edges[physical_key] = {
                     "length_m": length_m,
                     "estimated_volume": estimated_volume,
                 }
@@ -334,11 +353,13 @@ class SuperblockAnalyzer:
                 current["length_m"] = max(current["length_m"], length_m)
                 current["estimated_volume"] = max(current["estimated_volume"], estimated_volume)
 
-            total_interior_vehicle_km += (length_m / 1000.0) * estimated_volume
-
             if modified_graph.has_edge(u, v, key):
                 modified_graph.remove_edge(u, v, key)
 
+        total_interior_vehicle_km = sum(
+            (segment["length_m"] / 1000.0) * segment["estimated_volume"]
+            for segment in physical_interior_edges.values()
+        )
         if total_interior_vehicle_km <= 0:
             return None
 
@@ -346,8 +367,8 @@ class SuperblockAnalyzer:
         sampled_access_nodes = ranked_access_nodes[: self.MAX_TRAFFIC_IMPACT_ACCESS_POINTS]
 
         affected_od_pairs = 0
-        removed_vehicle_km = 0.0
-        diverted_volume = 0.0
+        affected_edge_keys: set[tuple[int, int, int]] = set()
+        reroutable_edge_keys: set[tuple[int, int, int]] = set()
 
         for origin, destination in combinations(sampled_access_nodes, 2):
             try:
@@ -355,36 +376,40 @@ class SuperblockAnalyzer:
             except (nx.NetworkXNoPath, nx.NodeNotFound):
                 continue
 
-            baseline_pairs = list(zip(baseline_path, baseline_path[1:]))
-            interior_segments = [
+            baseline_pairs = list(pairwise(baseline_path))
+            interior_keys = {
                 interior_edge_lookup[pair]
                 for pair in baseline_pairs
                 if pair in interior_edge_lookup
-            ]
+            }
 
-            if not interior_segments:
+            if not interior_keys:
                 continue
 
             affected_od_pairs += 1
-            pair_removed_vehicle_km = sum(
-                (segment["length_m"] / 1000.0) * segment["estimated_volume"]
-                for segment in interior_segments
-            )
-            removed_vehicle_km += pair_removed_vehicle_km
-            pair_diverted_volume = max(
-                (segment["estimated_volume"] for segment in interior_segments),
-                default=0.0,
-            )
-            diverted_volume += pair_diverted_volume
+            affected_edge_keys.update(interior_keys)
 
             try:
                 nx.shortest_path_length(modified_graph, origin, destination, weight="length")
+                reroutable_edge_keys.update(interior_keys)
             except (nx.NetworkXNoPath, nx.NodeNotFound):
-                diverted_volume -= pair_diverted_volume
+                pass
 
         if affected_od_pairs == 0:
             return None
 
+        removed_vehicle_km = sum(
+            (physical_interior_edges[key]["length_m"] / 1000.0)
+            * physical_interior_edges[key]["estimated_volume"]
+            for key in affected_edge_keys
+        )
+        # Sequential edges carry the same flow, so summing their volumes would
+        # count each vehicle repeatedly. Use the peak affected segment flow as
+        # the conservative load transferred to the boundary.
+        diverted_volume = max(
+            (physical_interior_edges[key]["estimated_volume"] for key in reroutable_edge_keys),
+            default=0.0,
+        )
         removed_through_traffic_pct = min(
             100.0,
             (removed_vehicle_km / total_interior_vehicle_km) * 100,
@@ -398,14 +423,14 @@ class SuperblockAnalyzer:
         return TrafficImpact(
             removed_through_traffic_pct=round(removed_through_traffic_pct, 1),
             boundary_load_increase_pct=round(boundary_load_increase_pct, 1),
-            estimated_vmt_reduction=round(removed_vehicle_km, 1),
+            estimated_vehicle_km_reduction=round(removed_vehicle_km, 1),
             affected_od_pairs=affected_od_pairs,
         )
 
     async def analyze(
         self,
         bbox: BoundingBox,
-        progress_callback: Optional[callable] = None,
+        progress_callback: Callable[[str, int, str], None] | None = None,
     ) -> dict:
         """
         Perform complete superblock analysis for an area.
@@ -415,6 +440,7 @@ class SuperblockAnalyzer:
         Returns:
             Dictionary with candidates, network stats, and analysis metadata.
         """
+
         def report_progress(stage: str, percent: int, message: str):
             if progress_callback:
                 progress_callback(stage, percent, message)
@@ -425,8 +451,7 @@ class SuperblockAnalyzer:
             raise ValueError("Invalid bounding box: north must be > south, east must be > west")
         if lat_diff > self.MAX_BBOX_SPAN_DEGREES or lon_diff > self.MAX_BBOX_SPAN_DEGREES:
             raise ValueError(
-                "Bounding box too large. Maximum size is ~50km. "
-                "Please select a smaller area."
+                "Bounding box too large. Maximum size is ~50km. Please select a smaller area."
             )
 
         # Round bbox coordinates for consistent cache keys (5 decimal places ~ 1m precision)
@@ -438,6 +463,7 @@ class SuperblockAnalyzer:
             "min_area": self.min_area,
             "max_area": self.max_area,
             "centrality_threshold_pct": self.centrality_threshold_pct,
+            "boundary_road_types": sorted(self.boundary_road_types),
         }
 
         # Check cache first
@@ -592,7 +618,7 @@ class SuperblockAnalyzer:
             return {
                 "candidates": [],
                 "network_stats": self._compute_network_stats(G),
-                "message": "No suitable superblock areas found"
+                "message": "No suitable superblock areas found",
             }
 
         logger.info("Detected %s candidates", len(candidates))
@@ -602,7 +628,7 @@ class SuperblockAnalyzer:
 
         # 4. Score and rank candidates in parallel
         scored_candidates = []
-        
+
         # Use ThreadPoolExecutor for parallel scoring (CPU-bound but with GIL,
         # still benefits from concurrency during I/O and geometry operations)
         # Limit to 4 workers based on:
@@ -610,7 +636,7 @@ class SuperblockAnalyzer:
         # - Balance between parallelism and thread management overhead
         # - Python GIL contention for CPU-bound operations
         max_workers = min(4, len(candidates))  # Limit to 4 workers to avoid overhead
-        
+
         if len(candidates) > 5 and max_workers > 1:
             # Parallel scoring for multiple candidates
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -619,17 +645,21 @@ class SuperblockAnalyzer:
                     executor.submit(self._score_candidate, candidate, G): i
                     for i, candidate in enumerate(candidates)
                 }
-                
+
                 # Collect results as they complete
                 for future in as_completed(future_to_candidate):
                     i = future_to_candidate[future]
                     try:
                         scored = future.result()
                         scored_candidates.append(scored)
-                        
+
                         if i % 10 == 0:
                             pct = 65 + int(20 * (len(scored_candidates) / len(candidates)))
-                            report_progress("scoring", pct, f"Scoring candidate {len(scored_candidates)}/{len(candidates)}...")
+                            report_progress(
+                                "scoring",
+                                pct,
+                                f"Scoring candidate {len(scored_candidates)}/{len(candidates)}...",
+                            )
                     except Exception as e:
                         logger.error(f"Error scoring candidate {i}: {e}")
         else:
@@ -640,14 +670,16 @@ class SuperblockAnalyzer:
 
                 if i % 10 == 0:
                     pct = 65 + int(20 * (i / len(candidates)))
-                    report_progress("scoring", pct, f"Scoring candidate {i+1}/{len(candidates)}...")
+                    report_progress(
+                        "scoring", pct, f"Scoring candidate {i + 1}/{len(candidates)}..."
+                    )
 
         report_progress("reorientation", 85, "Planning street interventions...")
         logger.info("Planning street interventions for top candidates...")
 
         # 5. Sort by score first, then plan interventions for top candidates only
         scored_candidates.sort(key=lambda c: c.score, reverse=True)
-        
+
         # Plan interventions for top candidates in parallel
         top_candidates = scored_candidates[:20]
         if len(top_candidates) > 2:
@@ -666,7 +698,9 @@ class SuperblockAnalyzer:
             for candidate in top_candidates:
                 self._plan_interventions(candidate, G)
 
-        report_progress("complete", 100, f"Analysis complete: {len(scored_candidates)} candidates found")
+        report_progress(
+            "complete", 100, f"Analysis complete: {len(scored_candidates)} candidates found"
+        )
         logger.info("Analysis complete: %s candidates found", len(scored_candidates))
 
         result = {
@@ -676,7 +710,7 @@ class SuperblockAnalyzer:
                 "min_area_hectares": self.min_area,
                 "max_area_hectares": self.max_area,
                 "centrality_threshold_percentile": self.centrality_threshold_pct,
-            }
+            },
         }
 
         # Cache the result
@@ -692,7 +726,7 @@ class SuperblockAnalyzer:
     def _detect_cells(
         self,
         G: nx.MultiDiGraph,
-        progress_callback: Optional[callable] = None,
+        progress_callback: Callable[[str, int, str], None] | None = None,
     ) -> list[SuperblockCandidate]:
         """
         Detect superblock cells using centrality-based boundary detection.
@@ -701,16 +735,17 @@ class SuperblockAnalyzer:
         1. Extract edges with centrality above threshold (boundary candidates)
         2. Create polygons from enclosed areas
         3. Filter by size constraints
-        
+
         Optimizations:
         - Uses spatial indexing (R-tree) for fast polygon-edge intersection
         - Batch processing for improved performance
         """
+
         def report_progress(percent: int, message: str) -> None:
             if progress_callback:
                 progress_callback("detection", percent, message)
 
-        nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
+        _nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
         edges = edges.reset_index()
 
         if edges.empty:
@@ -720,15 +755,19 @@ class SuperblockAnalyzer:
         centralities = edges.get("centrality", [0])
         if hasattr(centralities, "values"):
             centralities = centralities.values
-        centrality_threshold = float(sorted(centralities)[
-            int(len(centralities) * self.centrality_threshold_pct / 100)
-        ]) if len(centralities) > 0 else 0
+        centrality_threshold = (
+            float(
+                sorted(centralities)[int(len(centralities) * self.centrality_threshold_pct / 100)]
+            )
+            if len(centralities) > 0
+            else 0
+        )
 
         # Extract boundary road geometries (high centrality OR major road type)
         boundary_edges = []
         total_edges = len(edges)
         report_progress(45, "Scanning edges for boundary roads...")
-        
+
         # Use itertuples for better performance
         for i, row in enumerate(edges.itertuples(index=False), start=1):
             if i % max(1, total_edges // 20) == 0:
@@ -742,14 +781,10 @@ class SuperblockAnalyzer:
             if isinstance(highway, list):
                 highway = highway[0]
 
-            hierarchy = self.HIERARCHY_MAP.get(highway, 99)
             centrality = getattr(row, "centrality", 0)
 
-            # Road is a boundary if: high centrality OR major road type
-            is_boundary = (
-                centrality >= centrality_threshold or
-                hierarchy <= 5  # tertiary and above
-            )
+            # Road is a boundary if high-centrality or explicitly configured.
+            is_boundary = centrality >= centrality_threshold or highway in self.boundary_road_types
 
             if is_boundary:
                 boundary_edges.append(row.geometry)
@@ -762,11 +797,6 @@ class SuperblockAnalyzer:
         boundary_union = unary_union(boundary_edges)
         polygons = list(polygonize(boundary_union))
 
-        # Filter and create candidates
-        transformer = pyproj.Transformer.from_crs(
-            self.proj_wgs84, self.proj_mercator, always_xy=True
-        )
-
         total_polys = len(polygons)
         if total_polys == 0:
             return []
@@ -776,18 +806,18 @@ class SuperblockAnalyzer:
         edge_geometries = edges.geometry.tolist()
         edge_osmids = []
         edge_centroids = []
-        
+
         for row in edges.itertuples(index=False):
             osmid = getattr(row, "osmid", 0)
             edge_osmids.append(self._normalize_osm_id(osmid))
             edge_centroids.append(row.geometry.centroid)
-        
+
         # Create spatial index for boundary intersection tests
         edge_tree = STRtree(edge_geometries)
         centroid_tree = STRtree(edge_centroids)
-        
+
         candidates = []
-        
+
         for poly_idx, poly in enumerate(polygons, start=1):
             percent = 54 + int(6 * (poly_idx / total_polys))
             report_progress(
@@ -800,6 +830,7 @@ class SuperblockAnalyzer:
                 continue
 
             # Calculate area
+            transformer = self._get_metric_transformer(poly.centroid)
             poly_projected = transform(transformer.transform, poly)
             area_ha = poly_projected.area / 10000
 
@@ -810,28 +841,31 @@ class SuperblockAnalyzer:
             # Query edges that potentially intersect with polygon boundary
             boundary_candidates = edge_tree.query(poly.boundary)
             perimeter_ids = set()
-            
+
             for idx in boundary_candidates:
-                if edge_geometries[idx].intersects(poly.boundary):
+                boundary_overlap = edge_geometries[idx].intersection(poly.boundary).length
+                if boundary_overlap > max(1e-12, edge_geometries[idx].length * 0.5):
                     perimeter_ids.add(edge_osmids[idx])
-            
+
             # Query edges that are potentially inside polygon
             interior_candidates = centroid_tree.query(poly)
             interior_ids = set()
-            
+
             for idx in interior_candidates:
                 if poly.contains(edge_centroids[idx]) and edge_osmids[idx] not in perimeter_ids:
                     interior_ids.add(edge_osmids[idx])
 
-            candidates.append(SuperblockCandidate(
-                id=str(uuid.uuid4())[:8],
-                geometry=mapping(poly),
-                area_hectares=round(area_ha, 2),
-                perimeter_roads=list(perimeter_ids)[:30],
-                interior_roads=list(interior_ids)[:50],
-                score=0,
-                algorithm="centrality_based",
-            ))
+            candidates.append(
+                SuperblockCandidate(
+                    id=str(uuid.uuid4())[:8],
+                    geometry=mapping(poly),
+                    area_hectares=round(area_ha, 2),
+                    perimeter_roads=sorted(perimeter_ids),
+                    interior_roads=sorted(interior_ids),
+                    score=0,
+                    algorithm="centrality_based",
+                )
+            )
 
         return candidates
 
@@ -850,12 +884,13 @@ class SuperblockAnalyzer:
         4. Accessibility: Walking distance to boundary, access points
         5. Connectivity: Internal network density for walking/cycling
         6. Boundary quality: Capacity of boundary roads to absorb diverted traffic
-        
+
         Optimizations:
         - Single-pass edge iteration with data caching
         - Pre-compute lookups for candidate roads
         """
-        nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
+        _nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
+        edges = edges.reset_index()
         poly = shape(candidate.geometry)
         metric_transformer = self._get_metric_transformer(poly.centroid)
         poly_projected = transform(metric_transformer.transform, poly)
@@ -870,8 +905,8 @@ class SuperblockAnalyzer:
             size_score = max(0, 100 - (area - self.IDEAL_MAX_HA) * 10)
 
         # 2. Shape score (isoperimetric quotient)
-        if poly.is_valid and poly.area > 0:
-            ipq = 4 * math.pi * poly.area / (poly.length ** 2)
+        if poly_projected.is_valid and poly_projected.area > 0:
+            ipq = 4 * math.pi * poly_projected.area / (poly_projected.length**2)
             shape_score = ipq * 100
         else:
             shape_score = 50
@@ -879,7 +914,7 @@ class SuperblockAnalyzer:
         # 3-6. Collect all edge data in a single pass (optimization)
         perimeter_set = set(candidate.perimeter_roads)
         interior_set = set(candidate.interior_roads)
-        
+
         boundary_centralities = []
         interior_centralities = []
         boundary_capacity = 0
@@ -887,13 +922,20 @@ class SuperblockAnalyzer:
         interior_nodes = set()
         interior_edges = []
         public_transport_affected = False
+        processed_physical_edges: set[tuple[int, int, int]] = set()
 
         # Single-pass iteration using itertuples for performance
         for row in edges.itertuples(index=False):
             osmid = getattr(row, "osmid", 0)
             if isinstance(osmid, list):
                 osmid = osmid[0]
-            
+            u = row.u
+            v = row.v
+            physical_key = (min(u, v), max(u, v), int(osmid or 0))
+            if physical_key in processed_physical_edges:
+                continue
+            processed_physical_edges.add(physical_key)
+
             if osmid in perimeter_set:
                 # Collect boundary data
                 centrality = getattr(row, "centrality", 0)
@@ -902,24 +944,25 @@ class SuperblockAnalyzer:
                     getattr(row, "highway", "unclassified"),
                     getattr(row, "lanes", 1),
                 )
-                boundary_nodes.add(getattr(row, "u"))
-                boundary_nodes.add(getattr(row, "v"))
+                boundary_nodes.add(u)
+                boundary_nodes.add(v)
                 public_transport_affected = public_transport_affected or any(
                     bool(getattr(row, attr, None))
                     for attr in ("bus", "route", "psv", "public_transport")
                 )
-                
+
             elif osmid in interior_set:
                 # Collect interior data
                 centrality = getattr(row, "centrality", 0)
                 interior_centralities.append(centrality)
-                interior_nodes.add(getattr(row, "u"))
-                interior_nodes.add(getattr(row, "v"))
+                interior_nodes.add(u)
+                interior_nodes.add(v)
                 interior_edges.append(
                     {
-                        "u": getattr(row, "u"),
-                        "v": getattr(row, "v"),
+                        "u": u,
+                        "v": v,
                         "key": getattr(row, "key", 0),
+                        "osmid": int(osmid or 0),
                         "length_m": getattr(row, "length", 0) or 0,
                         "estimated_volume": self._estimate_edge_volume(
                             getattr(row, "highway", "unclassified"),
@@ -933,8 +976,12 @@ class SuperblockAnalyzer:
                 )
 
         # Calculate traffic score from collected data
-        boundary_mean = sum(boundary_centralities) / len(boundary_centralities) if boundary_centralities else 0
-        interior_mean = sum(interior_centralities) / len(interior_centralities) if interior_centralities else 0
+        boundary_mean = (
+            sum(boundary_centralities) / len(boundary_centralities) if boundary_centralities else 0
+        )
+        interior_mean = (
+            sum(interior_centralities) / len(interior_centralities) if interior_centralities else 0
+        )
 
         candidate.boundary_centrality_mean = round(boundary_mean, 6)
         candidate.interior_centrality_mean = round(interior_mean, 6)
@@ -1008,12 +1055,12 @@ class SuperblockAnalyzer:
         }
 
         total_score = (
-            weights["size"] * size_score +
-            weights["shape"] * shape_score +
-            weights["traffic"] * traffic_score +
-            weights["accessibility"] * accessibility_score +
-            weights["connectivity"] * connectivity_score +
-            weights["boundary_quality"] * boundary_quality_score
+            weights["size"] * size_score
+            + weights["shape"] * shape_score
+            + weights["traffic"] * traffic_score
+            + weights["accessibility"] * accessibility_score
+            + weights["connectivity"] * connectivity_score
+            + weights["boundary_quality"] * boundary_quality_score
         )
 
         candidate.score = round(total_score, 1)
@@ -1059,17 +1106,18 @@ class SuperblockAnalyzer:
         - Major interior roads: Convert to one-way with alternating directions
         - Minor interior roads: Modal filter (bikes/emergency only)
         - Central areas: Full pedestrianization
-        
+
         Optimizations:
         - Single-pass edge iteration using itertuples
         - Pre-compute road sets for faster lookup
         """
-        nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
+        _nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
         poly = Polygon(candidate.geometry["coordinates"][0])
         centroid = poly.centroid
-        poly_area_sqrt = poly.area ** 0.5
+        poly_area_sqrt = poly.area**0.5
 
         interventions = []
+        processed_osm_ids: set[int] = set()
         perimeter_set = set(candidate.perimeter_roads)
         interior_set = set(candidate.interior_roads)
 
@@ -1078,10 +1126,14 @@ class SuperblockAnalyzer:
             osmid = getattr(row, "osmid", 0)
             if isinstance(osmid, list):
                 osmid = osmid[0]
+            osmid = int(osmid or 0)
 
             # Only process roads relevant to this candidate
             if osmid not in perimeter_set and osmid not in interior_set:
                 continue
+            if osmid in processed_osm_ids:
+                continue
+            processed_osm_ids.add(osmid)
 
             name = getattr(row, "name", None)
             if isinstance(name, list):
@@ -1095,13 +1147,15 @@ class SuperblockAnalyzer:
 
             if osmid in perimeter_set:
                 # Boundary road - no change
-                interventions.append(StreetIntervention(
-                    osm_id=int(osmid),
-                    name=name,
-                    intervention_type=InterventionType.NO_CHANGE,
-                    access_allowed=["all"],
-                    rationale="Boundary road - maintains through traffic capacity"
-                ))
+                interventions.append(
+                    StreetIntervention(
+                        osm_id=int(osmid),
+                        name=name,
+                        intervention_type=InterventionType.NO_CHANGE,
+                        access_allowed=["all"],
+                        rationale="Boundary road - maintains through traffic capacity",
+                    )
+                )
 
             elif osmid in interior_set:
                 # Interior road - determine intervention type
@@ -1112,49 +1166,63 @@ class SuperblockAnalyzer:
                 if hierarchy <= 5:
                     # Major interior road - one-way for local access
                     direction = "forward" if hash(osmid) % 2 == 0 else "backward"
-                    interventions.append(StreetIntervention(
-                        osm_id=int(osmid),
-                        name=name,
-                        intervention_type=InterventionType.ONE_WAY,
-                        direction=direction,
-                        access_allowed=["residents", "delivery", "emergency"],
-                        rationale="Converted to one-way for local access only"
-                    ))
+                    interventions.append(
+                        StreetIntervention(
+                            osm_id=int(osmid),
+                            name=name,
+                            intervention_type=InterventionType.ONE_WAY,
+                            direction=direction,
+                            access_allowed=["residents", "delivery", "emergency"],
+                            rationale="Converted to one-way for local access only",
+                        )
+                    )
                 elif relative_distance < 0.3:
                     # Central location - pedestrianize
-                    interventions.append(StreetIntervention(
-                        osm_id=int(osmid),
-                        name=name,
-                        intervention_type=InterventionType.PEDESTRIANIZE,
-                        access_allowed=["emergency", "delivery_hours"],
-                        rationale="Central location - full pedestrianization"
-                    ))
+                    interventions.append(
+                        StreetIntervention(
+                            osm_id=int(osmid),
+                            name=name,
+                            intervention_type=InterventionType.PEDESTRIANIZE,
+                            access_allowed=["emergency", "delivery_hours"],
+                            rationale="Central location - full pedestrianization",
+                        )
+                    )
                 elif hierarchy >= 7:
                     # Minor road - modal filter
-                    interventions.append(StreetIntervention(
-                        osm_id=int(osmid),
-                        name=name,
-                        intervention_type=InterventionType.MODAL_FILTER,
-                        access_allowed=["bicycle", "emergency"],
-                        rationale="Modal filter - allows cycling and emergency access"
-                    ))
+                    interventions.append(
+                        StreetIntervention(
+                            osm_id=int(osmid),
+                            name=name,
+                            intervention_type=InterventionType.MODAL_FILTER,
+                            access_allowed=["bicycle", "emergency"],
+                            rationale="Modal filter - allows cycling and emergency access",
+                        )
+                    )
                 else:
                     # Residential access
-                    interventions.append(StreetIntervention(
-                        osm_id=int(osmid),
-                        name=name,
-                        intervention_type=InterventionType.LOCAL_ACCESS,
-                        access_allowed=["residents", "delivery", "emergency"],
-                        rationale="Local access only - no through traffic"
-                    ))
+                    interventions.append(
+                        StreetIntervention(
+                            osm_id=int(osmid),
+                            name=name,
+                            intervention_type=InterventionType.LOCAL_ACCESS,
+                            access_allowed=["residents", "delivery", "emergency"],
+                            rationale="Local access only - no through traffic",
+                        )
+                    )
 
         candidate.interventions = interventions[:100]  # Limit for response size
 
     def _compute_network_stats(self, G: nx.MultiDiGraph) -> dict:
         """Compute overall network statistics."""
-        nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
+        _nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
+        edges = edges.reset_index()
 
-        total_length = edges["length"].sum() if "length" in edges.columns else 0
+        physical_lengths: dict[tuple[int, int, int], float] = {}
+        for row in edges.itertuples(index=False):
+            osmid = self._normalize_osm_id(getattr(row, "osmid", 0))
+            key = (min(row.u, row.v), max(row.u, row.v), osmid)
+            physical_lengths.setdefault(key, float(getattr(row, "length", 0) or 0))
+        total_length = sum(physical_lengths.values())
 
         # Centrality statistics
         centralities = edges.get("centrality", [])
@@ -1165,7 +1233,9 @@ class SuperblockAnalyzer:
             "total_nodes": G.number_of_nodes(),
             "total_edges": G.number_of_edges(),
             "total_length_km": round(total_length / 1000, 2),
-            "mean_centrality": round(sum(centralities) / len(centralities), 6) if centralities else 0,
+            "mean_centrality": round(sum(centralities) / len(centralities), 6)
+            if centralities
+            else 0,
             "max_centrality": round(max(centralities), 6) if centralities else 0,
         }
 
@@ -1199,7 +1269,7 @@ async def analyze_superblocks(
     bbox: BoundingBox,
     min_area: float = 4.0,
     max_area: float = 25.0,
-    progress_callback: Optional[callable] = None,
+    progress_callback: Callable[[str, int, str], None] | None = None,
 ) -> dict:
     """
     Analyze an area for potential superblocks.
