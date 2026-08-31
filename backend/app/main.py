@@ -1,9 +1,12 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import logging
 
+from app.api.routes import analysis, cache, search
 from app.core.config import get_settings
-from app.api.routes import search, analysis, cache
+from app.services.nominatim_service import close_nominatim_client
 
 settings = get_settings()
 
@@ -12,10 +15,18 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    yield
+    await close_nominatim_client()
+
+
 app = FastAPI(
     title=settings.app_name,
     description="API for identifying and analyzing potential superblocks in urban areas",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # CORS middleware

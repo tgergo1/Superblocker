@@ -1,14 +1,19 @@
-import osmnx as ox
-import geopandas as gpd
-from shapely.geometry import box, mapping
-import json
-from typing import Any
+import asyncio
 import logging
+import math
+import re
 import time
+from numbers import Real
+from typing import Any
 
-from app.models.schemas import BoundingBox, StreetNetworkResponse
+import networkx as nx
+import osmnx as ox
+from shapely.geometry import mapping
+
 from app.core.config import get_settings
+from app.models.schemas import BoundingBox, StreetNetworkResponse
 from app.services.cache_service import get_cache_service
+from app.utils.geo import validate_bbox_size
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -40,20 +45,166 @@ ROAD_HIERARCHY = {
 }
 
 
+def is_missing_osm_value(value: Any) -> bool:
+    """Return whether an optional OSM/Pandas value is absent or non-finite."""
+    return value is None or (isinstance(value, Real) and not math.isfinite(float(value)))
+
+
+def normalize_optional_text(value: Any) -> str | None:
+    """Convert an optional scalar/list OSM tag into valid JSON text."""
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    for candidate in values:
+        if is_missing_osm_value(candidate):
+            continue
+        text = str(candidate).strip()
+        if text and text.lower() not in {"nan", "none", "null"}:
+            return text
+    return None
+
+
 def get_road_hierarchy_value(highway: Any) -> int:
     """Get hierarchy value for a road type."""
-    if isinstance(highway, list):
+    if isinstance(highway, (list, tuple, set)):
         # Take the most important (lowest) value
-        return min(ROAD_HIERARCHY.get(h, 99) for h in highway)
+        values = [str(value) for value in highway if not is_missing_osm_value(value)]
+        return min((ROAD_HIERARCHY.get(value, 99) for value in values), default=99)
+    if is_missing_osm_value(highway):
+        return ROAD_HIERARCHY["unclassified"]
     return ROAD_HIERARCHY.get(str(highway), 99)
 
 
 def normalize_highway_type(highway: Any) -> str:
     """Normalize highway type to a single string."""
-    if isinstance(highway, list):
-        # Return the first/primary type
-        return str(highway[0]) if highway else "unclassified"
-    return str(highway) if highway else "unclassified"
+    if isinstance(highway, (list, tuple, set)):
+        values = [str(value) for value in highway if not is_missing_osm_value(value)]
+        if not values:
+            return "unclassified"
+        return min(
+            values,
+            key=lambda value: ROAD_HIERARCHY.get(value, 99),
+        )
+    return str(highway) if not is_missing_osm_value(highway) and highway else "unclassified"
+
+
+def normalize_lanes(value: Any) -> int:
+    """Normalize common OSM lane encodings without silently dropping values."""
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    parsed: list[int] = []
+    for item in values:
+        for token in str(item or "").split(";"):
+            try:
+                parsed.append(int(float(token.strip())))
+            except (TypeError, ValueError):
+                continue
+    return max(1, min(12, max(parsed, default=1)))
+
+
+def normalize_maxspeed(value: Any) -> int | None:
+    """Return max speed in km/h, converting explicit mph values."""
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    speeds: list[float] = []
+    for item in values:
+        text = str(item or "").strip().lower()
+        match = re.search(r"\d+(?:\.\d+)?", text)
+        if not match:
+            continue
+        speed = float(match.group())
+        if "mph" in text:
+            speed *= 1.609344
+        speeds.append(speed)
+    return round(min(speeds)) if speeds else None
+
+
+def _validate_bbox(bbox: BoundingBox) -> None:
+    validate_bbox_size(
+        bbox.north,
+        bbox.south,
+        bbox.east,
+        bbox.west,
+        max_span_degrees=settings.max_bbox_span_degrees,
+        max_area_km2=settings.max_bbox_area_km2,
+    )
+
+
+def graph_to_street_network(
+    graph: nx.MultiDiGraph,
+    bbox: BoundingBox,
+    network_type: str = "drive",
+) -> StreetNetworkResponse:
+    """Convert an already-fetched graph into the public GeoJSON response."""
+    gdf_edges = ox.graph_to_gdfs(graph, nodes=False, edges=True).reset_index()
+    features: list[dict[str, Any]] = []
+
+    for row in gdf_edges.itertuples(index=False):
+        highway_raw = getattr(row, "highway", "unclassified")
+        highway = normalize_highway_type(highway_raw)
+        oneway = getattr(row, "oneway", False)
+        if is_missing_osm_value(oneway):
+            oneway = False
+        elif isinstance(oneway, str):
+            oneway = oneway.lower() in ("yes", "true", "1", "-1")
+
+        name = normalize_optional_text(getattr(row, "name", None))
+        osmid = getattr(row, "osmid", 0)
+        if isinstance(osmid, (list, tuple, set)):
+            osmid = next((value for value in osmid if not is_missing_osm_value(value)), 0)
+        if is_missing_osm_value(osmid):
+            osmid = 0
+
+        length = getattr(row, "length", 0)
+        if is_missing_osm_value(length):
+            length = 0
+
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": mapping(row.geometry),
+                "properties": {
+                    "osmid": int(osmid or 0),
+                    "name": name,
+                    "highway": highway,
+                    "hierarchy": get_road_hierarchy_value(highway_raw),
+                    "lanes": normalize_lanes(getattr(row, "lanes", 1)),
+                    "oneway": bool(oneway),
+                    "maxspeed": normalize_maxspeed(getattr(row, "maxspeed", None)),
+                    "length_m": round(float(length or 0), 2),
+                    "u": int(row.u),
+                    "v": int(row.v),
+                    "key": int(getattr(row, "key", 0)),
+                },
+            }
+        )
+
+    # Directed OSMnx graphs usually contain a feature in each direction. Count
+    # each physical segment once for length and street-space reporting.
+    physical_features: dict[tuple[int, int, int], dict[str, Any]] = {}
+    for feature in features:
+        props = feature["properties"]
+        physical_key = (
+            min(props["u"], props["v"]),
+            max(props["u"], props["v"]),
+            props["osmid"],
+        )
+        physical_features.setdefault(physical_key, feature)
+
+    total_length = sum(feature["properties"]["length_m"] for feature in physical_features.values())
+    road_types: dict[str, int] = {}
+    for feature in physical_features.values():
+        road_type = feature["properties"]["highway"]
+        road_types[road_type] = road_types.get(road_type, 0) + 1
+
+    return StreetNetworkResponse(
+        type="FeatureCollection",
+        features=features,
+        metadata={
+            "bbox": bbox.model_dump(),
+            "total_edges": len(physical_features),
+            "total_directed_edges": len(features),
+            "total_length_km": round(total_length / 1000, 2),
+            "road_type_counts": road_types,
+            "network_type": network_type,
+        },
+    )
 
 
 async def get_street_network(
@@ -73,19 +224,9 @@ async def get_street_network(
         StreetNetworkResponse with GeoJSON features
     """
     start_time = time.time()
+    network_type_value = getattr(network_type, "value", network_type)
 
-    # Validate bbox size to prevent huge requests
-    lat_diff = bbox.north - bbox.south
-    lon_diff = bbox.east - bbox.west
-
-    if lat_diff > 0.5 or lon_diff > 0.5:
-        raise ValueError(
-            "Bounding box too large. Maximum size is ~50km. "
-            "Please select a smaller area."
-        )
-
-    if lat_diff <= 0 or lon_diff <= 0:
-        raise ValueError("Invalid bounding box: north must be > south, east must be > west")
+    _validate_bbox(bbox)
 
     # Round bbox coordinates for consistent cache keys (5 decimal places ~ 1m precision)
     cache_params = {
@@ -93,7 +234,7 @@ async def get_street_network(
         "south": round(bbox.south, 5),
         "east": round(bbox.east, 5),
         "west": round(bbox.west, 5),
-        "network_type": network_type,
+        "network_type": network_type_value,
     }
 
     # Check cache first
@@ -103,7 +244,7 @@ async def get_street_network(
     if cached_data is not None:
         logger.info(
             "Street network loaded from cache (network_type=%s)",
-            network_type,
+            network_type_value,
         )
         return StreetNetworkResponse(
             type=cached_data["type"],
@@ -113,16 +254,17 @@ async def get_street_network(
 
     logger.info(
         "Fetching street network from OSM (network_type=%s bbox=%s)",
-        network_type,
+        network_type_value,
         bbox.model_dump(),
     )
 
     # Fetch the network using OSMnx
     # OSMnx 2.x expects bbox as tuple: (left, bottom, right, top) = (west, south, east, north)
     bbox_tuple = (bbox.west, bbox.south, bbox.east, bbox.north)
-    G = ox.graph_from_bbox(
+    G = await asyncio.to_thread(
+        ox.graph_from_bbox,
         bbox=bbox_tuple,
-        network_type=network_type,
+        network_type=network_type_value,
         simplify=True,
         retain_all=False,
         truncate_by_edge=True,
@@ -134,103 +276,7 @@ async def get_street_network(
         G.number_of_edges(),
     )
 
-    # Convert to GeoDataFrame (edges)
-    gdf_edges = ox.graph_to_gdfs(G, nodes=False, edges=True)
-
-    # Reset index to get u, v, key as columns
-    gdf_edges = gdf_edges.reset_index()
-
-    # Build features list
-    features = []
-    for idx, row in gdf_edges.iterrows():
-        # Extract properties
-        highway = normalize_highway_type(row.get("highway", "unclassified"))
-
-        # Get number of lanes
-        lanes = row.get("lanes", 1)
-        if isinstance(lanes, list):
-            lanes = int(lanes[0]) if lanes else 1
-        elif lanes is not None:
-            try:
-                lanes = int(lanes)
-            except (ValueError, TypeError):
-                lanes = 1
-        else:
-            lanes = 1
-
-        # Get oneway status
-        oneway = row.get("oneway", False)
-        if isinstance(oneway, str):
-            oneway = oneway.lower() in ("yes", "true", "1")
-
-        # Get maxspeed
-        maxspeed = row.get("maxspeed")
-        if isinstance(maxspeed, list):
-            maxspeed = maxspeed[0] if maxspeed else None
-        if maxspeed:
-            try:
-                # Remove units if present (e.g., "50 mph")
-                maxspeed = int(str(maxspeed).split()[0])
-            except (ValueError, TypeError):
-                maxspeed = None
-
-        # Get length
-        length = row.get("length", 0)
-
-        # Get name
-        name = row.get("name")
-        if isinstance(name, list):
-            name = name[0] if name else None
-
-        # Get OSM ID
-        osmid = row.get("osmid")
-        if isinstance(osmid, list):
-            osmid = osmid[0] if osmid else 0
-
-        # Create GeoJSON feature
-        feature = {
-            "type": "Feature",
-            "geometry": mapping(row.geometry),
-            "properties": {
-                "osmid": osmid,
-                "name": name,
-                "highway": highway,
-                "hierarchy": get_road_hierarchy_value(highway),
-                "lanes": lanes,
-                "oneway": oneway,
-                "maxspeed": maxspeed,
-                "length_m": round(length, 2),
-                "u": row.get("u"),
-                "v": row.get("v"),
-            }
-        }
-        features.append(feature)
-
-    # Calculate metadata
-    total_length = sum(f["properties"]["length_m"] for f in features)
-    road_types = {}
-    for f in features:
-        rt = f["properties"]["highway"]
-        road_types[rt] = road_types.get(rt, 0) + 1
-
-    metadata = {
-        "bbox": {
-            "north": bbox.north,
-            "south": bbox.south,
-            "east": bbox.east,
-            "west": bbox.west,
-        },
-        "total_edges": len(features),
-        "total_length_km": round(total_length / 1000, 2),
-        "road_type_counts": road_types,
-        "network_type": network_type,
-    }
-
-    response = StreetNetworkResponse(
-        type="FeatureCollection",
-        features=features,
-        metadata=metadata,
-    )
+    response = graph_to_street_network(G, bbox, network_type_value)
 
     # Cache the result
     cache_service.set(
@@ -263,30 +309,21 @@ async def get_street_network_graph(
     Returns:
         NetworkX MultiDiGraph of the street network
     """
-    # Validate bbox size
-    lat_diff = bbox.north - bbox.south
-    lon_diff = bbox.east - bbox.west
-
-    if lat_diff > 0.5 or lon_diff > 0.5:
-        raise ValueError(
-            "Bounding box too large. Maximum size is ~50km. "
-            "Please select a smaller area."
-        )
-
-    if lat_diff <= 0 or lon_diff <= 0:
-        raise ValueError("Invalid bounding box: north must be > south, east must be > west")
+    _validate_bbox(bbox)
+    network_type_value = getattr(network_type, "value", network_type)
 
     logger.info(
         "Fetching street network graph from OSM (network_type=%s bbox=%s)",
-        network_type,
+        network_type_value,
         bbox.model_dump(),
     )
 
     # Fetch the network using OSMnx
     bbox_tuple = (bbox.west, bbox.south, bbox.east, bbox.north)
-    G = ox.graph_from_bbox(
+    G = await asyncio.to_thread(
+        ox.graph_from_bbox,
         bbox=bbox_tuple,
-        network_type=network_type,
+        network_type=network_type_value,
         simplify=True,
         retain_all=False,
         truncate_by_edge=True,

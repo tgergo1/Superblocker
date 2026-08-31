@@ -24,6 +24,7 @@ interface LayerControlsProps {
   analysisProgress?: DetailedProgress;
   onFetchNetwork?: () => void;
   onFindSuperblocks?: () => void;
+  onCancelAnalysis?: () => void;
   canFetch?: boolean;
   hasNetwork?: boolean;
   superblockCount?: number;
@@ -39,6 +40,8 @@ interface LayerControlsProps {
     pedestrianArea: number;
     totalArea: number;
   };
+  networkError?: Error | null;
+  analysisError?: Error | null;
 }
 
 export function LayerControls({
@@ -49,6 +52,7 @@ export function LayerControls({
   analysisProgress,
   onFetchNetwork,
   onFindSuperblocks,
+  onCancelAnalysis,
   canFetch,
   hasNetwork,
   superblockCount,
@@ -57,6 +61,8 @@ export function LayerControls({
   analysisParameters,
   onParametersChange,
   impactMetrics,
+  networkError,
+  analysisError,
 }: LayerControlsProps) {
   const [settingsExpanded, setSettingsExpanded] = useState(false);
   
@@ -95,8 +101,11 @@ export function LayerControls({
     <div className="layer-controls">
       {/* Settings Toggle Header */}
       <button
+        type="button"
         className="settings-toggle"
         onClick={() => setSettingsExpanded(!settingsExpanded)}
+        aria-expanded={settingsExpanded}
+        aria-controls="analysis-settings-panel"
       >
         <span>⚙️ Analysis Settings</span>
         <span className={`chevron ${settingsExpanded ? 'expanded' : ''}`}>▼</span>
@@ -104,14 +113,15 @@ export function LayerControls({
 
       {/* Collapsible Settings Panel */}
       {settingsExpanded && (
-        <div className="settings-panel">
+        <div className="settings-panel" id="analysis-settings-panel">
           {/* Superblock Size Sliders */}
           <div className="control-section">
             <div className="control-group">
-              <label className="control-label">Minimum Area (hectares)</label>
+              <label className="control-label" htmlFor="analysis-min-area">Minimum Area (hectares)</label>
               <div className="slider-container">
                 <input
                   type="range"
+                  id="analysis-min-area"
                   min="1"
                   max="20"
                   step="0.5"
@@ -128,10 +138,11 @@ export function LayerControls({
 
           <div className="control-section">
             <div className="control-group">
-              <label className="control-label">Maximum Area (hectares)</label>
+              <label className="control-label" htmlFor="analysis-max-area">Maximum Area (hectares)</label>
               <div className="slider-container">
                 <input
                   type="range"
+                  id="analysis-max-area"
                   min="5"
                   max="50"
                   step="1"
@@ -151,24 +162,30 @@ export function LayerControls({
       <div className="control-section">
         <div className="control-group">
           <label className="control-label">Color roads by</label>
-          <div className="button-group">
+          <div className="button-group" role="group" aria-label="Road color mode">
             <button
+              type="button"
               className={`toggle-button ${colorBy === 'hierarchy' ? 'active' : ''}`}
               onClick={() => onColorByChange('hierarchy')}
+              aria-pressed={colorBy === 'hierarchy'}
             >
               Road Type
             </button>
             <button
+              type="button"
               className={`toggle-button ${colorBy === 'traffic' ? 'active' : ''}`}
               onClick={() => onColorByChange('traffic')}
+              aria-pressed={colorBy === 'traffic'}
             >
               Traffic
             </button>
             <button
+              type="button"
               className={`toggle-button ${colorBy === 'interventions' ? 'active' : ''}`}
               onClick={() => onColorByChange('interventions')}
               disabled={!superblockCount}
               title="Shows planned interventions for selected superblock"
+              aria-pressed={colorBy === 'interventions'}
             >
               Changes
             </button>
@@ -181,6 +198,7 @@ export function LayerControls({
           <label className="control-label">Actions</label>
           {onFetchNetwork && (
             <button
+              type="button"
               className="action-button primary"
               onClick={onFetchNetwork}
               disabled={!canFetch || isLoadingNetwork}
@@ -189,15 +207,28 @@ export function LayerControls({
             </button>
           )}
           {onFindSuperblocks && (
-            <button
-              className="action-button success"
-              onClick={onFindSuperblocks}
-              disabled={!hasNetwork || isLoadingSuperblocks}
-            >
-              {isLoadingSuperblocks ? 'Analyzing...' : 'Find Superblocks'}
-            </button>
+            isLoadingSuperblocks ? (
+              <button type="button" className="action-button cancel" onClick={onCancelAnalysis}>
+                Cancel Analysis
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="action-button success"
+                onClick={onFindSuperblocks}
+                disabled={!hasNetwork}
+              >
+                Find Superblocks
+              </button>
+            )
           )}
         </div>
+
+        {(networkError || analysisError) && (
+          <div className="control-error" role="alert">
+            {analysisError?.message || networkError?.message || 'The operation failed.'}
+          </div>
+        )}
 
         {/* Enhanced Progress indicator */}
         {isLoadingSuperblocks && analysisProgress && (
@@ -253,6 +284,12 @@ export function LayerControls({
               Show on map
             </label>
           </div>
+        </div>
+      )}
+
+      {superblockCount === 0 && !isLoadingSuperblocks && (
+        <div className="empty-result" role="status">
+          No candidates matched the current area and size settings.
         </div>
       )}
 

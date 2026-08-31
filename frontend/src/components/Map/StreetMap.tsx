@@ -1,16 +1,53 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import MapGL, { NavigationControl, ScaleControl } from 'react-map-gl/maplibre';
+import MapGL, { AttributionControl, NavigationControl, ScaleControl } from 'react-map-gl/maplibre';
 import type { MapRef } from 'react-map-gl/maplibre';
-import type { IControl } from 'maplibre-gl';
+import type { IControl, StyleSpecification } from 'maplibre-gl';
 import { GeoJsonLayer, PolygonLayer, ScatterplotLayer, PathLayer, TextLayer } from '@deck.gl/layers';
 import { MapboxOverlay } from '@deck.gl/mapbox';
-import type { Feature, LineString } from 'geojson';
+import type { LayersList } from '@deck.gl/core';
+import type { Feature, Geometry, LineString } from 'geojson';
 import type { ViewState, StreetNetworkResponse, RoadProperties, EnforcedSuperblock, CityPartition, RouteResult } from '../../types';
 import type { SuperblockCandidate } from '../../services/api';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './StreetMap.css';
 
-const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json';
+// Keep the style definition local so a failed remote style document cannot leave
+// the application with a blank canvas. OpenStreetMap's raster tiles require no
+// API key; deployments can point at an OSM-compatible tile service via the env var.
+const OPENSTREETMAP_TILE_URL =
+  import.meta.env.VITE_OSM_TILE_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+const MAP_STYLE: StyleSpecification = {
+  version: 8,
+  name: 'Superblocker OpenStreetMap',
+  sources: {
+    openstreetmap: {
+      type: 'raster',
+      tiles: [OPENSTREETMAP_TILE_URL],
+      tileSize: 256,
+      attribution: '&copy; OpenStreetMap contributors',
+      maxzoom: 19,
+    },
+  },
+  layers: [
+    {
+      id: 'background',
+      type: 'background',
+      paint: { 'background-color': '#eef2f6' },
+    },
+    {
+      id: 'openstreetmap',
+      type: 'raster',
+      source: 'openstreetmap',
+      minzoom: 0,
+      maxzoom: 22,
+      paint: {
+        'raster-opacity': 1,
+        'raster-fade-duration': 120,
+      },
+    },
+  ],
+};
 
 // Color scale for road types (hierarchy-based)
 const ROAD_COLORS: Record<number, [number, number, number, number]> = {
@@ -27,6 +64,70 @@ const ROAD_COLORS: Record<number, [number, number, number, number]> = {
 };
 
 const DEFAULT_ROAD_COLOR: [number, number, number, number] = [128, 128, 128, 200];
+
+type PlanActionType = 'modal_filter' | 'one_way' | 'two_way' | 'turn_restriction' | 'full_closure';
+
+interface PlanMarkerDatum {
+  position: [number, number];
+  name: string;
+  title: string;
+  symbol: string;
+  actionType: PlanActionType | 'entry_point';
+  angle?: number;
+  detail?: string;
+}
+
+// One visual language for modified road lines, map signs, hover labels, and the
+// legend. Keep these values in sync with the plan-sign CSS classes.
+const PLAN_ACTION_STYLES: Record<PlanActionType, {
+  line: [number, number, number, number];
+  markerFill: [number, number, number, number];
+  markerLine: [number, number, number, number];
+  text: [number, number, number, number];
+  symbol: string;
+  title: string;
+}> = {
+  modal_filter: {
+    line: [220, 38, 38, 255],
+    markerFill: [220, 38, 38, 255],
+    markerLine: [255, 255, 255, 255],
+    text: [255, 255, 255, 255],
+    symbol: 'X',
+    title: 'Modal filter',
+  },
+  one_way: {
+    line: [37, 99, 235, 255],
+    markerFill: [255, 255, 255, 245],
+    markerLine: [37, 99, 235, 255],
+    text: [30, 64, 175, 255],
+    symbol: '>',
+    title: 'One-way conversion',
+  },
+  two_way: {
+    line: [13, 148, 136, 255],
+    markerFill: [255, 255, 255, 245],
+    markerLine: [13, 148, 136, 255],
+    text: [15, 118, 110, 255],
+    symbol: '<>',
+    title: 'Two-way local access',
+  },
+  turn_restriction: {
+    line: [217, 119, 6, 255],
+    markerFill: [217, 119, 6, 255],
+    markerLine: [255, 255, 255, 255],
+    text: [255, 255, 255, 255],
+    symbol: '!',
+    title: 'Turn restriction',
+  },
+  full_closure: {
+    line: [124, 58, 237, 255],
+    markerFill: [124, 58, 237, 255],
+    markerLine: [255, 255, 255, 255],
+    text: [255, 255, 255, 255],
+    symbol: '=',
+    title: 'Street cut',
+  },
+};
 
 // Width scale for road types
 const ROAD_WIDTHS: Record<number, number> = {
@@ -101,6 +202,9 @@ interface StreetMapProps {
   // Routing props
   route?: RouteResult | null;
   showRoute?: boolean;
+  selectedPlaceName?: string;
+  emptyStateMessage?: string;
+  hideLegends?: boolean;
 }
 
 export function StreetMap({
@@ -119,12 +223,18 @@ export function StreetMap({
   onEnforcedSuperblockClick,
   route,
   showRoute = true,
+  selectedPlaceName,
+  emptyStateMessage,
+  hideLegends = false,
 }: StreetMapProps) {
   const mapRef = useRef<MapRef>(null);
+  const [mapReady, setMapReady] = useState(false);
+  const [mapError, setMapError] = useState<string | null>(null);
 
   // Panel collapse states
   const [legendCollapsed, setLegendCollapsed] = useState(false);
-  const [infoCollapsed, setInfoCollapsed] = useState(false);
+  const [roadLegendCollapsed, setRoadLegendCollapsed] = useState(true);
+  const [infoCollapsed, setInfoCollapsed] = useState(true);
 
   const [internalViewState, setInternalViewState] = useState<ViewState>(
     initialViewState ?? DEFAULT_VIEW_STATE
@@ -132,9 +242,12 @@ export function StreetMap({
 
   const [hoveredFeature, setHoveredFeature] = useState<Feature<LineString, RoadProperties> | null>(null);
   const [hoveredSuperblock, setHoveredSuperblock] = useState<SuperblockCandidate | null>(null);
+  const [hoveredPlanMarker, setHoveredPlanMarker] = useState<PlanMarkerDatum | null>(null);
   const [selectedSuperblock, setSelectedSuperblock] = useState<SuperblockCandidate | null>(null);
 
   const viewState = initialViewState ?? internalViewState;
+  const showDetailedPlanSigns = viewState.zoom >= 12;
+  const boundaryRoadWidth = viewState.zoom < 10 ? 1.35 : viewState.zoom < 12 ? 2.25 : 4;
 
   const handleMove = useCallback(
     (evt: { viewState: ViewState }) => {
@@ -148,22 +261,42 @@ export function StreetMap({
 
   // Build a map of modified streets from partition data for quick lookup
   const modifiedStreets = useMemo(() => {
-    if (!showPartition || !partition) return new Map<number, { type: string; direction: string | null }>();
+    if (!showPartition || !showModalFilters || !partition) {
+      return new Map<string, { type: string; direction: string | null }>();
+    }
 
-    const map = new Map<number, { type: string; direction: string | null }>();
+    const map = new Map<string, { type: string; direction: string | null }>();
     partition.superblocks.forEach(sb => {
       sb.modifications.forEach(mod => {
-        map.set(mod.osm_id, {
+        const display = {
           type: mod.modification_type,
           direction: mod.direction
-        });
+        };
+        if (mod.modification_type !== 'one_way' || mod.direction === 'u_to_v') {
+          map.set(`${mod.u}:${mod.v}:key:${mod.key}`, display);
+        }
+        if (mod.modification_type !== 'one_way' || mod.direction === 'v_to_u') {
+          map.set(`${mod.v}:${mod.u}:osm:${mod.osm_id}`, display);
+        }
       });
     });
     return map;
-  }, [showPartition, partition]);
+  }, [showModalFilters, showPartition, partition]);
+
+  const getStreetModification = useCallback((props: RoadProperties | null | undefined) => {
+    if (!props) return undefined;
+    const osmids = Array.isArray(props.osmid) ? props.osmid : [props.osmid];
+    const exact = modifiedStreets.get(`${props.u}:${props.v}:key:${props.key}`);
+    if (exact) return exact;
+    for (const osmid of osmids) {
+      const byWayAndDirection = modifiedStreets.get(`${props.u}:${props.v}:osm:${osmid}`);
+      if (byWayAndDirection) return byWayAndDirection;
+    }
+    return undefined;
+  }, [modifiedStreets]);
 
   const getLineColor = useCallback(
-    (d: Feature<LineString, RoadProperties>): [number, number, number, number] => {
+    (d: Feature<Geometry, RoadProperties>): [number, number, number, number] => {
       const props = d.properties;
       if (!props) return DEFAULT_ROAD_COLOR;
 
@@ -199,38 +332,67 @@ export function StreetMap({
       // Highlight modified streets in partition mode
       if (showPartition && modifiedStreets.size > 0) {
         // Handle osmid being a single number or an array
-        let osmidToCheck = props.osmid;
-        if (Array.isArray(osmidToCheck)) {
-          osmidToCheck = osmidToCheck[0];
-        }
-        const mod = modifiedStreets.get(osmidToCheck);
+        const mod = getStreetModification(props);
         if (mod) {
-          if (mod.type === 'modal_filter') {
-            return [239, 68, 68, 255]; // Red for modal filter
-          }
-          if (mod.type === 'one_way') {
-            return [59, 130, 246, 255]; // Blue for one-way
-          }
-          if (mod.type === 'full_closure') {
-            return [124, 58, 237, 255]; // Purple for closure
-          }
-          return [251, 191, 36, 255]; // Yellow for other modifications
+          return PLAN_ACTION_STYLES[mod.type as PlanActionType]?.line
+            ?? [217, 119, 6, 255];
         }
       }
 
       const hierarchy = props.hierarchy ?? 99;
       return ROAD_COLORS[hierarchy] ?? DEFAULT_ROAD_COLOR;
     },
-    [colorBy, selectedSuperblock, showPartition, modifiedStreets]
+    [colorBy, selectedSuperblock, showPartition, modifiedStreets, getStreetModification]
   );
 
-  const getLineWidth = useCallback((d: Feature<LineString, RoadProperties>): number => {
+  const getLineWidth = useCallback((d: Feature<Geometry, RoadProperties>): number => {
     const hierarchy = d.properties?.hierarchy ?? 8;
     return ROAD_WIDTHS[hierarchy] ?? 1.5;
   }, []);
 
   const layers = useMemo(() => {
-    const result: unknown[] = [];
+    const result: LayersList = [];
+
+    // Partition fills render below the road network so streets, labels, and
+    // access changes remain readable at every zoom level.
+    if (showPartition && partition && partition.superblocks.length > 0) {
+      result.push(
+        new PolygonLayer({
+          id: 'enforced-superblocks',
+          data: partition.superblocks,
+          pickable: true,
+          stroked: true,
+          filled: true,
+          getPolygon: (d: EnforcedSuperblock) => d.geometry.coordinates,
+          getFillColor: (d: EnforcedSuperblock) => {
+            if (selectedEnforcedSuperblock?.id === d.id) {
+              return [59, 130, 246, 82];
+            }
+            if (d.constraint_validated && d.all_addresses_reachable) {
+              return [34, 197, 94, 48];
+            }
+            if (d.constraint_validated) {
+              return [251, 191, 36, 54];
+            }
+            return [239, 68, 68, 62];
+          },
+          getLineColor: (d: EnforcedSuperblock) =>
+            selectedEnforcedSuperblock?.id === d.id
+              ? [37, 99, 235, 235]
+              : [51, 65, 85, 92],
+          getLineWidth: (d: EnforcedSuperblock) =>
+            selectedEnforcedSuperblock?.id === d.id ? 3 : 1,
+          onClick: (info: { object?: EnforcedSuperblock }) => {
+            if (info.object) onEnforcedSuperblockClick?.(info.object);
+          },
+          updateTriggers: {
+            getFillColor: [selectedEnforcedSuperblock?.id],
+            getLineColor: [selectedEnforcedSuperblock?.id],
+            getLineWidth: [selectedEnforcedSuperblock?.id],
+          },
+        })
+      );
+    }
 
     // Superblock polygons layer (render first, below roads)
     if (showSuperblocks && superblocks && superblocks.length > 0) {
@@ -278,12 +440,13 @@ export function StreetMap({
           },
         })
       );
+
     }
 
     // Street network layer
     if (streetNetwork?.features) {
       result.push(
-        new GeoJsonLayer({
+        new GeoJsonLayer<RoadProperties>({
           id: 'street-network',
           data: streetNetwork,
           pickable: true,
@@ -303,252 +466,133 @@ export function StreetMap({
         })
       );
 
-      // Add direction arrows on modified streets (one-way)
-      if (showPartition && partition && modifiedStreets.size > 0) {
-        // Helper to get osmid as number
-        const getOsmId = (osmid: number | number[] | undefined): number | undefined => {
-          if (osmid === undefined) return undefined;
-          return Array.isArray(osmid) ? osmid[0] : osmid;
+      if (showPartition && partition?.arterial_network.length) {
+        const boundaryRoadIds = new Set(partition.arterial_network);
+        const boundaryFeatures = streetNetwork.features.filter((feature) => {
+          const osmids = Array.isArray(feature.properties.osmid)
+            ? feature.properties.osmid
+            : [feature.properties.osmid];
+          return osmids.some((osmid) => boundaryRoadIds.has(osmid));
+        });
+        const boundaryData = {
+          type: 'FeatureCollection' as const,
+          features: boundaryFeatures,
         };
 
-        // Find one-way streets and create multiple arrows along each
-        const oneWayFeatures = streetNetwork.features.filter(f => {
-          const osmid = getOsmId(f.properties?.osmid);
-          return osmid !== undefined && modifiedStreets.get(osmid)?.type === 'one_way';
-        });
-
-        // Create multiple arrows along each one-way street
-        const arrowData: { position: number[]; angle: number; name: string }[] = [];
-
-        oneWayFeatures.forEach(f => {
-          const coords = f.geometry.coordinates;
-          if (coords.length < 2) return;
-          const osmid = getOsmId(f.properties?.osmid);
-          const direction = osmid !== undefined ? modifiedStreets.get(osmid)?.direction : null;
-
-          // Place arrows at 25%, 50%, 75% of the street length
-          const positions = [0.25, 0.5, 0.75];
-
-          positions.forEach(fraction => {
-            const index = Math.floor((coords.length - 1) * fraction);
-            const point = coords[index];
-
-            // Calculate angle from this segment
-            const prevIdx = Math.max(0, index - 1);
-            const nextIdx = Math.min(coords.length - 1, index + 1);
-            const angle = Math.atan2(
-              coords[nextIdx][1] - coords[prevIdx][1],
-              coords[nextIdx][0] - coords[prevIdx][0]
-            ) * (180 / Math.PI) + (direction === 'v_to_u' ? 180 : 0);
-
-            arrowData.push({
-              position: point,
-              angle,
-              name: f.properties?.name || 'One-way',
-            });
-          });
-        });
-
-        // Find modal filter streets and mark them
-        const modalFilterFeatures = streetNetwork.features.filter(f => {
-          const osmid = getOsmId(f.properties?.osmid);
-          return osmid !== undefined && modifiedStreets.get(osmid)?.type === 'modal_filter';
-        });
-
-        // Create X markers at modal filter locations (midpoint of street)
-        const modalFilterMarkers = modalFilterFeatures.map(f => {
-          const coords = f.geometry.coordinates;
-          const midIndex = Math.floor(coords.length / 2);
-          return {
-            position: coords[midIndex] || coords[0],
-            name: f.properties?.name || 'Modal filter',
-          };
-        });
-
-        const fullClosureFeatures = streetNetwork.features.filter(f => {
-          const osmid = getOsmId(f.properties?.osmid);
-          return osmid !== undefined && modifiedStreets.get(osmid)?.type === 'full_closure';
-        });
-
-        const streetCutMarkers = fullClosureFeatures.map(f => {
-          const coords = f.geometry.coordinates;
-          const midIndex = Math.floor(coords.length / 2);
-          return {
-            position: coords[midIndex] || coords[0],
-            name: f.properties?.name || 'Street cut',
-          };
-        });
-
-        if (arrowData.length > 0) {
-          // White background circles for arrow visibility
+        if (boundaryFeatures.length > 0) {
           result.push(
-            new ScatterplotLayer({
-              id: 'one-way-arrow-bg',
-              data: arrowData,
+            new GeoJsonLayer<RoadProperties>({
+              id: 'boundary-road-halo',
+              data: boundaryData,
               pickable: false,
-              opacity: 1,
               stroked: true,
-              filled: true,
-              radiusScale: 1,
-              radiusMinPixels: 10,
-              radiusMaxPixels: 16,
-              getPosition: (d: typeof arrowData[0]) => d.position as [number, number],
-              getFillColor: [255, 255, 255, 240],
-              getLineColor: [59, 130, 246, 255],
-              getRadius: 12,
-              lineWidthMinPixels: 2,
-            })
-          );
-
-          // Direction arrows on one-way streets - using simple arrow character
-          result.push(
-            new TextLayer({
-              id: 'one-way-street-arrows',
-              data: arrowData,
+              filled: false,
+              lineWidthUnits: 'pixels',
+              getLineColor: [255, 255, 255, 225],
+              getLineWidth: boundaryRoadWidth + 3,
+            }),
+            new GeoJsonLayer<RoadProperties>({
+              id: 'cross-traffic-boundary-roads',
+              data: boundaryData,
               pickable: false,
-              getPosition: (d: typeof arrowData[0]) => d.position as [number, number],
-              getText: () => '→',
-              getSize: 18,
-              getAngle: (d: typeof arrowData[0]) => -d.angle,
-              getColor: [30, 64, 175, 255],
-              getTextAnchor: 'middle',
-              getAlignmentBaseline: 'center',
-              fontFamily: 'Arial, sans-serif',
-              fontWeight: 'bold',
-              billboard: false,
-              sizeMinPixels: 14,
-              sizeMaxPixels: 22,
-            })
-          );
-        }
-
-        if (modalFilterMarkers.length > 0) {
-          // X markers on modal filter streets
-          result.push(
-            new ScatterplotLayer({
-              id: 'modal-filter-road-markers',
-              data: modalFilterMarkers,
-              pickable: false,
-              opacity: 1,
               stroked: true,
-              filled: true,
-              radiusScale: 1,
-              radiusMinPixels: 8,
-              radiusMaxPixels: 14,
-              getPosition: (d: typeof modalFilterMarkers[0]) => d.position as [number, number],
-              getFillColor: [220, 38, 38, 255], // Red
-              getLineColor: [255, 255, 255, 255],
-              getRadius: 10,
-              lineWidthMinPixels: 2,
-            })
-          );
-
-          result.push(
-            new TextLayer({
-              id: 'modal-filter-road-labels',
-              data: modalFilterMarkers,
-              pickable: false,
-              getPosition: (d: typeof modalFilterMarkers[0]) => d.position as [number, number],
-              getText: () => 'X',
-              getSize: 14,
-              getColor: [255, 255, 255, 255],
-              getTextAnchor: 'middle',
-              getAlignmentBaseline: 'center',
-              fontFamily: 'Arial, Helvetica, sans-serif',
-              fontWeight: 'bold',
-              sizeMinPixels: 10,
-              sizeMaxPixels: 16,
-            })
-          );
-        }
-
-        if (streetCutMarkers.length > 0) {
-          result.push(
-            new ScatterplotLayer({
-              id: 'street-cut-markers',
-              data: streetCutMarkers,
-              pickable: false,
-              opacity: 1,
-              stroked: true,
-              filled: true,
-              radiusScale: 1,
-              radiusMinPixels: 8,
-              radiusMaxPixels: 14,
-              getPosition: (d: typeof streetCutMarkers[0]) => d.position as [number, number],
-              getFillColor: [124, 58, 237, 255],
-              getLineColor: [255, 255, 255, 255],
-              getRadius: 10,
-              lineWidthMinPixels: 2,
-            })
-          );
-
-          result.push(
-            new TextLayer({
-              id: 'street-cut-labels',
-              data: streetCutMarkers,
-              pickable: false,
-              getPosition: (d: typeof streetCutMarkers[0]) => d.position as [number, number],
-              getText: () => '▬',
-              getSize: 14,
-              getColor: [255, 255, 255, 255],
-              getTextAnchor: 'middle',
-              getAlignmentBaseline: 'center',
-              fontFamily: 'Arial, Helvetica, sans-serif',
-              fontWeight: 'bold',
-              sizeMinPixels: 10,
-              sizeMaxPixels: 16,
-            })
+              filled: false,
+              lineWidthUnits: 'pixels',
+              getLineColor: [30, 64, 175, 245],
+              getLineWidth: boundaryRoadWidth,
+            }),
           );
         }
       }
-    }
 
-    // Partitioned superblocks layer (new system)
-    if (showPartition && partition && partition.superblocks.length > 0) {
-      result.push(
-        new PolygonLayer({
-          id: 'enforced-superblocks',
-          data: partition.superblocks,
-          pickable: true,
-          stroked: true,
-          filled: true,
-          getPolygon: (d: EnforcedSuperblock) => d.geometry.coordinates,
-          getFillColor: (d: EnforcedSuperblock) => {
-            if (selectedEnforcedSuperblock?.id === d.id) {
-              return [59, 130, 246, 180]; // blue when selected
-            }
-            // Color based on constraint validation
-            if (d.constraint_validated && d.all_addresses_reachable) {
-              return [34, 197, 94, 140]; // green - valid
-            } else if (d.constraint_validated) {
-              return [251, 191, 36, 140]; // yellow - constraint ok but some unreachable
-            }
-            return [239, 68, 68, 140]; // red - constraint not satisfied
-          },
-          getLineColor: (d: EnforcedSuperblock) => {
-            if (selectedEnforcedSuperblock?.id === d.id) {
-              return [37, 99, 235, 255]; // darker blue
-            }
-            return [0, 0, 0, 100];
-          },
-          getLineWidth: (d: EnforcedSuperblock) =>
-            selectedEnforcedSuperblock?.id === d.id ? 3 : 1,
-          onClick: (info: { object?: EnforcedSuperblock }) => {
-            if (info.object) {
-              onEnforcedSuperblockClick?.(info.object);
-            }
-          },
-          updateTriggers: {
-            getFillColor: [selectedEnforcedSuperblock?.id],
-            getLineColor: [selectedEnforcedSuperblock?.id],
-            getLineWidth: [selectedEnforcedSuperblock?.id],
-          },
-        })
-      );
+      // Add one clear, hoverable sign per modified road segment. The symbol,
+      // line color, marker color, and legend all come from PLAN_ACTION_STYLES.
+      if (showPartition && partition && modifiedStreets.size > 0 && showDetailedPlanSigns) {
+        const markerIndex = new Map<string, PlanMarkerDatum>();
+        streetNetwork.features.forEach(f => {
+          const modification = getStreetModification(f.properties);
+          if (!modification || !(modification.type in PLAN_ACTION_STYLES)) return;
+          const coords = f.geometry.coordinates;
+          if (coords.length === 0) return;
+
+          const actionType = modification.type as PlanActionType;
+          const style = PLAN_ACTION_STYLES[actionType];
+          const midIndex = Math.floor((coords.length - 1) / 2);
+          const point = coords[midIndex] as [number, number];
+          const prevPoint = coords[Math.max(0, midIndex - 1)] ?? point;
+          const nextPoint = coords[Math.min(coords.length - 1, midIndex + 1)] ?? point;
+          const angle = actionType === 'one_way'
+            ? Math.atan2(nextPoint[1] - prevPoint[1], nextPoint[0] - prevPoint[0])
+              * (180 / Math.PI) + (modification.direction === 'v_to_u' ? 180 : 0)
+            : 0;
+          const marker: PlanMarkerDatum = {
+            position: point,
+            angle,
+            name: f.properties?.name || `OSM road ${f.properties?.osmid ?? ''}`.trim(),
+            title: style.title,
+            symbol: style.symbol,
+            actionType,
+            detail: actionType === 'one_way'
+              ? 'Follow the marked direction; return to the same boundary side.'
+              : actionType === 'two_way'
+                ? 'Both local directions remain available inside this territory.'
+                : 'Motor through-traffic stops at this marked point.',
+          };
+          const markerKey = `${actionType}:${point[0].toFixed(6)}:${point[1].toFixed(6)}`;
+          markerIndex.set(markerKey, marker);
+        });
+
+        (Object.keys(PLAN_ACTION_STYLES) as PlanActionType[]).forEach(actionType => {
+          const markerData = Array.from(markerIndex.values()).filter(
+            marker => marker.actionType === actionType,
+          );
+          if (markerData.length === 0) return;
+          const style = PLAN_ACTION_STYLES[actionType];
+
+          result.push(
+            new ScatterplotLayer<PlanMarkerDatum>({
+              id: `${actionType}-road-markers`,
+              data: markerData,
+              pickable: true,
+              opacity: 1,
+              stroked: true,
+              filled: true,
+              radiusScale: 1,
+              radiusMinPixels: 9,
+              radiusMaxPixels: 14,
+              getPosition: marker => marker.position,
+              getFillColor: style.markerFill,
+              getLineColor: style.markerLine,
+              getRadius: 11,
+              lineWidthMinPixels: 2,
+              onHover: (info: { object?: PlanMarkerDatum }) => {
+                setHoveredPlanMarker(info.object ?? null);
+              },
+            }),
+            new TextLayer<PlanMarkerDatum>({
+              id: `${actionType}-road-labels`,
+              data: markerData,
+              pickable: false,
+              getPosition: marker => marker.position,
+              getText: marker => marker.symbol,
+              getSize: actionType === 'two_way' ? 11 : 14,
+              getAngle: marker => actionType === 'one_way' ? -(marker.angle ?? 0) : 0,
+              getColor: style.text,
+              getTextAnchor: 'middle',
+              getAlignmentBaseline: 'center',
+              fontFamily: 'Arial, Helvetica, sans-serif',
+              fontWeight: 'bold',
+              billboard: actionType !== 'one_way',
+              sizeMinPixels: actionType === 'two_way' ? 9 : 11,
+              sizeMaxPixels: actionType === 'two_way' ? 13 : 17,
+            }),
+          );
+        });
+      }
     }
 
     // Entry points layer - simple markers at superblock entries
-    if (showPartition && showEntryPoints && partition) {
+    if (showPartition && showEntryPoints && partition && showDetailedPlanSigns) {
       const entryPointData = partition.superblocks.flatMap((sb, sbIndex) =>
         sb.entry_points.map(ep => ({
           ...ep,
@@ -556,6 +600,25 @@ export function StreetMap({
           superblockIndex: sbIndex,
         }))
       );
+      const directionLabelData = partition.superblocks.flatMap((sb, sbIndex) => {
+        const labels: (typeof entryPointData)[number][] = [];
+        for (let sector = 0; sector < sb.num_sectors; sector += 1) {
+          const entries = sb.entry_points.filter((entry) => entry.sector === sector);
+          if (entries.length === 0) continue;
+          const representative = entries.reduce((best, entry) => {
+            if (sector === 0) return entry.coordinates.lon > best.coordinates.lon ? entry : best;
+            if (sector === 1) return entry.coordinates.lat > best.coordinates.lat ? entry : best;
+            if (sector === 2) return entry.coordinates.lon < best.coordinates.lon ? entry : best;
+            return entry.coordinates.lat < best.coordinates.lat ? entry : best;
+          });
+          labels.push({
+            ...representative,
+            superblockId: sb.id,
+            superblockIndex: sbIndex,
+          });
+        }
+        return labels;
+      });
 
       if (entryPointData.length > 0) {
         // Entry point circles - colored by superblock
@@ -568,33 +631,57 @@ export function StreetMap({
             stroked: true,
             filled: true,
             radiusScale: 1,
-            radiusMinPixels: 6,
-            radiusMaxPixels: 12,
+            radiusMinPixels: 4,
+            radiusMaxPixels: 8,
             getPosition: (d: typeof entryPointData[0]) => [d.coordinates.lon, d.coordinates.lat],
             getFillColor: (d: typeof entryPointData[0]) =>
               SUPERBLOCK_COLORS[d.superblockIndex % SUPERBLOCK_COLORS.length],
             getLineColor: [255, 255, 255, 255],
-            getRadius: 8,
-            lineWidthMinPixels: 2,
+            getRadius: 6,
+            lineWidthMinPixels: 1.5,
+            onHover: (info: { object?: (typeof entryPointData)[number] }) => {
+              const entry = info.object;
+              if (!entry) {
+                setHoveredPlanMarker(null);
+                return;
+              }
+              const side = partition.superblocks[entry.superblockIndex]?.num_sectors === 4
+                ? ['East', 'North', 'West', 'South'][entry.sector] ?? `Sector ${entry.sector + 1}`
+                : `Sector ${entry.sector + 1}`;
+              setHoveredPlanMarker({
+                position: [entry.coordinates.lon, entry.coordinates.lat],
+                name: `Superblock ${entry.superblockIndex + 1}`,
+                title: `${side} entry and return point`,
+                symbol: side.charAt(0),
+                actionType: 'entry_point',
+                detail: 'Vehicles using this entry must return to the same boundary side.',
+              });
+            },
           })
         );
 
-        // Entry label
+        // Atlas-safe cardinal label communicates the side to which a vehicle
+        // must return. (The default deck.gl atlas omits Unicode arrows.)
         result.push(
           new TextLayer({
             id: 'entry-point-labels',
-            data: entryPointData,
+            data: directionLabelData,
             pickable: false,
             getPosition: (d: typeof entryPointData[0]) => [d.coordinates.lon, d.coordinates.lat],
-            getText: () => 'E',
-            getSize: 10,
+            getText: (d: typeof entryPointData[0]) => {
+              if (partition.superblocks[d.superblockIndex]?.num_sectors === 4) {
+                return ['E', 'N', 'W', 'S'][d.sector] ?? '·';
+              }
+              return '·';
+            },
+            getSize: 11,
             getColor: [255, 255, 255, 255],
             getTextAnchor: 'middle',
             getAlignmentBaseline: 'center',
             fontFamily: 'Arial, Helvetica, sans-serif',
             fontWeight: 'bold',
             sizeMinPixels: 8,
-            sizeMaxPixels: 12,
+            sizeMaxPixels: 10,
           })
         );
       }
@@ -603,13 +690,13 @@ export function StreetMap({
     // Route layer
     if (showRoute && route && route.success && route.segments.length > 0) {
       const routePathData = route.segments.map(segment => ({
-        path: segment.coordinates.map(c => [c.lon, c.lat]),
+        path: segment.coordinates.map(c => [c.lon, c.lat] as [number, number]),
         isArterial: segment.is_arterial,
         roadType: segment.road_type,
       }));
 
       result.push(
-        new PathLayer({
+        new PathLayer<(typeof routePathData)[number]>({
           id: 'route-path',
           data: routePathData,
           pickable: false,
@@ -625,7 +712,7 @@ export function StreetMap({
     }
 
     return result;
-  }, [streetNetwork, superblocks, showSuperblocks, colorBy, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute, modifiedStreets]);
+  }, [streetNetwork, superblocks, showSuperblocks, colorBy, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute, modifiedStreets, getStreetModification, showDetailedPlanSigns, boundaryRoadWidth]);
 
   // Store overlay reference
   const overlayRef = useRef<MapboxOverlay | null>(null);
@@ -642,6 +729,25 @@ export function StreetMap({
     map.addControl(overlay as unknown as IControl);
   }, [layers]);
 
+  const retryBasemap = useCallback(() => {
+    setMapError(null);
+    setMapReady(false);
+    mapRef.current?.getMap().setStyle(MAP_STYLE);
+  }, []);
+
+  const hasMapData = Boolean(
+    streetNetwork?.features.length ||
+    superblocks?.length ||
+    partition?.superblocks.length ||
+    route?.success
+  );
+
+  const hasInfo = Boolean(
+    (showRoute && route?.success) ||
+    (showPartition && partition) ||
+    streetNetwork
+  );
+
   // Update deck layers when they change
   useEffect(() => {
     if (overlayRef.current) {
@@ -657,14 +763,62 @@ export function StreetMap({
         onMove={handleMove}
         mapStyle={MAP_STYLE}
         onLoad={onMapLoad}
+        onIdle={() => setMapReady(true)}
+        onError={(event) => {
+          setMapError(event.error?.message || 'The basemap could not be loaded.');
+        }}
+        attributionControl={false}
         style={{ width: '100%', height: '100%' }}
       >
         <NavigationControl position="bottom-right" />
         <ScaleControl position="bottom-left" />
+        <AttributionControl compact position="bottom-right" />
       </MapGL>
 
+      {!mapReady && !mapError && (
+        <div className="map-status" role="status" aria-live="polite">
+          <span className="map-status-spinner" />
+          Loading basemap
+        </div>
+      )}
+
+      {mapError && (
+        <div className="map-status map-status-error" role="alert">
+          <span>Basemap unavailable</span>
+          <button type="button" onClick={retryBasemap}>Retry</button>
+        </div>
+      )}
+
+      {mapReady && !hasMapData && (
+        <div className="map-empty-state" aria-hidden="true">
+          <span className="empty-state-icon">⌖</span>
+          <strong>{selectedPlaceName ? 'City selected' : 'Choose a city to begin'}</strong>
+          <span>
+            {selectedPlaceName
+              ? emptyStateMessage || 'Choose an analysis action from the controls.'
+              : 'Search for a city, then run the complete automated analysis.'}
+          </span>
+        </div>
+      )}
+
+      {/* Plan-sign tooltip */}
+      {hoveredPlanMarker && (
+        <div className="tooltip plan-marker-tooltip">
+          <div className="tooltip-title">{hoveredPlanMarker.title}</div>
+          <div className="tooltip-row">
+            <span>Street / area:</span>
+            <span>{hoveredPlanMarker.name}</span>
+          </div>
+          <div className="tooltip-detail">{hoveredPlanMarker.detail}</div>
+          <div className="tooltip-coordinate">
+            {hoveredPlanMarker.position[1].toFixed(5)}° N,{' '}
+            {hoveredPlanMarker.position[0].toFixed(5)}° E
+          </div>
+        </div>
+      )}
+
       {/* Road tooltip */}
-      {hoveredFeature && !hoveredSuperblock && (
+      {hoveredFeature && !hoveredSuperblock && !hoveredPlanMarker && (
         <div className="tooltip road-tooltip">
           <div className="tooltip-title">
             {hoveredFeature.properties?.name ?? 'Unnamed road'}
@@ -719,15 +873,17 @@ export function StreetMap({
       )}
 
       {/* Map Legend */}
-      <div className="map-legend-stack">
+      {!hideLegends && <div className="map-legend-stack">
         {/* Selected superblock details */}
         {selectedSuperblock && (
           <div className="superblock-details">
             <div className="details-header">
               <span className="details-title">Superblock Analysis</span>
               <button
+                type="button"
                 className="close-button"
                 onClick={() => setSelectedSuperblock(null)}
+                aria-label="Close superblock analysis"
               >
                 ×
               </button>
@@ -894,33 +1050,43 @@ export function StreetMap({
           </div>
         )}
 
-        {colorBy === 'hierarchy' && (
+        {streetNetwork && colorBy === 'hierarchy' && !showPartition && (
           <div className="map-legend hierarchy-legend">
-            <div className="legend-title">Road Types</div>
-            <div className="legend-item">
-              <span className="legend-color" style={{ background: 'rgb(139, 0, 0)' }} />
-              <span className="legend-label">Motorway</span>
-            </div>
-            <div className="legend-item">
-              <span className="legend-color" style={{ background: 'rgb(255, 69, 0)' }} />
-              <span className="legend-label">Primary</span>
-            </div>
-            <div className="legend-item">
-              <span className="legend-color" style={{ background: 'rgb(255, 140, 0)' }} />
-              <span className="legend-label">Secondary</span>
-            </div>
-            <div className="legend-item">
-              <span className="legend-color" style={{ background: 'rgb(255, 215, 0)' }} />
-              <span className="legend-label">Tertiary</span>
-            </div>
-            <div className="legend-item">
-              <span className="legend-color" style={{ background: 'rgb(144, 238, 144)' }} />
-              <span className="legend-label">Residential</span>
+            <button
+              type="button"
+              className="panel-header"
+              onClick={() => setRoadLegendCollapsed(!roadLegendCollapsed)}
+              aria-expanded={!roadLegendCollapsed}
+            >
+              <span className="panel-header-title">Road Types</span>
+              <span className={`panel-toggle ${roadLegendCollapsed ? 'collapsed' : ''}`}>▼</span>
+            </button>
+            <div className={`panel-content ${roadLegendCollapsed ? 'collapsed' : ''}`}>
+              <div className="legend-item">
+                <span className="legend-color" style={{ background: 'rgb(139, 0, 0)' }} />
+                <span className="legend-label">Motorway</span>
+              </div>
+              <div className="legend-item">
+                <span className="legend-color" style={{ background: 'rgb(255, 69, 0)' }} />
+                <span className="legend-label">Primary</span>
+              </div>
+              <div className="legend-item">
+                <span className="legend-color" style={{ background: 'rgb(255, 140, 0)' }} />
+                <span className="legend-label">Secondary</span>
+              </div>
+              <div className="legend-item">
+                <span className="legend-color" style={{ background: 'rgb(255, 215, 0)' }} />
+                <span className="legend-label">Tertiary</span>
+              </div>
+              <div className="legend-item">
+                <span className="legend-color" style={{ background: 'rgb(144, 238, 144)' }} />
+                <span className="legend-label">Residential</span>
+              </div>
             </div>
           </div>
         )}
 
-        {colorBy === 'traffic' && (
+        {streetNetwork && colorBy === 'traffic' && (
           <div className="map-legend traffic-legend">
             <div className="legend-title">Traffic Intensity</div>
             <div className="legend-gradient">
@@ -935,63 +1101,69 @@ export function StreetMap({
 
         {showPartition && partition && (
           <div className="map-legend partition-legend">
-            <div
+            <button
+              type="button"
               className="panel-header"
               onClick={() => setLegendCollapsed(!legendCollapsed)}
+              aria-expanded={!legendCollapsed}
             >
-              <span className="panel-header-title">Legend</span>
+              <span className="panel-header-title">Superblock plan · map signs</span>
               <span className={`panel-toggle ${legendCollapsed ? 'collapsed' : ''}`}>▼</span>
-            </div>
+            </button>
             <div className={`panel-content ${legendCollapsed ? 'collapsed' : ''}`}>
-              <div className="legend-section-title">Superblock Status</div>
+              <div className="legend-section-title">Traffic structure</div>
               <div className="legend-item">
-                <span className="legend-color" style={{ background: 'rgba(34, 197, 94, 0.6)', width: 16, height: 16, borderRadius: 4 }} />
-                <span className="legend-label">Valid</span>
+                <span className="plan-sign plan-sign-line boundary-road" />
+                <span className="legend-label">Cross-traffic boundary road</span>
               </div>
               <div className="legend-item">
-                <span className="legend-color" style={{ background: 'rgba(251, 191, 36, 0.6)', width: 16, height: 16, borderRadius: 4 }} />
-                <span className="legend-label">Some unreachable</span>
+                <span className="plan-area-status valid" />
+                <span className="legend-label">No cross-traffic path</span>
               </div>
               <div className="legend-item">
-                <span className="legend-color" style={{ background: 'rgba(239, 68, 68, 0.6)', width: 16, height: 16, borderRadius: 4 }} />
-                <span className="legend-label">Invalid</span>
+                <span className="plan-area-status review" />
+                <span className="legend-label">Local access review</span>
+              </div>
+              <div className="legend-item">
+                <span className="plan-area-status invalid" />
+                <span className="legend-label">Cross-traffic remains</span>
               </div>
               {showEntryPoints && (
                 <>
-                  <div className="legend-section-title">Entry Points</div>
+                  <div className="legend-section-title">Entry and return direction</div>
                   <div className="legend-item">
-                    <span className="legend-marker entry-point" style={{ background: 'rgb(99, 102, 241)' }}>E</span>
-                    <span className="legend-label">Entry (color = superblock)</span>
+                    <span className="plan-sign entry-point">E</span>
+                    <span className="legend-label">Colored dot = entry; E/N/W/S = required return side</span>
                   </div>
                 </>
               )}
               {showModalFilters && (
                 <>
-                  <div className="legend-section-title">Street Modifications</div>
+                  <div className="legend-section-title">Street actions</div>
                   <div className="legend-item">
-                    <span className="legend-color" style={{ background: 'rgb(239, 68, 68)', height: 4 }} />
-                    <span className="legend-label">Modal filter (blocked)</span>
+                    <span className="plan-sign modal-filter">X</span>
+                    <span className="legend-label">Modal filter · cars blocked</span>
                   </div>
                   <div className="legend-item">
-                    <span className="legend-marker" style={{ background: 'rgb(220, 38, 38)' }}>X</span>
-                    <span className="legend-label">Filter location</span>
+                    <span className="plan-sign one-way">&gt;</span>
+                    <span className="legend-label">One-way · sign points with traffic</span>
                   </div>
                   <div className="legend-item">
-                    <span className="legend-color" style={{ background: 'rgb(59, 130, 246)', height: 4 }} />
-                    <span className="legend-label">One-way conversion</span>
+                    <span className="plan-sign two-way">&lt;&gt;</span>
+                    <span className="legend-label">Two-way local access</span>
                   </div>
                   <div className="legend-item">
-                    <span className="legend-direction-marker">→</span>
-                    <span className="legend-label">Traffic direction</span>
+                    <span className="plan-sign turn-restriction">!</span>
+                    <span className="legend-label">Turn restriction</span>
                   </div>
                   <div className="legend-item">
-                    <span className="legend-color" style={{ background: 'rgb(124, 58, 237)', height: 4 }} />
-                    <span className="legend-label">Street cut</span>
+                    <span className="plan-sign street-cut">=</span>
+                    <span className="legend-label">Street cut · motor traffic closed</span>
                   </div>
-                  <div className="legend-item">
-                    <span className="legend-marker" style={{ background: 'rgb(124, 58, 237)' }}>▬</span>
-                    <span className="legend-label">Cut location</span>
-                  </div>
+                  <div className="legend-hint">Every sign matches the street-by-street action schedule.</div>
+                  {!showDetailedPlanSigns && (
+                    <div className="legend-hint">Zoom in to street level to show point signs.</div>
+                  )}
                 </>
               )}
             </div>
@@ -1012,18 +1184,20 @@ export function StreetMap({
             </div>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Stacked info panels on bottom right */}
-      <div className="map-info-stack">
+      {hasInfo && !selectedEnforcedSuperblock && !hideLegends && <div className="map-info-stack">
         <div className="info-panel">
-          <div
+          <button
+            type="button"
             className="info-panel-header"
             onClick={() => setInfoCollapsed(!infoCollapsed)}
+            aria-expanded={!infoCollapsed}
           >
             <span className="info-panel-title">Info</span>
             <span className={`panel-toggle ${infoCollapsed ? 'collapsed' : ''}`}>▼</span>
-          </div>
+          </button>
           <div className={`info-panel-content ${infoCollapsed ? 'collapsed' : ''}`}>
             {/* Route info */}
             {showRoute && route && route.success && (
@@ -1047,19 +1221,26 @@ export function StreetMap({
             {/* Partition stats */}
             {showPartition && partition && (
               <div className="info-section">
-                <div className="info-section-title">Partition</div>
+                <div className="info-section-title">City plan</div>
                 <div className="info-row">
                   <span>Superblocks:</span>
                   <span>{partition.total_superblocks}</span>
                 </div>
                 <div className="info-row">
-                  <span>Coverage:</span>
+                  <span>Cell coverage:</span>
                   <span>{partition.coverage_percent.toFixed(1)}%</span>
                 </div>
                 <div className="info-row">
-                  <span>Modifications:</span>
+                  <span>Boundary roads:</span>
+                  <span>{partition.arterial_network.length}</span>
+                </div>
+                <div className="info-row">
+                  <span>Access changes:</span>
                   <span>
-                    {partition.total_modal_filters + partition.total_one_way_conversions + partition.total_street_cuts}
+                    {partition.total_modal_filters
+                      + partition.total_one_way_conversions
+                      + partition.total_two_way_conversions
+                      + partition.total_street_cuts}
                   </span>
                 </div>
                 <div className="info-row">
@@ -1091,7 +1272,7 @@ export function StreetMap({
             )}
           </div>
         </div>
-      </div>
+      </div>}
 
     </div>
   );

@@ -1,17 +1,25 @@
-version: '3.8'
-
 services:
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     environment:
-      - DEBUG=false
-      - CORS_ORIGINS=["http://localhost:5173", "http://localhost:3000"]
+      DEBUG: "false"
+      CACHE_DIR: /app/cache
+      # The backend is reachable only through nginx in this Compose network,
+      # so Uvicorn can safely use nginx's forwarded client address.
+      FORWARDED_ALLOW_IPS: "*"
     volumes:
-      - osmnx-cache:/root/.cache/osmnx
+      - app-cache:/app/cache
+      - osmnx-cache:/home/superblocker/.cache/osmnx
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     restart: unless-stopped
 
   frontend:
@@ -19,10 +27,18 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "5173:80"
+      - "5173:8080"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
     restart: unless-stopped
 
 volumes:
+  app-cache:
   osmnx-cache:

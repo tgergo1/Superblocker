@@ -12,23 +12,25 @@ The goal is to find superblock sizes that:
 - Are large enough to be meaningful for traffic reduction
 """
 
-import math
 import logging
-import numpy as np
-from typing import Optional
+import math
 from dataclasses import dataclass
-from shapely.geometry import Polygon, LineString, Point
-from shapely.ops import polygonize, transform, unary_union
+
 import networkx as nx
+import numpy as np
 import pyproj
+from shapely.geometry import LineString
+from shapely.ops import polygonize, transform, unary_union
+
+from app.utils.geo import bbox_area_hectares
 
 logger = logging.getLogger(__name__)
 
 
 # Barcelona Superilles base parameters
 BARCELONA_BASE_SIZE_M = 400  # ~400m x 400m blocks (3x3 city blocks)
-BARCELONA_MIN_SIZE_M = 300   # Minimum ~300m
-BARCELONA_MAX_SIZE_M = 500   # Maximum ~500m
+BARCELONA_MIN_SIZE_M = 300  # Minimum ~300m
+BARCELONA_MAX_SIZE_M = 500  # Maximum ~500m
 
 # Walking speed assumptions
 WALKING_SPEED_MPS = 1.4  # 1.4 m/s average walking speed
@@ -38,6 +40,7 @@ MAX_WALKING_TIME_S = 300  # 5 minutes max to cross
 @dataclass
 class SizeRecommendation:
     """Recommended superblock dimensions."""
+
     min_side_m: float
     max_side_m: float
     optimal_side_m: float
@@ -51,6 +54,7 @@ class SizeRecommendation:
 @dataclass
 class GridAnalysis:
     """Analysis of street grid characteristics."""
+
     dominant_angle_deg: float
     grid_regularity: float  # 0-1, higher = more regular grid
     average_block_size_m: float
@@ -69,9 +73,9 @@ class SizeOptimizer:
 
     def __init__(
         self,
-        graph: Optional[nx.MultiDiGraph] = None,
-        population_density: Optional[float] = None,
-        latitude: Optional[float] = None,
+        graph: nx.MultiDiGraph | None = None,
+        population_density: float | None = None,
+        latitude: float | None = None,
     ):
         """
         Initialize the optimizer.
@@ -85,7 +89,7 @@ class SizeOptimizer:
         self.population_density = population_density
         self.latitude = latitude
 
-        self.grid_analysis: Optional[GridAnalysis] = None
+        self.grid_analysis: GridAnalysis | None = None
 
     def calculate_optimal_size(self) -> SizeRecommendation:
         """
@@ -114,16 +118,24 @@ class SizeOptimizer:
 
             if density_factor < 1:
                 rationale_parts.append(
-                    f"Reduced by {(1-density_factor)*100:.0f}% for high density"
+                    f"Reduced by {(1 - density_factor) * 100:.0f}% for high density"
                 )
             elif density_factor > 1:
                 rationale_parts.append(
-                    f"Increased by {(density_factor-1)*100:.0f}% for low density"
+                    f"Increased by {(density_factor - 1) * 100:.0f}% for low density"
                 )
 
         # Adjust for grid regularity
         if self.grid_analysis is not None:
             grid_factor = self._grid_adjustment_factor()
+            base_size *= grid_factor
+            min_size *= grid_factor
+            max_size *= grid_factor
+
+            if grid_factor > 1:
+                rationale_parts.append(
+                    f"Increased by {(grid_factor - 1) * 100:.0f}% for grid irregularity"
+                )
 
             # For irregular grids, allow wider range
             if self.grid_analysis.grid_regularity < 0.5:
@@ -159,9 +171,9 @@ class SizeOptimizer:
             )
 
         # Convert to hectares
-        min_area = (min_size ** 2) / 10000
-        max_area = (max_size ** 2) / 10000
-        optimal_area = (base_size ** 2) / 10000
+        min_area = (min_size**2) / 10000
+        max_area = (max_size**2) / 10000
+        optimal_area = (base_size**2) / 10000
 
         return SizeRecommendation(
             min_side_m=min_size,
@@ -217,6 +229,9 @@ class SizeOptimizer:
         angles = []
         total_length = 0
 
+        seen_edges: set[tuple[int, int, object]] = set()
+        longitudes: list[float] = []
+        latitudes: list[float] = []
         for u, v, data in self.graph.edges(data=True):
             u_data = self.graph.nodes.get(u, {})
             v_data = self.graph.nodes.get(v, {})
@@ -224,10 +239,19 @@ class SizeOptimizer:
             if "x" not in u_data or "x" not in v_data:
                 continue
 
+            raw_osmid = data.get("osmid", 0)
+            osmid = raw_osmid[0] if isinstance(raw_osmid, list) and raw_osmid else raw_osmid
+            physical_key = (min(u, v), max(u, v), osmid)
+            if physical_key in seen_edges:
+                continue
+            seen_edges.add(physical_key)
+
+            longitudes.extend((u_data["x"], v_data["x"]))
+            latitudes.extend((u_data["y"], v_data["y"]))
             dx = v_data["x"] - u_data["x"]
             dy = v_data["y"] - u_data["y"]
 
-            length = data.get("length", math.sqrt(dx*dx + dy*dy))
+            length = data.get("length", math.sqrt(dx * dx + dy * dy))
             total_length += length
 
             # Calculate angle (0-180 range, treating opposite directions as same)
@@ -246,11 +270,7 @@ class SizeOptimizer:
 
         # Find dominant angle using weighted histogram
         bins = np.linspace(0, 180, 37)  # 5-degree bins
-        hist, _ = np.histogram(
-            [a[0] for a in angles],
-            bins=bins,
-            weights=[a[1] for a in angles]
-        )
+        hist, _ = np.histogram([a[0] for a in angles], bins=bins, weights=[a[1] for a in angles])
 
         dominant_bin = np.argmax(hist)
         dominant_angle = (bins[dominant_bin] + bins[dominant_bin + 1]) / 2
@@ -272,9 +292,14 @@ class SizeOptimizer:
 
         avg_block_size = self._estimate_average_block_size_m()
 
-        # Street density (km per km²)
-        # Rough calculation - would need bbox for accurate result
-        street_density = 0  # TODO: calculate if bbox available
+        # Street density (physical street km per geographic km²).
+        area_ha = bbox_area_hectares(
+            max(latitudes),
+            min(latitudes),
+            max(longitudes),
+            min(longitudes),
+        )
+        street_density = (total_length / 1000) / (area_ha / 100) if area_ha > 0 else 0
 
         return GridAnalysis(
             dominant_angle_deg=dominant_angle,
@@ -303,10 +328,12 @@ class SizeOptimizer:
 
             geom = data.get("geometry")
             if geom is None:
-                geom = LineString([
-                    (u_data["x"], u_data["y"]),
-                    (v_data["x"], v_data["y"]),
-                ])
+                geom = LineString(
+                    [
+                        (u_data["x"], u_data["y"]),
+                        (v_data["x"], v_data["y"]),
+                    ]
+                )
 
             edge_key = (min(u, v), max(u, v))
             current = undirected_lines.get(edge_key)
@@ -323,8 +350,7 @@ class SizeOptimizer:
         transformer = pyproj.Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
 
         projected_lines = [
-            transform(transformer.transform, line)
-            for line in undirected_lines.values()
+            transform(transformer.transform, line) for line in undirected_lines.values()
         ]
         polygons = list(polygonize(unary_union(projected_lines)))
 
@@ -336,7 +362,9 @@ class SizeOptimizer:
             block_side_lengths.append(math.sqrt(area))
 
         if not block_side_lengths:
-            avg_edge_length = np.mean([line.length for line in projected_lines]) if projected_lines else 100
+            avg_edge_length = (
+                np.mean([line.length for line in projected_lines]) if projected_lines else 100
+            )
             return max(40.0, float(avg_edge_length))
 
         return float(np.median(block_side_lengths))
@@ -370,12 +398,7 @@ class SizeOptimizer:
         # Slightly south-facing for passive solar
         solar_optimal = 0.0  # East-west alignment
         if self.latitude is not None:
-            if self.latitude > 0:
-                # Northern hemisphere: slight rotation for south exposure
-                solar_optimal = 15  # 15 degrees from E-W
-            else:
-                # Southern hemisphere: opposite
-                solar_optimal = -15
+            solar_optimal = 15 if self.latitude > 0 else -15
 
         # Weight: 90% grid, 10% solar
         orientation = 0.9 * grid_angle + 0.1 * solar_optimal
@@ -408,9 +431,9 @@ class SizeOptimizer:
 
 
 def calculate_optimal_superblock_size(
-    graph: Optional[nx.MultiDiGraph] = None,
-    population_density: Optional[float] = None,
-    latitude: Optional[float] = None,
+    graph: nx.MultiDiGraph | None = None,
+    population_density: float | None = None,
+    latitude: float | None = None,
 ) -> SizeRecommendation:
     """
     Convenience function to calculate optimal superblock size.

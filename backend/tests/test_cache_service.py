@@ -2,13 +2,10 @@
 Tests for the caching service.
 """
 
-import json
-import os
 import tempfile
 import time
-import pytest
 
-from app.services.cache_service import CacheService, CacheStats
+from app.services.cache_service import CacheService
 
 
 class TestCacheService:
@@ -27,6 +24,7 @@ class TestCacheService:
         """Clean up after tests."""
         # Clean up temp directory
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_cache_set_and_get(self):

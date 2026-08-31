@@ -5,9 +5,9 @@ import type { BoundingBox, StreetNetworkResponse } from '../types';
 export function useStreetNetwork(bbox: BoundingBox | null, enabled = true) {
   return useQuery<StreetNetworkResponse>({
     queryKey: ['streetNetwork', bbox],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       if (!bbox) throw new Error('No bounding box provided');
-      return getStreetNetwork(bbox);
+      return getStreetNetwork(bbox, 'drive', signal);
     },
     enabled: enabled && bbox !== null,
     staleTime: 10 * 60 * 1000, // 10 minutes

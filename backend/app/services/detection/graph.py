@@ -3,22 +3,26 @@ Graph-based superblock detection algorithm.
 
 Finds areas bounded by major roads that could be converted to superblocks.
 """
+
+import asyncio
+import math
+import uuid
+
 import networkx as nx
 import osmnx as ox
-import math
-from shapely.geometry import Polygon, MultiPolygon, mapping
+from shapely.geometry import Polygon, mapping
 from shapely.ops import polygonize, unary_union
-import uuid
-from typing import Any
 
 from app.models.schemas import BoundingBox, SuperblockCandidate
 
-
 # Road types that can form superblock boundaries
 BOUNDARY_ROAD_TYPES = {
-    "primary", "primary_link",
-    "secondary", "secondary_link",
-    "tertiary", "tertiary_link",
+    "primary",
+    "primary_link",
+    "secondary",
+    "secondary_link",
+    "tertiary",
+    "tertiary_link",
 }
 
 # Minimum hierarchy level for boundary roads (lower = more major)
@@ -49,19 +53,16 @@ def detect_superblocks(
         List of SuperblockCandidate objects
     """
     # Convert graph to GeoDataFrames
-    nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
+    _nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
 
     if edges.empty:
         return []
-
-    # Get the CRS for area calculations
-    edges_projected = edges.to_crs(epsg=3857)  # Web Mercator for area calc
 
     # Extract boundary road geometries (major roads)
     boundary_edges = []
     interior_edges = []
 
-    for idx, row in edges.iterrows():
+    for _idx, row in edges.iterrows():
         highway = row.get("highway", "unclassified")
         if isinstance(highway, list):
             highway = highway[0]
@@ -94,14 +95,12 @@ def detect_superblocks(
             continue
 
         # Calculate area in hectares with a local UTM projection
-        from shapely.ops import transform
         import pyproj
+        from shapely.ops import transform
 
         utm_zone = min(60, max(1, int((poly.centroid.x + 180) / 6) + 1))
         epsg = 32600 + utm_zone if poly.centroid.y >= 0 else 32700 + utm_zone
-        project = pyproj.Transformer.from_crs(
-            "EPSG:4326", f"EPSG:{epsg}", always_xy=True
-        ).transform
+        project = pyproj.Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True).transform
         poly_projected = transform(project, poly)
         area_m2 = poly_projected.area
         area_hectares = area_m2 / 10000
@@ -115,7 +114,8 @@ def detect_superblocks(
         interior_osmids = []
 
         for idx, row in edges.iterrows():
-            if row.geometry.intersects(poly.boundary):
+            boundary_overlap = row.geometry.intersection(poly.boundary).length
+            if boundary_overlap > max(1e-12, row.geometry.length * 0.5):
                 osmid = row.get("osmid", idx)
                 if isinstance(osmid, list):
                     osmid = osmid[0]
@@ -131,18 +131,20 @@ def detect_superblocks(
             area_hectares=area_hectares,
             num_interior_roads=len(interior_osmids),
             num_perimeter_roads=len(perimeter_osmids),
-            polygon=poly,
+            polygon=poly_projected,
         )
 
-        candidates.append(SuperblockCandidate(
-            id=str(uuid.uuid4())[:8],
-            geometry=mapping(poly),
-            area_hectares=round(area_hectares, 2),
-            perimeter_roads=perimeter_osmids[:20],  # Limit for response size
-            interior_roads=interior_osmids[:50],
-            score=round(score, 1),
-            algorithm="graph",
-        ))
+        candidates.append(
+            SuperblockCandidate(
+                id=str(uuid.uuid4())[:8],
+                geometry=mapping(poly),
+                area_hectares=round(area_hectares, 2),
+                perimeter_roads=sorted(set(perimeter_osmids)),
+                interior_roads=sorted(set(interior_osmids)),
+                score=round(score, 1),
+                algorithm="graph",
+            )
+        )
 
     # Sort by score descending
     candidates.sort(key=lambda c: c.score, reverse=True)
@@ -153,11 +155,16 @@ def detect_superblocks(
 def get_hierarchy(highway: str) -> int:
     """Get hierarchy value for road type."""
     hierarchy_map = {
-        "motorway": 1, "motorway_link": 1,
-        "trunk": 2, "trunk_link": 2,
-        "primary": 3, "primary_link": 3,
-        "secondary": 4, "secondary_link": 4,
-        "tertiary": 5, "tertiary_link": 5,
+        "motorway": 1,
+        "motorway_link": 1,
+        "trunk": 2,
+        "trunk_link": 2,
+        "primary": 3,
+        "primary_link": 3,
+        "secondary": 4,
+        "secondary_link": 4,
+        "tertiary": 5,
+        "tertiary_link": 5,
         "residential": 6,
         "living_street": 7,
         "unclassified": 8,
@@ -210,7 +217,7 @@ def calculate_superblock_score(
     # Compactness score (isoperimetric quotient)
     # 1.0 = perfect circle, lower = more irregular
     if polygon.is_valid and polygon.area > 0:
-        compactness = 4 * math.pi * polygon.area / (polygon.length ** 2)
+        compactness = 4 * math.pi * polygon.area / (polygon.length**2)
         if compactness > 0.7:
             score += 10
         elif compactness > 0.5:
@@ -240,7 +247,8 @@ async def analyze_area(
     # Fetch street network
     bbox_tuple = (bbox.west, bbox.south, bbox.east, bbox.north)
 
-    G = ox.graph_from_bbox(
+    G = await asyncio.to_thread(
+        ox.graph_from_bbox,
         bbox=bbox_tuple,
         network_type="drive",
         simplify=True,

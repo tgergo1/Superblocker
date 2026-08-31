@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import {
   analyzeAreaWithProgress,
@@ -46,6 +46,7 @@ export function useSuperblocks(bbox: BoundingBox | null) {
   });
 
   const startTimeRef = useRef<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const [progress, setProgress] = useState<DetailedProgress>({
     stage: 'idle',
     percent: 0,
@@ -78,6 +79,10 @@ export function useSuperblocks(bbox: BoundingBox | null) {
     mutationFn: async () => {
       if (!bbox) throw new Error('No bounding box provided');
 
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       startTimeRef.current = Date.now();
       setProgress({
         stage: 'network',
@@ -92,6 +97,7 @@ export function useSuperblocks(bbox: BoundingBox | null) {
       return analyzeAreaWithProgress(bbox, {
         minAreaHectares: parameters.minAreaHectares,
         maxAreaHectares: parameters.maxAreaHectares,
+        signal: controller.signal,
         onProgress: (p) => {
           const times = calculateTimes(p.stage, p.percent);
           setProgress({
@@ -116,7 +122,8 @@ export function useSuperblocks(bbox: BoundingBox | null) {
         startTime: startTimeRef.current,
       });
     },
-    onError: () => {
+    onError: (error) => {
+      if (error.name === 'AbortError') return;
       setProgress({
         stage: 'idle',
         percent: 0,
@@ -136,7 +143,26 @@ export function useSuperblocks(bbox: BoundingBox | null) {
     }
   }, [bbox, mutation]);
 
+  const cancel = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    startTimeRef.current = null;
+    setProgress({
+      stage: 'idle',
+      percent: 0,
+      message: 'Analysis cancelled',
+      stageInfo: ANALYSIS_STAGES.idle,
+      elapsedTime: 0,
+      estimatedRemainingTime: 0,
+      startTime: null,
+    });
+  }, []);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+
   const reset = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
     mutation.reset();
     startTimeRef.current = null;
     setProgress({
@@ -153,11 +179,12 @@ export function useSuperblocks(bbox: BoundingBox | null) {
   return {
     data: mutation.data,
     isLoading: mutation.isPending,
-    error: mutation.error,
+    error: mutation.error?.name === 'AbortError' ? null : mutation.error,
     progress,
     parameters,
     setParameters,
     analyze,
+    cancel,
     reset,
   };
 }

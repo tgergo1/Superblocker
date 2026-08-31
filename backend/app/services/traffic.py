@@ -43,18 +43,15 @@ DEFAULT_LOAD_FACTORS = {
 
 def _normalize_lanes(value) -> int:
     """Normalize OSM lane metadata to a bounded positive integer."""
-    if isinstance(value, list):
-        value = value[0] if value else 1
-
-    if isinstance(value, str):
-        value = value.split(";")[0].strip()
-
-    try:
-        lanes = int(float(value))
-    except (TypeError, ValueError):
-        return 1
-
-    return max(1, min(8, lanes))
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    parsed = []
+    for item in values:
+        for token in str(item or "").split(";"):
+            try:
+                parsed.append(int(float(token.strip())))
+            except (TypeError, ValueError):
+                continue
+    return max(1, min(8, max(parsed, default=1)))
 
 
 def estimate_traffic(network: StreetNetworkResponse) -> StreetNetworkResponse:
@@ -76,7 +73,8 @@ def estimate_traffic(network: StreetNetworkResponse) -> StreetNetworkResponse:
     max_intensity_volume = 1500  # vehicles/hour considered "intense"
     total_capacity = 0
     total_volume = 0
-    
+    counted_physical_edges: set[tuple[int, int, int]] = set()
+
     # Pre-compute all traffic properties in a single pass
     for feature in network.features:
         props = feature["properties"]
@@ -99,15 +97,24 @@ def estimate_traffic(network: StreetNetworkResponse) -> StreetNetworkResponse:
         props["estimated_load"] = load_factor
         props["estimated_volume"] = volume
         props["traffic_intensity"] = min(100, int((volume / max_intensity_volume) * 100))
-        
+
         # Accumulate totals in same pass
-        total_capacity += capacity
-        total_volume += volume
+        physical_key = (
+            min(int(props.get("u", 0)), int(props.get("v", 0))),
+            max(int(props.get("u", 0)), int(props.get("v", 0))),
+            int(props.get("osmid", 0)),
+        )
+        if physical_key not in counted_physical_edges:
+            counted_physical_edges.add(physical_key)
+            total_capacity += capacity
+            total_volume += volume
 
     # Update metadata
     network.metadata["total_capacity"] = total_capacity
     network.metadata["total_estimated_volume"] = total_volume
-    network.metadata["average_load"] = round(total_volume / total_capacity, 3) if total_capacity > 0 else 0
+    network.metadata["average_load"] = (
+        round(total_volume / total_capacity, 3) if total_capacity > 0 else 0
+    )
 
     return network
 
@@ -128,6 +135,7 @@ def apply_real_traffic_data(
     """
     total_capacity = 0
     total_volume = 0
+    counted_physical_edges: set[tuple[int, int, int]] = set()
 
     for feature in network.features:
         props = feature["properties"]
@@ -148,11 +156,20 @@ def apply_real_traffic_data(
         else:
             props["is_real_data"] = False
 
-        total_capacity += props.get("capacity", 0)
-        total_volume += props.get("estimated_volume", 0)
+        physical_key = (
+            min(int(props.get("u", 0)), int(props.get("v", 0))),
+            max(int(props.get("u", 0)), int(props.get("v", 0))),
+            int(props.get("osmid", 0)),
+        )
+        if physical_key not in counted_physical_edges:
+            counted_physical_edges.add(physical_key)
+            total_capacity += props.get("capacity", 0)
+            total_volume += props.get("estimated_volume", 0)
 
     network.metadata["total_capacity"] = total_capacity
     network.metadata["total_estimated_volume"] = total_volume
-    network.metadata["average_load"] = round(total_volume / total_capacity, 3) if total_capacity > 0 else 0
+    network.metadata["average_load"] = (
+        round(total_volume / total_capacity, 3) if total_capacity > 0 else 0
+    )
 
     return network

@@ -2,8 +2,9 @@
   position: relative;
   background: white;
   padding: 12px;
-  border-radius: 8px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.15);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -187,7 +188,7 @@
   border-left: none;
 }
 
-.layer-controls .toggle-button:hover:not(:disabled) {
+.layer-controls .toggle-button:hover:not(:disabled):not(.active) {
   background: #f9fafb;
 }
 
@@ -231,10 +232,40 @@
   filter: brightness(1.1);
 }
 
+.layer-controls .action-button.cancel {
+  border: 1px solid #fecaca;
+  background: #fff;
+  color: #b91c1c;
+}
+
+.layer-controls .action-button.cancel:hover {
+  background: #fef2f2;
+}
+
 .layer-controls .action-button:disabled {
   background: #d1d5db;
   color: #9ca3af;
   cursor: not-allowed;
+}
+
+.layer-controls .control-error,
+.layer-controls .empty-result {
+  padding: 9px 10px;
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.layer-controls .control-error {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.layer-controls .empty-result {
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
 }
 
 .layer-controls .checkbox-label {

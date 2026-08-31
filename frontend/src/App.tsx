@@ -1,12 +1,9 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback } from 'react';
 import { StreetMap } from './components/Map';
 import { SearchBox } from './components/Search';
-import { LayerControls } from './components/Controls';
 import { PartitionControls } from './components/Controls/PartitionControls';
 import { RouteValidator } from './components/Routing/RouteValidator';
 import { useSearch } from './hooks/useSearch';
-import { useStreetNetwork } from './hooks/useStreetNetwork';
-import { useSuperblocks } from './hooks/useSuperblocks';
 import { usePartition } from './hooks/usePartition';
 import type {
   BoundingBox,
@@ -14,67 +11,40 @@ import type {
   EnforcedSuperblock,
   RouteResult,
   SearchResult,
-  RoadProperties,
 } from './types';
 import './App.css';
 
-type AnalysisMode = 'candidates' | 'partition';
+function viewStateForBounds(bounds: BoundingBox): ViewState {
+  const latitudeSpan = Math.max(bounds.north - bounds.south, 0.0001);
+  const longitudeSpan = Math.max(bounds.east - bounds.west, 0.0001);
+  const displaySpan = Math.max(longitudeSpan, latitudeSpan * 1.7);
+  const zoom = Math.max(4, Math.min(15, Math.log2(360 / displaySpan) - 0.8));
 
-// Approximate passenger-car emission factor in kg CO₂ per vehicle-km.
-const KG_CO2_PER_VEHICLE_KM = 0.192;
-// Typical curb-to-curb lane widths in meters used to estimate recoverable street area.
-const ROAD_WIDTH_BY_TYPE: Record<string, number> = {
-  motorway: 3.75,
-  motorway_link: 3.5,
-  trunk: 3.5,
-  trunk_link: 3.25,
-  primary: 3.25,
-  primary_link: 3.25,
-  secondary: 3.1,
-  secondary_link: 3.0,
-  tertiary: 3.0,
-  tertiary_link: 2.9,
-  residential: 2.75,
-  living_street: 2.5,
-  unclassified: 2.75,
-  service: 2.5,
-  pedestrian: 5,
-};
-
-function toOsmIdArray(osmid: number | number[]): number[] {
-  return Array.isArray(osmid) ? osmid : [osmid];
-}
-
-function estimateStreetWidthMeters(properties: RoadProperties): number {
-  const baseWidth = ROAD_WIDTH_BY_TYPE[properties.highway] ?? 2.75;
-  const laneCount = Math.max(1, properties.lanes ?? 1);
-  const shoulderAllowance = properties.highway === 'pedestrian' ? 0 : 1;
-  return baseWidth * laneCount + shoulderAllowance;
+  return {
+    longitude: (bounds.east + bounds.west) / 2,
+    latitude: (bounds.north + bounds.south) / 2,
+    zoom,
+  };
 }
 
 function App() {
   const {
     searchResults,
     isLoading: isSearching,
+    error: searchError,
     selectedPlace,
     handleSearch,
     handleSelect,
     clearSelection,
   } = useSearch();
 
-  const [colorBy, setColorBy] = useState<'hierarchy' | 'traffic' | 'interventions'>('hierarchy');
   const [bbox, setBbox] = useState<BoundingBox | null>(null);
-  const [showSuperblocks, setShowSuperblocks] = useState(true);
   const [viewState, setViewState] = useState<ViewState>({
     longitude: 19.0402,
     latitude: 47.4979,
     zoom: 12,
   });
 
-  // Analysis mode toggle
-  const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('partition');
-
-  // Partition display options
   const [showEntryPoints, setShowEntryPoints] = useState(true);
   const [showModalFilters, setShowModalFilters] = useState(true);
   const [selectedEnforcedSuperblock, setSelectedEnforcedSuperblock] = useState<EnforcedSuperblock | null>(null);
@@ -82,114 +52,41 @@ function App() {
   // Route state
   const [route, setRoute] = useState<RouteResult | null>(null);
   const [showRoute, setShowRoute] = useState(true);
+  const [routeValidatorExpanded, setRouteValidatorExpanded] = useState(false);
 
   const {
-    data: streetNetwork,
-    isLoading: isLoadingNetwork,
-    refetch: fetchNetwork,
-  } = useStreetNetwork(bbox, false);
-
-  // Old candidate-based analysis
-  const {
-    data: superblockData,
-    isLoading: isLoadingSuperblocks,
-    progress: analysisProgress,
-    parameters: analysisParameters,
-    setParameters: setAnalysisParameters,
-    analyze: findSuperblocks,
-  } = useSuperblocks(bbox);
-
-  // New partition-based system
-  const {
+    data: partitionData,
     partition,
     isLoading: isLoadingPartition,
     progress: partitionProgress,
     parameters: partitionParameters,
     setParameters: setPartitionParameters,
     runPartition,
+    cancel: cancelPartition,
+    error: partitionError,
+    reset: resetPartition,
   } = usePartition(bbox);
 
-  // Calculate impact metrics from superblock data (for old mode)
-  const impactMetrics = useMemo(() => {
-    if (!superblockData?.candidates || superblockData.candidates.length === 0) {
-      return undefined;
-    }
-
-    const candidates = superblockData.candidates;
-    const totalArea = candidates.reduce((sum, c) => sum + c.area_hectares, 0);
-    const avgTrafficReduction = candidates.reduce((sum, c) => {
-      return sum + (c.traffic_impact?.removed_through_traffic_pct ?? 0);
-    }, 0) / candidates.length;
-
-    const roadSegmentsByOsmId = new Map<number, RoadProperties[]>();
-    streetNetwork?.features.forEach((feature) => {
-      toOsmIdArray(feature.properties.osmid).forEach((osmid) => {
-        const segments = roadSegmentsByOsmId.get(osmid) ?? [];
-        segments.push(feature.properties);
-        roadSegmentsByOsmId.set(osmid, segments);
-      });
-    });
-
-    const uniqueInteriorRoadIds = new Set<number>();
-    candidates.forEach((candidate) => {
-      candidate.interior_roads?.forEach((osmId) => uniqueInteriorRoadIds.add(osmId));
-    });
-
-    const pedestrianAreaGain = Math.round(
-      Array.from(uniqueInteriorRoadIds).reduce((sum, osmId) => {
-        const segments = roadSegmentsByOsmId.get(osmId) ?? [];
-        return sum + segments.reduce(
-          (segmentSum, segment) => segmentSum + ((segment.length_m * estimateStreetWidthMeters(segment)) / 10000),
-          0,
-        );
-      }, 0) * 10,
-    ) / 10;
-
-    const co2ReductionKgPerHour = Math.round(
-      candidates.reduce(
-        (sum, candidate) => sum + ((candidate.traffic_impact?.estimated_vmt_reduction ?? 0) * KG_CO2_PER_VEHICLE_KM),
-        0,
-      ),
-    );
-
-    return {
-      trafficReduction: Math.round(avgTrafficReduction),
-      co2ReductionKgPerHour,
-      pedestrianArea: pedestrianAreaGain,
-      totalArea: Math.round(totalArea * 10) / 10,
-    };
-  }, [streetNetwork, superblockData?.candidates]);
-
-  const handleFetchNetwork = useCallback(() => {
-    if (bbox) {
-      fetchNetwork();
-    }
-  }, [bbox, fetchNetwork]);
+  const activeStreetNetwork = partitionData?.street_network ?? null;
 
   const handlePlaceSelect = useCallback((place: SearchResult) => {
+    resetPartition();
     handleSelect(place);
-    setViewState({
-      longitude: place.lon,
-      latitude: place.lat,
-      zoom: 14,
-    });
+    setViewState(viewStateForBounds(place.boundingbox));
     setBbox(place.boundingbox);
     setSelectedEnforcedSuperblock(null);
     setRoute(null);
-  }, [handleSelect]);
-
-  const handleFindSuperblocks = useCallback(() => {
-    if (bbox && streetNetwork) {
-      findSuperblocks();
-    }
-  }, [bbox, streetNetwork, findSuperblocks]);
+    setRouteValidatorExpanded(false);
+  }, [handleSelect, resetPartition]);
 
   const handleClearSelection = useCallback(() => {
+    resetPartition();
     clearSelection();
     setBbox(null);
     setSelectedEnforcedSuperblock(null);
     setRoute(null);
-  }, [clearSelection]);
+    setRouteValidatorExpanded(false);
+  }, [clearSelection, resetPartition]);
 
   const handleEnforcedSuperblockClick = useCallback((sb: EnforcedSuperblock) => {
     setSelectedEnforcedSuperblock(prev =>
@@ -205,37 +102,28 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>Superblocker</h1>
-        <span className="subtitle">Urban Superblock Planning Tool</span>
-
-        {/* Mode Toggle */}
-        <div className="mode-toggle">
-          <button
-            className={`mode-btn ${analysisMode === 'candidates' ? 'active' : ''}`}
-            onClick={() => setAnalysisMode('candidates')}
-          >
-            Candidates
-          </button>
-          <button
-            className={`mode-btn ${analysisMode === 'partition' ? 'active' : ''}`}
-            onClick={() => setAnalysisMode('partition')}
-          >
-            Full Partition
-          </button>
+        <div className="app-brand">
+          <span className="brand-mark" aria-hidden="true">S</span>
+          <div className="brand-copy">
+            <h1>Superblocker</h1>
+            <span className="subtitle">Automated citywide superblock planning</span>
+          </div>
+        </div>
+        <div className="header-purpose" aria-label="Planner purpose">
+          <span className="purpose-dot" aria-hidden="true" />
+          Citywide plan
         </div>
       </header>
 
-      <main className="app-main">
+      <main className={`app-main ${selectedEnforcedSuperblock ? 'details-open' : ''}`}>
         <StreetMap
-          streetNetwork={streetNetwork ?? null}
-          superblocks={analysisMode === 'candidates' ? superblockData?.candidates : undefined}
-          showSuperblocks={analysisMode === 'candidates' && showSuperblocks}
+          key={selectedPlace?.place_id ?? 'no-place'}
+          streetNetwork={activeStreetNetwork}
           initialViewState={viewState}
           onViewStateChange={setViewState}
-          colorBy={colorBy}
-          // New partition props
-          partition={analysisMode === 'partition' ? partition : null}
-          showPartition={analysisMode === 'partition' && !!partition}
+          colorBy="hierarchy"
+          partition={partition}
+          showPartition={!!partition}
           showEntryPoints={showEntryPoints}
           showModalFilters={showModalFilters}
           selectedEnforcedSuperblock={selectedEnforcedSuperblock}
@@ -243,6 +131,9 @@ function App() {
           // Route props
           route={route}
           showRoute={showRoute}
+          selectedPlaceName={selectedPlace?.display_name}
+          emptyStateMessage="Run the automated analysis to extract closed cells from the complete selected road network and move cross-traffic to boundary roads."
+          hideLegends={routeValidatorExpanded}
         />
 
         <div className="app-overlay">
@@ -252,66 +143,50 @@ function App() {
               onSelect={handlePlaceSelect}
               results={searchResults}
               isLoading={isSearching}
+              error={searchError}
               selectedPlace={selectedPlace}
               onClear={handleClearSelection}
             />
 
-            {/* Route Validator - only show when partition is available */}
-            {analysisMode === 'partition' && partition && (
+            {partition && (
               <RouteValidator
                 onRouteComputed={handleRouteComputed}
-                isPartitionAvailable={!!partition}
+                partition={partition}
+                expanded={routeValidatorExpanded}
+                onExpandedChange={setRouteValidatorExpanded}
               />
             )}
           </div>
 
           <div className="overlay-column overlay-right">
-            {/* Show different controls based on mode */}
-            {analysisMode === 'candidates' ? (
-              <LayerControls
-                colorBy={colorBy}
-                onColorByChange={setColorBy}
-                isLoadingNetwork={isLoadingNetwork}
-                isLoadingSuperblocks={isLoadingSuperblocks}
-                analysisProgress={analysisProgress}
-                onFetchNetwork={handleFetchNetwork}
-                onFindSuperblocks={handleFindSuperblocks}
-                canFetch={bbox !== null}
-                hasNetwork={!!streetNetwork}
-                superblockCount={superblockData?.candidates.length}
-                showSuperblocks={showSuperblocks}
-                onToggleSuperblocks={setShowSuperblocks}
-                analysisParameters={analysisParameters}
-                onParametersChange={setAnalysisParameters}
-                impactMetrics={impactMetrics}
-              />
-            ) : (
-              <PartitionControls
-                isLoading={isLoadingPartition}
-                progress={partitionProgress}
-                parameters={partitionParameters}
-                onParametersChange={setPartitionParameters}
-                onPartition={runPartition}
-                canPartition={bbox !== null}
-                partition={partition}
-                showEntryPoints={showEntryPoints}
-                onShowEntryPointsChange={setShowEntryPoints}
-                showModalFilters={showModalFilters}
-                onShowModalFiltersChange={setShowModalFilters}
-              />
-            )}
+            <PartitionControls
+              isLoading={isLoadingPartition}
+              progress={partitionProgress}
+              parameters={partitionParameters}
+              onParametersChange={setPartitionParameters}
+              onPartition={runPartition}
+              onCancel={cancelPartition}
+              canPartition={bbox !== null}
+              partition={partition}
+              showEntryPoints={showEntryPoints}
+              onShowEntryPointsChange={setShowEntryPoints}
+              showModalFilters={showModalFilters}
+              onShowModalFiltersChange={setShowModalFilters}
+              error={partitionError}
+            />
           </div>
         </div>
       </main>
 
-      {/* Selected Enforced Superblock Details */}
-      {analysisMode === 'partition' && selectedEnforcedSuperblock && (
+      {selectedEnforcedSuperblock && (
         <div className="enforced-superblock-details">
           <div className="details-header">
             <span className="details-title">Superblock Details</span>
             <button
+              type="button"
               className="close-button"
               onClick={() => setSelectedEnforcedSuperblock(null)}
+              aria-label="Close superblock details"
             >
               ×
             </button>
@@ -320,7 +195,7 @@ function App() {
             {/* Status indicators */}
             <div className="status-row">
               <span className={`status-badge ${selectedEnforcedSuperblock.constraint_validated ? 'valid' : 'invalid'}`}>
-                {selectedEnforcedSuperblock.constraint_validated ? '✓ Valid' : '✕ Invalid'}
+                {selectedEnforcedSuperblock.constraint_validated ? '✓ Directional test passed' : '✕ Cross-traffic remains'}
               </span>
               <span className={`status-badge ${selectedEnforcedSuperblock.all_addresses_reachable ? 'reachable' : 'unreachable'}`}>
                 {selectedEnforcedSuperblock.all_addresses_reachable ? '✓ All Reachable' : '⚠ Some Unreachable'}
@@ -341,16 +216,20 @@ function App() {
             </div>
 
             {/* Entry Points by direction */}
-            <div className="details-section-title">Entry Points ({selectedEnforcedSuperblock.entry_points.length})</div>
+            <div className="details-section-title">Entry and return directions ({selectedEnforcedSuperblock.entry_points.length})</div>
             <div className="entry-points-grid">
-              {[0, 1, 2, 3].map(sector => {
+              {Array.from({ length: selectedEnforcedSuperblock.num_sectors }, (_, sector) => sector).map(sector => {
                 const count = selectedEnforcedSuperblock.entry_points.filter(ep => ep.sector === sector).length;
-                const labels = ['N', 'E', 'S', 'W'];
-                const arrows = ['↑', '→', '↓', '←'];
+                const labels = selectedEnforcedSuperblock.num_sectors === 4
+                  ? ['E', 'N', 'W', 'S']
+                  : Array.from({ length: selectedEnforcedSuperblock.num_sectors }, (_, index) => `S${index + 1}`);
+                const arrows = selectedEnforcedSuperblock.num_sectors === 4
+                  ? ['→', '↑', '←', '↓']
+                  : Array.from({ length: selectedEnforcedSuperblock.num_sectors }, () => '•');
                 const colors = ['#3b82f6', '#22c55e', '#ef4444', '#fbbf24'];
                 return count > 0 ? (
-                  <div key={sector} className="entry-point-item" style={{ borderLeftColor: colors[sector] }}>
-                    <span className="direction-arrow" style={{ color: colors[sector] }}>{arrows[sector]}</span>
+                  <div key={sector} className="entry-point-item" style={{ borderLeftColor: colors[sector % colors.length] }}>
+                    <span className="direction-arrow" style={{ color: colors[sector % colors.length] }}>{arrows[sector]}</span>
                     <span className="direction-label">{labels[sector]}</span>
                     <span className="direction-count">{count}</span>
                   </div>
@@ -358,23 +237,26 @@ function App() {
               })}
             </div>
 
-            {/* Street Modifications */}
+            {/* Street actions */}
             <div className="details-section-title">
-              Street Modifications ({selectedEnforcedSuperblock.modifications.length})
+              Street actions ({selectedEnforcedSuperblock.modifications.length})
             </div>
             <div className="modifications-list">
               {selectedEnforcedSuperblock.modifications.slice(0, 5).map((mod, i) => (
                 <div key={i} className="modification-item">
                   <span className={`mod-icon ${mod.modification_type}`}>
-                    {mod.modification_type === 'modal_filter' ? '✕' :
-                     mod.modification_type === 'one_way' ? '→' :
-                     mod.modification_type === 'turn_restriction' ? '⊘' : '▬'}
+                    {mod.modification_type === 'modal_filter' ? 'X' :
+                     mod.modification_type === 'one_way' ? '>' :
+                     mod.modification_type === 'two_way' ? '<>' :
+                     mod.modification_type === 'turn_restriction' ? '!' : '='}
                   </span>
                   <div className="mod-details">
                     <span className="mod-name">{mod.name || `Road ${mod.osm_id}`}</span>
                     <span className="mod-type">
                       {mod.modification_type === 'full_closure'
                         ? 'street cut'
+                        : mod.modification_type === 'two_way'
+                          ? 'two-way local access'
                         : mod.modification_type.replace('_', ' ')}
                       {mod.direction && (
                         <span className="mod-direction">

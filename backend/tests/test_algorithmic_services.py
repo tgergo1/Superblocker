@@ -4,8 +4,10 @@ from shapely.geometry import Polygon
 from app.models.schemas import (
     ConstraintViolation,
     Coordinates,
-    EntryPoint,
     EnforcedSuperblock,
+    EntryPoint,
+    ModificationType,
+    StreetModification,
     StreetNetworkResponse,
 )
 from app.services.constraint.accessibility_validator import AccessibilityValidator
@@ -218,5 +220,100 @@ def test_superblock_analyzer_estimates_graph_based_traffic_impact():
     assert impact is not None
     assert impact.removed_through_traffic_pct == 100.0
     assert impact.boundary_load_increase_pct == 10.0
-    assert impact.estimated_vmt_reduction == 20.0
+    assert impact.estimated_vehicle_km_reduction == 20.0
     assert impact.affected_od_pairs == 1
+
+
+def test_accessibility_validator_reports_one_way_isolation_without_crashing():
+    graph = nx.MultiDiGraph()
+    for node_id in (1, 2, 3):
+        graph.add_node(node_id, x=float(node_id), y=0.0)
+    for u, v in ((1, 2), (2, 1), (2, 3), (3, 2)):
+        graph.add_edge(u, v, key=0, osmid=100 + u + v, highway="residential", length=10)
+
+    superblock = EnforcedSuperblock(
+        id="isolated",
+        geometry={
+            "type": "Polygon",
+            "coordinates": [[(0, -1), (4, -1), (4, 1), (0, 1), (0, -1)]],
+        },
+        area_hectares=1,
+        num_sectors=4,
+        boundary_roads=[],
+        entry_points=[
+            EntryPoint(
+                node_id=1,
+                sector=2,
+                coordinates=Coordinates(lat=0, lon=1),
+                boundary_road_id=1,
+            )
+        ],
+        modifications=[
+            StreetModification(
+                u=2,
+                v=3,
+                key=0,
+                osm_id=105,
+                modification_type=ModificationType.ONE_WAY,
+                direction="v_to_u",
+                rationale="regression",
+            )
+        ],
+        constraint_validated=True,
+        all_addresses_reachable=False,
+        interior_roads_count=2,
+        modal_filter_count=0,
+        one_way_conversion_count=1,
+        street_cut_count=0,
+    )
+
+    report = AccessibilityValidator(graph, superblock).validate()
+    assert report.unreachable_nodes == 1
+    assert report.unreachable_addresses[0].node_id == 3
+    assert report.suggested_fixes
+
+
+def test_accessibility_validator_handles_missing_entries_and_all_closure_types():
+    graph = nx.MultiDiGraph()
+    graph.add_node(1, x=0, y=0)
+    graph.add_node(2, x=1, y=0)
+    graph.add_edge(1, 2, key=0, osmid=12, highway="service", length=10)
+    graph.add_edge(2, 1, key=0, osmid=12, highway="service", length=10)
+    superblock = EnforcedSuperblock(
+        id="no-entry",
+        geometry={
+            "type": "Polygon",
+            "coordinates": [[(0, -1), (2, -1), (2, 1), (0, 1), (0, -1)]],
+        },
+        area_hectares=1,
+        num_sectors=4,
+        boundary_roads=[],
+        entry_points=[],
+        modifications=[
+            StreetModification(
+                u=1,
+                v=2,
+                key=0,
+                osm_id=12,
+                modification_type=ModificationType.MODAL_FILTER,
+                rationale="modal",
+            ),
+            StreetModification(
+                u=1,
+                v=2,
+                key=0,
+                osm_id=12,
+                modification_type=ModificationType.FULL_CLOSURE,
+                rationale="closure",
+            ),
+        ],
+        constraint_validated=True,
+        all_addresses_reachable=False,
+        interior_roads_count=1,
+        modal_filter_count=1,
+        one_way_conversion_count=0,
+        street_cut_count=1,
+    )
+    report = AccessibilityValidator(graph, superblock).validate()
+    assert report.reachability_percent == 0
+    assert report.suggested_fixes == ["No entry points defined"]

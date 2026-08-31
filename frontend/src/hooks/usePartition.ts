@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import {
   partitionCityWithProgress,
@@ -29,8 +29,6 @@ export interface PartitionParameters {
   targetSizeHectares: number;
   minAreaHectares: number;
   maxAreaHectares: number;
-  numSectors: number;
-  enforceConstraints: boolean;
 }
 
 export interface DetailedPartitionProgress extends PartitionProgress {
@@ -45,11 +43,10 @@ export function usePartition(bbox: BoundingBox | null) {
     targetSizeHectares: 12,
     minAreaHectares: 6,
     maxAreaHectares: 20,
-    numSectors: 4,
-    enforceConstraints: true,
   });
 
   const startTimeRef = useRef<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const [progress, setProgress] = useState<DetailedPartitionProgress>({
     stage: 'network',
     percent: 0,
@@ -82,6 +79,10 @@ export function usePartition(bbox: BoundingBox | null) {
     mutationFn: async () => {
       if (!bbox) throw new Error('No bounding box provided');
 
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       startTimeRef.current = Date.now();
       setProgress({
         stage: 'network',
@@ -98,8 +99,8 @@ export function usePartition(bbox: BoundingBox | null) {
         target_size_hectares: parameters.targetSizeHectares,
         min_area_hectares: parameters.minAreaHectares,
         max_area_hectares: parameters.maxAreaHectares,
-        num_sectors: parameters.numSectors,
-        enforce_constraints: parameters.enforceConstraints,
+        // Four cardinal entry/return sectors are a product invariant.
+        num_sectors: 4,
       };
 
       return partitionCityWithProgress(request, (p) => {
@@ -112,7 +113,7 @@ export function usePartition(bbox: BoundingBox | null) {
           estimatedRemainingTime: times.remaining,
           startTime: startTimeRef.current,
         });
-      });
+      }, controller.signal);
     },
     onSuccess: (data) => {
       const times = calculateTimes(100);
@@ -129,7 +130,7 @@ export function usePartition(bbox: BoundingBox | null) {
       setPartition(data.partition);
     },
     onError: (error) => {
-      console.error('Partition error:', error);
+      if (error.name === 'AbortError') return;
       setProgress({
         stage: 'network',
         percent: 0,
@@ -149,7 +150,26 @@ export function usePartition(bbox: BoundingBox | null) {
     }
   }, [bbox, mutation]);
 
+  const cancel = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    startTimeRef.current = null;
+    setProgress({
+      stage: 'network',
+      percent: 0,
+      message: 'Partition cancelled',
+      stageInfo: PARTITION_STAGES.network,
+      elapsedTime: 0,
+      estimatedRemainingTime: 0,
+      startTime: null,
+    });
+  }, []);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+
   const reset = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
     mutation.reset();
     startTimeRef.current = null;
     setPartition(null);
@@ -168,11 +188,12 @@ export function usePartition(bbox: BoundingBox | null) {
     data: mutation.data,
     partition, // The persisted partition result
     isLoading: mutation.isPending,
-    error: mutation.error,
+    error: mutation.error?.name === 'AbortError' ? null : mutation.error,
     progress,
     parameters,
     setParameters,
     runPartition,
+    cancel,
     reset,
   };
 }

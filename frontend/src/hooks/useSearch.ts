@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { searchPlaces } from '../services/api';
 import type { SearchResult } from '../types';
@@ -32,9 +32,19 @@ export function useSearch() {
     setSelectedPlace(null);
   }, []);
 
+  const uniqueSearchResults = useMemo(() => {
+    const seen = new Set<string>();
+    return (searchResults?.results ?? []).filter((result) => {
+      const key = result.display_name.trim().toLocaleLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [searchResults?.results]);
+
   return {
     query,
-    searchResults: searchResults?.results ?? [],
+    searchResults: uniqueSearchResults,
     isLoading,
     error,
     selectedPlace,

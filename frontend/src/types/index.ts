@@ -39,6 +39,7 @@ export interface RoadProperties {
   length_m: number;
   u: number;
   v: number;
+  key: number;
   capacity: number;
   estimated_load: number;
   estimated_volume: number;
@@ -103,7 +104,7 @@ export type RoadType =
 // City Partitioning Types (New System)
 // =============================================================================
 
-export type ModificationType = 'modal_filter' | 'one_way' | 'turn_restriction' | 'full_closure';
+export type ModificationType = 'modal_filter' | 'one_way' | 'two_way' | 'turn_restriction' | 'full_closure';
 
 export interface EntryPoint {
   node_id: number;
@@ -147,6 +148,7 @@ export interface EnforcedSuperblock {
   modal_filter_count: number;
   one_way_conversion_count: number;
   street_cut_count: number;
+  two_way_conversion_count: number;
 }
 
 export interface CityPartition {
@@ -160,6 +162,7 @@ export interface CityPartition {
   total_one_way_conversions: number;
   total_street_cuts: number;
   total_unreachable_addresses: number;
+  total_two_way_conversions: number;
 }
 
 export interface PartitionProgress {
