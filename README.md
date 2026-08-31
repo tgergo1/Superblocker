@@ -1,40 +1,106 @@
 # Superblocker
 
-Superblocker is an automated citywide street-network planner. It turns a complete OpenStreetMap driving network into non-overlapping superblocks, proposes the access changes required to remove interior cross-traffic, and keeps travel between superblocks on the arterial boundary network.
+Superblocker is a street-network planning prototype. It loads the complete OpenStreetMap driving graph inside a selected place's bounding box, detects an arterial boundary network, builds closed road cells, and proposes access changes that prevent modeled vehicle paths from crossing between different entry sides of each generated cell.
 
-![Superblocker main interface](docs/screenshots/main-interface.png)
+The output is a network-topology proposal, not an implementation-ready traffic plan. It does not replace traffic counts, turning-movement data, emergency-service review, accessibility review, legal review, or field inspection.
 
-> [!IMPORTANT]
-> The output is an algorithmic planning proposal derived from OpenStreetMap topology. Every plan still requires transport-engineering, emergency-access, accessibility, and on-site validation before implementation.
+![Budapest analysis overview](docs/screenshots/budapest-overview.png)
 
-## What it does
+## How the analysis works
 
-- Searches for a city or place using a throttled and cached Nominatim client.
-- Downloads and analyzes the complete OpenStreetMap driving network inside the selected boundary.
-- Identifies the arterial grid that becomes the cross-traffic and inter-superblock network.
-- Polygonizes that grid into a complete city partition and optimizes cells toward the selected size range.
-- Assigns entries to four cardinal entry/return sectors and eliminates every directed path between different sectors.
-- Uses minimum-cost modal filters, street cuts, and one-way changes first; if those would lose existing access, a connectivity-preserving directional-territory plan is used instead.
-- Re-validates every superblock and exposes the exact boundary roads, entry directions, access modifications, coverage, and any remaining local-access review items.
-- Tests trips against the finished plan with cross-superblock travel forced onto boundary roads.
-- Streams progress throughout the long-running city analysis.
+1. **Select an area.** Search uses OpenStreetMap Nominatim. The selected result supplies a rectangular bounding box.
+2. **Load the road graph.** The backend downloads the drivable OSM network in that box and normalizes road attributes.
+3. **Find boundary roads.** Configured arterial road classes are combined with graph-centrality results to form the cross-traffic network.
+4. **Build road cells.** Closed rings in the arterial network are polygonized, filtered, and merged toward the configured target area.
+5. **Assign entry sides.** Each generated cell gets four cardinal entry/return sectors: east, north, west, and south.
+6. **Block cross-sector paths.** The constraint solver proposes modal filters, one-way changes, street cuts, and local two-way repairs. A connectivity-preserving directional-territory fallback is used when a cheaper cut plan would remove existing access.
+7. **Validate the result.** Every generated cell is checked for directed paths between different entry sectors. Local reachability is checked separately and unresolved network nodes are reported.
+8. **Render and inspect.** MapLibre displays OpenStreetMap raster tiles; deck.gl displays the road graph, cell polygons, boundary roads, entry points, access signs, and test routes.
 
-![Full partition mode](docs/screenshots/full-partition-mode.png)
+All action markers use the same symbols in the map legend, hover tooltip, selected-cell details, and implementation schedule:
+
+| Sign | Meaning |
+| --- | --- |
+| Blue line | Boundary road carrying cross-traffic between cells |
+| Colored dot / `E N W S` | Entry point and required return side |
+| Red `X` | Modal filter; motor through-traffic blocked |
+| Blue `>` | One-way conversion in the shown direction |
+| Teal `<>` | Two-way local-access repair |
+| Amber `!` | Turn restriction |
+| Purple `=` | Full motor-traffic closure / street cut |
+
+Point signs are hidden at city scale and appear from street-level zoom to avoid covering the road network. The implementation schedule initially renders 50 actions and can load further batches without creating thousands of DOM elements at once.
+
+![Budapest street-level actions](docs/screenshots/budapest-street-actions.png)
+
+## Budapest run
+
+Observed in the local app on 2026-08-31 with the default 12 ha target, 6 ha minimum, 20 ha maximum, and four entry sectors:
+
+| Result | Value |
+| --- | ---: |
+| Selected extent | Nominatim bounding box for Budapest |
+| Input graph | 32,734 nodes; 84,646 directed edges |
+| Rendered road network | 48,886 line features; 6,547.64 km |
+| Generated superblocks | 817 |
+| Generated-cell coverage | 23.4% of the rectangular bounding-box area |
+| Boundary-road OSM IDs | 18,552 |
+| Street actions | 2,586 |
+| Modal filters | 2,508 |
+| One-way changes | 8 |
+| Two-way local-access repairs | 33 |
+| Street cuts | 37 |
+| Directional validation | 817 / 817 generated cells passed |
+| Local-access review | 32 network nodes |
+| Processing time | 670.4 seconds on the test machine |
+
+The 23.4% figure is not “Budapest completed.” It is the area of generated closed road cells divided by the rectangular search bounding-box area. The rectangle includes land outside the municipal boundary, the Danube, parks, rail areas, and other places where the current arterial polygonizer may not create a closed cell. The road graph is processed across the full rectangle, but the current algorithm does not produce a wall-to-wall municipal land partition.
+
+## Current limitations
+
+- The search result provides a bounding box, not the exact administrative polygon.
+- Arterial classification is based on OSM road class and graph centrality, not measured traffic volume.
+- “Directional validation passed” means no modeled vehicle path connects different entry sectors in a generated cell. It does not prove real-world compliance.
+- Network nodes are reachability proxies, not a complete address or parcel database.
+- City-scale geometry processing is CPU-heavy; the observed Budapest run took about 11 minutes.
+- Every proposal requires transport-engineering and on-site review before implementation.
+
+## Interface
+
+The right-hand planner runs one workflow: **Analyze entire city**. Results include:
+
+- directional-validation status and generated-cell coverage;
+- the boundary-road network reserved for cross-traffic;
+- counts for every access-change type;
+- a street-by-street action schedule with street name and coordinates;
+- a warning when local network nodes lose entry access;
+- display toggles for entry directions and street actions;
+- a route tester that sends inter-cell travel onto boundary roads.
+
+The basemap defaults to OpenStreetMap's no-key raster endpoint. Set `VITE_OSM_TILE_URL` to use another OSM-compatible raster tile service in a deployment.
 
 ## Architecture
 
-The backend is a Python 3.12 FastAPI application using OSMnx, NetworkX, GeoPandas, Shapely, and PyProj. Expensive OSM and graph work runs through a bounded worker pool with per-client request limits. File-cache writes are atomic, and the optional in-memory partition cache is bounded by size and TTL; route correctness does not depend on that cache because a partition can be included in every route request.
+### Backend
 
-The frontend is React 19 and TypeScript, built by Vite. MapLibre renders an OpenStreetMap raster basemap with no API key, while deck.gl renders the street network, city partition, boundary-road network, directional entries, and access changes. Set `VITE_OSM_TILE_URL` to use another OSM-compatible tile endpoint in a deployment. The development server and production nginx container both proxy `/api` to the backend, so no public backend URL is baked into the production bundle.
+- Python 3.12 and FastAPI
+- OSMnx, NetworkX, GeoPandas, Shapely, and PyProj
+- server-sent events for progress
+- bounded analysis worker pool and per-client request limits
+- atomic file-cache writes and bounded in-memory partition cache
+
+### Frontend
+
+- React 19, TypeScript, and Vite
+- MapLibre for OpenStreetMap raster tiles
+- deck.gl for road, polygon, marker, and route layers
+- same-origin `/api` proxy in development and nginx production builds
 
 ## Local development
 
-Prerequisites:
+Prerequisites: Python 3.12, Node.js 22, and npm.
 
-- Python 3.12
-- Node.js 22 and npm
-
-Start the backend:
+Backend:
 
 ```bash
 cd backend
@@ -45,7 +111,7 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
-Start the frontend in a second terminal:
+Frontend, in a second terminal:
 
 ```bash
 cd frontend
@@ -54,7 +120,7 @@ cp .env.example .env
 npm run dev
 ```
 
-Open `http://localhost:5173`. FastAPI's interactive API documentation is at `http://localhost:8000/docs`.
+Open `http://localhost:5173`. API documentation is at `http://localhost:8000/docs`.
 
 ## Docker Compose
 
@@ -62,21 +128,26 @@ Open `http://localhost:5173`. FastAPI's interactive API documentation is at `htt
 docker compose up --build
 ```
 
-Open `http://localhost:5173`. The frontend nginx service proxies API and SSE traffic to the non-root backend container. Both services have health checks, and OSM/application caches use named volumes with non-root-compatible paths.
+Open `http://localhost:5173`. The frontend nginx container proxies API and SSE traffic to the non-root backend container. The backend port is intentionally not published to the host.
 
-The Compose backend port is intentionally not published to the host; nginx is its trusted proxy and preserves client addresses for per-client workload limits. Use the local-development setup when you need direct access to port 8000.
+## Configuration
 
-To override backend settings, add an `environment` entry or `env_file` to the backend service. Set a long random `ADMIN_API_KEY` before using cache-maintenance endpoints.
+Copy [`backend/.env.example`](backend/.env.example) and [`frontend/.env.example`](frontend/.env.example).
 
-## Usage
-
-1. Enter a city or district name and submit the search.
-2. Select the correct boundary.
-3. Choose **Analyze entire city**. The road download, arterial detection, partitioning, access design, and validation run as one workflow.
-4. Inspect the highlighted blue boundary-road network, directional entry/return signs, street-action markers and schedule, validation status, and coverage.
-5. Optionally test an origin-destination pair; the planned route will respect superblocks and use boundary roads between them.
-
-Analysis deliberately rejects very large bounding boxes. Tune `MAX_BBOX_SPAN_DEGREES` and `MAX_BBOX_AREA_KM2` only after considering OSM download size and graph-processing cost.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `VITE_API_URL` | `/api/v1` | Backend API base URL |
+| `VITE_OSM_TILE_URL` | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | Raster basemap template |
+| `NOMINATIM_USER_AGENT` | project identifier | Identifies geocoder requests |
+| `NOMINATIM_MIN_INTERVAL_SECONDS` | `1.0` | Aggregate geocoder throttle |
+| `MAX_BBOX_SPAN_DEGREES` | `0.5` | Maximum latitude/longitude span |
+| `MAX_BBOX_AREA_KM2` | `2500` | Maximum approximate bbox area |
+| `ANALYSIS_MAX_WORKERS` | `2` | Graph-analysis worker count |
+| `ANALYSIS_MAX_CONCURRENT_REQUESTS` | `2` | Concurrent expensive requests |
+| `ANALYSIS_RATE_LIMIT_PER_MINUTE` | `6` | Per-client expensive-request limit |
+| `PARTITION_CACHE_MAX_ENTRIES` | `8` | In-process partition cache size |
+| `PARTITION_CACHE_TTL_SECONDS` | `3600` | Partition cache lifetime |
+| `ADMIN_API_KEY` | unset | Enables authenticated cache maintenance |
 
 ## API
 
@@ -84,88 +155,37 @@ All application endpoints are under `/api/v1`:
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `GET` | `/search` | Forward place search |
+| `GET` | `/search` | Nominatim place search |
 | `GET` | `/search/reverse` | Reverse geocoding |
 | `POST` | `/network` | Download and classify a street network |
-| `GET` | `/network/bbox` | Query-parameter alternative to `/network` |
 | `POST` | `/analyze` | Legacy candidate-analysis compatibility endpoint |
 | `POST` | `/analyze/stream` | Legacy candidate analysis with SSE progress |
-| `POST` | `/partition` | Generate a city-wide partition and its network |
+| `POST` | `/partition` | Generate a partition and road network |
 | `POST` | `/partition/stream` | Generate a partition with SSE progress |
 | `POST` | `/route` | Route with an optional supplied partition |
-| `GET` | `/optimize/size` | Recommend a target size from grid properties |
+| `GET` | `/optimize/size` | Recommend a target size |
 | `GET` | `/cache/stats` | Return non-sensitive cache statistics |
 | `DELETE` | `/cache` | Clear cache entries; requires `X-Admin-Key` |
 | `POST` | `/cache/cleanup` | Remove expired entries; requires `X-Admin-Key` |
 
-`GET /health` is the unauthenticated health check. OpenAPI schemas are available at `/openapi.json` and `/docs`.
-
-## Configuration
-
-Copy [`backend/.env.example`](backend/.env.example) and [`frontend/.env.example`](frontend/.env.example) for the complete defaults. Important backend settings include:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `CORS_ORIGINS` | local frontend origins | Explicit allowed browser origins |
-| `NOMINATIM_USER_AGENT` | project identifier | Required identifying user agent |
-| `NOMINATIM_MIN_INTERVAL_SECONDS` | `1.0` | Aggregate geocoder request throttle |
-| `MAX_BBOX_SPAN_DEGREES` | `0.5` | Maximum latitude/longitude span |
-| `MAX_BBOX_AREA_KM2` | `2500` | Maximum approximate physical area |
-| `ANALYSIS_MAX_WORKERS` | `2` | Bounded graph-analysis worker count |
-| `ANALYSIS_MAX_CONCURRENT_REQUESTS` | `2` | Simultaneous expensive request limit |
-| `ANALYSIS_RATE_LIMIT_PER_MINUTE` | `6` | Per-client expensive request budget |
-| `PARTITION_CACHE_MAX_ENTRIES` | `8` | In-process partition optimization cache size |
-| `PARTITION_CACHE_TTL_SECONDS` | `3600` | Partition optimization cache lifetime |
-| `ADMIN_API_KEY` | unset | Enables authenticated cache maintenance |
-| `CACHE_*_TTL_SECONDS` | varies | File-cache lifetimes by data type |
-
-The frontend defaults to same-origin `/api/v1` and OpenStreetMap's no-key raster tiles. Set `VITE_API_URL` only when the API is intentionally hosted on a different origin. Set `VITE_OSM_TILE_URL` when a deployment uses its own OSM-compatible tile service.
+`GET /health` is the unauthenticated health check.
 
 ## Quality checks
-
-Backend:
 
 ```bash
 cd backend
 .venv/bin/ruff check app tests
 .venv/bin/ruff format --check app tests
-.venv/bin/pytest --cov=app --cov-report=term-missing
+.venv/bin/pytest
 .venv/bin/pip-audit -r requirements.txt
-```
 
-Frontend:
-
-```bash
-cd frontend
-npm test
+cd ../frontend
+npm test -- --run
 npm run lint
 npm run build
 npm audit
 ```
 
-The CI workflow runs these checks and builds both production containers. Dependabot tracks Python, npm, and GitHub Actions dependencies.
-
-## Project layout
-
-```text
-Superblocker/
-├── backend/
-│   ├── app/api/routes/       # FastAPI HTTP and SSE endpoints
-│   ├── app/core/             # Settings and workload protection
-│   ├── app/models/           # Validated request/response models
-│   ├── app/services/         # OSM, detection, partitioning, routing, cache
-│   ├── app/utils/            # Geospatial helpers
-│   └── tests/                # Unit, integration, routing, and API tests
-├── frontend/
-│   ├── src/components/       # Search, map, controls, routing UI
-│   ├── src/hooks/            # Abortable data-loading hooks
-│   ├── src/services/         # HTTP and SSE client
-│   └── src/types/            # Shared TypeScript domain types
-├── docs/screenshots/
-├── .github/workflows/ci.yml
-└── docker-compose.yml
-```
-
 ## License
 
-Licensed under GPL-3.0. See [LICENSE](LICENSE).
+GPL-3.0. See [LICENSE](LICENSE).

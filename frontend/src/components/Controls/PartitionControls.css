@@ -669,6 +669,34 @@
   line-height: 1.4;
 }
 
+.partition-controls .load-more-actions {
+  display: flex;
+  width: calc(100% - 8px);
+  min-height: 34px;
+  margin: 9px 4px 0;
+  padding: 7px 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
+  background: #f8faff;
+  color: #4338ca;
+  font-size: 9px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.partition-controls .load-more-actions:hover {
+  background: #eef2ff;
+}
+
+.partition-controls .load-more-actions span {
+  color: #64748b;
+  font-size: 8px;
+  font-weight: 600;
+}
+
 @media (max-width: 560px) {
   .partition-controls .planner-intro {
     padding: 12px 14px;

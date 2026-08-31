@@ -14,6 +14,19 @@ import type {
 } from './types';
 import './App.css';
 
+function viewStateForBounds(bounds: BoundingBox): ViewState {
+  const latitudeSpan = Math.max(bounds.north - bounds.south, 0.0001);
+  const longitudeSpan = Math.max(bounds.east - bounds.west, 0.0001);
+  const displaySpan = Math.max(longitudeSpan, latitudeSpan * 1.7);
+  const zoom = Math.max(4, Math.min(15, Math.log2(360 / displaySpan) - 0.8));
+
+  return {
+    longitude: (bounds.east + bounds.west) / 2,
+    latitude: (bounds.north + bounds.south) / 2,
+    zoom,
+  };
+}
+
 function App() {
   const {
     searchResults,
@@ -59,11 +72,7 @@ function App() {
   const handlePlaceSelect = useCallback((place: SearchResult) => {
     resetPartition();
     handleSelect(place);
-    setViewState({
-      longitude: place.lon,
-      latitude: place.lat,
-      zoom: 14,
-    });
+    setViewState(viewStateForBounds(place.boundingbox));
     setBbox(place.boundingbox);
     setSelectedEnforcedSuperblock(null);
     setRoute(null);
@@ -123,7 +132,7 @@ function App() {
           route={route}
           showRoute={showRoute}
           selectedPlaceName={selectedPlace?.display_name}
-          emptyStateMessage="Run the automated analysis to partition the complete road network and move cross-traffic to boundary roads."
+          emptyStateMessage="Run the automated analysis to extract closed cells from the complete selected road network and move cross-traffic to boundary roads."
           hideLegends={routeValidatorExpanded}
         />
 
@@ -186,7 +195,7 @@ function App() {
             {/* Status indicators */}
             <div className="status-row">
               <span className={`status-badge ${selectedEnforcedSuperblock.constraint_validated ? 'valid' : 'invalid'}`}>
-                {selectedEnforcedSuperblock.constraint_validated ? '✓ No cross-traffic' : '✕ Cross-traffic remains'}
+                {selectedEnforcedSuperblock.constraint_validated ? '✓ Directional test passed' : '✕ Cross-traffic remains'}
               </span>
               <span className={`status-badge ${selectedEnforcedSuperblock.all_addresses_reachable ? 'reachable' : 'unreachable'}`}>
                 {selectedEnforcedSuperblock.all_addresses_reachable ? '✓ All Reachable' : '⚠ Some Unreachable'}

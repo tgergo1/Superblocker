@@ -246,6 +246,8 @@ export function StreetMap({
   const [selectedSuperblock, setSelectedSuperblock] = useState<SuperblockCandidate | null>(null);
 
   const viewState = initialViewState ?? internalViewState;
+  const showDetailedPlanSigns = viewState.zoom >= 12;
+  const boundaryRoadWidth = viewState.zoom < 10 ? 1.35 : viewState.zoom < 12 ? 2.25 : 4;
 
   const handleMove = useCallback(
     (evt: { viewState: ViewState }) => {
@@ -487,7 +489,7 @@ export function StreetMap({
               filled: false,
               lineWidthUnits: 'pixels',
               getLineColor: [255, 255, 255, 225],
-              getLineWidth: 7,
+              getLineWidth: boundaryRoadWidth + 3,
             }),
             new GeoJsonLayer<RoadProperties>({
               id: 'cross-traffic-boundary-roads',
@@ -497,7 +499,7 @@ export function StreetMap({
               filled: false,
               lineWidthUnits: 'pixels',
               getLineColor: [30, 64, 175, 245],
-              getLineWidth: 4,
+              getLineWidth: boundaryRoadWidth,
             }),
           );
         }
@@ -505,7 +507,7 @@ export function StreetMap({
 
       // Add one clear, hoverable sign per modified road segment. The symbol,
       // line color, marker color, and legend all come from PLAN_ACTION_STYLES.
-      if (showPartition && partition && modifiedStreets.size > 0) {
+      if (showPartition && partition && modifiedStreets.size > 0 && showDetailedPlanSigns) {
         const markerIndex = new Map<string, PlanMarkerDatum>();
         streetNetwork.features.forEach(f => {
           const modification = getStreetModification(f.properties);
@@ -590,7 +592,7 @@ export function StreetMap({
     }
 
     // Entry points layer - simple markers at superblock entries
-    if (showPartition && showEntryPoints && partition) {
+    if (showPartition && showEntryPoints && partition && showDetailedPlanSigns) {
       const entryPointData = partition.superblocks.flatMap((sb, sbIndex) =>
         sb.entry_points.map(ep => ({
           ...ep,
@@ -710,7 +712,7 @@ export function StreetMap({
     }
 
     return result;
-  }, [streetNetwork, superblocks, showSuperblocks, colorBy, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute, modifiedStreets, getStreetModification]);
+  }, [streetNetwork, superblocks, showSuperblocks, colorBy, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute, modifiedStreets, getStreetModification, showDetailedPlanSigns, boundaryRoadWidth]);
 
   // Store overlay reference
   const overlayRef = useRef<MapboxOverlay | null>(null);
@@ -1159,6 +1161,9 @@ export function StreetMap({
                     <span className="legend-label">Street cut · motor traffic closed</span>
                   </div>
                   <div className="legend-hint">Every sign matches the street-by-street action schedule.</div>
+                  {!showDetailedPlanSigns && (
+                    <div className="legend-hint">Zoom in to street level to show point signs.</div>
+                  )}
                 </>
               )}
             </div>
@@ -1222,7 +1227,7 @@ export function StreetMap({
                   <span>{partition.total_superblocks}</span>
                 </div>
                 <div className="info-row">
-                  <span>Coverage:</span>
+                  <span>Cell coverage:</span>
                   <span>{partition.coverage_percent.toFixed(1)}%</span>
                 </div>
                 <div className="info-row">

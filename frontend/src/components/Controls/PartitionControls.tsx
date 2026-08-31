@@ -118,6 +118,7 @@ export function PartitionControls({
   error,
 }: PartitionControlsProps) {
   const [settingsExpanded, setSettingsExpanded] = useState(false);
+  const [visibleActionCount, setVisibleActionCount] = useState(50);
   const streetActions = useMemo(
     () => partition?.superblocks.flatMap((superblock, superblockIndex) =>
       superblock.modifications.map((modification, modificationIndex) => ({
@@ -167,8 +168,8 @@ export function PartitionControls({
         <span className="planner-kicker">Automated analysis</span>
         <h2>Citywide superblock plan</h2>
         <p>
-          Finds boundary roads, partitions the complete street network, and blocks
-          every cross-superblock shortcut inside the resulting cells.
+          Loads the complete selected road network, extracts closed superblock cells,
+          and blocks cross-sector shortcuts inside every generated cell.
         </p>
         <div className="planner-rule">
           <span aria-hidden="true">→</span>
@@ -213,7 +214,10 @@ export function PartitionControls({
         <button
           type="button"
           className="action-button partition-button"
-          onClick={onPartition}
+          onClick={() => {
+            setVisibleActionCount(50);
+            onPartition();
+          }}
           disabled={!canPartition}
         >
           {partition ? 'Re-analyze entire city' : 'Analyze entire city'}
@@ -236,7 +240,7 @@ export function PartitionControls({
             <span>
               <strong>
                 {allCrossTrafficBlocked
-                  ? 'Cross-traffic eliminated'
+                  ? 'Directional cross-traffic paths blocked'
                   : 'Cross-traffic validation incomplete'}
               </strong>
               <small>
@@ -252,7 +256,7 @@ export function PartitionControls({
             </div>
             <div className="summary-item">
               <span className="summary-value">{partition.coverage_percent.toFixed(0)}%</span>
-              <span className="summary-label">City coverage</span>
+              <span className="summary-label">Generated-cell coverage</span>
             </div>
             <div className="summary-item">
               <span className="summary-value">{partition.arterial_network.length}</span>
@@ -290,7 +294,7 @@ export function PartitionControls({
             Each instruction uses the same sign and color as its marker on the map.
           </p>
           <ol className="street-action-list">
-            {streetActions.map(({ modification, superblockIndex, key }) => {
+            {streetActions.slice(0, visibleActionCount).map(({ modification, superblockIndex, key }) => {
               const presentation = ACTION_PRESENTATION[modification.modification_type];
               return (
                 <li key={key} className={`street-action-item ${modification.modification_type}`}>
@@ -309,6 +313,16 @@ export function PartitionControls({
               );
             })}
           </ol>
+          {visibleActionCount < streetActions.length && (
+            <button
+              type="button"
+              className="load-more-actions"
+              onClick={() => setVisibleActionCount(count => Math.min(count + 50, streetActions.length))}
+            >
+              Show 50 more
+              <span>{streetActions.length - visibleActionCount} remaining</span>
+            </button>
+          )}
         </section>
       )}
 
