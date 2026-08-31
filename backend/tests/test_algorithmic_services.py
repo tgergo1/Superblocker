@@ -9,12 +9,17 @@ from app.models.schemas import (
     ModificationType,
     StreetModification,
     StreetNetworkResponse,
+    TrafficObservation,
 )
 from app.services.constraint.accessibility_validator import AccessibilityValidator
 from app.services.constraint.constraint_enforcer import ConstraintEnforcer
 from app.services.detection.superblock_analyzer import SuperblockAnalyzer
 from app.services.sizing.size_optimizer import SizeOptimizer
-from app.services.traffic import apply_real_traffic_data, estimate_traffic
+from app.services.traffic import (
+    apply_real_traffic_data,
+    apply_traffic_observations_to_graph,
+    estimate_traffic,
+)
 
 
 def test_estimate_traffic_normalizes_lane_values():
@@ -80,6 +85,24 @@ def test_apply_real_traffic_data_recomputes_metadata():
     assert updated.metadata["total_capacity"] == 800
     assert updated.metadata["total_estimated_volume"] == 480
     assert updated.metadata["average_load"] == 0.6
+
+
+def test_measured_traffic_is_attached_with_provenance_and_physical_coverage():
+    graph = nx.MultiDiGraph()
+    graph.add_edge(1, 2, key=0, osmid=10, length=100)
+    graph.add_edge(2, 1, key=0, osmid=10, length=100)
+    graph.add_edge(2, 3, key=0, osmid=20, length=100)
+
+    evidence = apply_traffic_observations_to_graph(
+        graph,
+        [TrafficObservation(osm_id=10, volume_vph=840, source="City counter 2026")],
+    )
+
+    assert graph[1][2][0]["measured_volume_vph"] == 840
+    assert graph[2][1][0]["traffic_source"] == "City counter 2026"
+    assert "measured_volume_vph" not in graph[2][3][0]
+    assert evidence["traffic_mode"] == "measured_volume"
+    assert evidence["measured_edge_coverage_percent"] == 50.0
 
 
 def test_constraint_enforcer_assigns_wraparound_sector_consistently():

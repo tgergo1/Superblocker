@@ -2,7 +2,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query
 
 from app.core.config import get_settings
-from app.models.schemas import BoundingBox, SearchResponse, SearchResult
+from app.models.schemas import AdministrativeBoundary, BoundingBox, SearchResponse, SearchResult
 from app.services.cache_service import get_cache_service
 from app.services.nominatim_service import nominatim_get
 
@@ -25,7 +25,9 @@ async def search_places(
 
     Uses caching to avoid re-fetching the same search results.
 
-    Returns a list of matching places with their coordinates and bounding boxes.
+    Returns matching places with their exact administrative polygon when the
+    upstream OSM object provides one. The bounding box is retained for viewport
+    fitting and as a clearly labeled fallback only.
     """
     query = q.strip()
     if len(query) < 2:
@@ -35,7 +37,7 @@ async def search_places(
         )
 
     # Check cache first
-    cache_params = {"query": query.lower(), "limit": limit}
+    cache_params = {"query": query.lower(), "limit": limit, "geometry_version": 1}
     cache_service = get_cache_service()
     cached_data = cache_service.get("search", cache_params)
 
@@ -50,6 +52,7 @@ async def search_places(
                 "limit": limit,
                 "addressdetails": 1,
                 "extratags": 1,
+                "polygon_geojson": 1,
             },
         )
         response.raise_for_status()
@@ -83,6 +86,18 @@ async def search_places(
                 east=min(180, lon + 0.01),
             )
 
+        boundary = None
+        boundary_source = "bounding_box_fallback"
+        geojson = item.get("geojson")
+        if isinstance(geojson, dict) and geojson.get("type") in {"Polygon", "MultiPolygon"}:
+            try:
+                boundary = AdministrativeBoundary.model_validate(geojson)
+                boundary_source = "nominatim"
+            except ValueError:
+                # Search remains usable for malformed/non-area upstream objects;
+                # downstream analysis will state that it used the bbox fallback.
+                boundary = None
+
         results.append(
             SearchResult(
                 place_id=item["place_id"],
@@ -92,6 +107,8 @@ async def search_places(
                 lat=float(item["lat"]),
                 lon=float(item["lon"]),
                 boundingbox=bounding_box,
+                boundary=boundary,
+                boundary_source=boundary_source,
                 type=item.get("type", "unknown"),
                 importance=item.get("importance", 0.0),
             )

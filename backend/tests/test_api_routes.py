@@ -9,10 +9,12 @@ from app.api.routes import analysis, cache, search
 from app.core.workload import guard_expensive_request
 from app.main import app
 from app.models.schemas import (
+    AdministrativeBoundary,
     BoundingBox,
     CityPartition,
     StreetNetworkResponse,
 )
+from app.services.partitioning.city_partitioner import compute_plan_id
 
 
 async def bypass_guard():
@@ -128,12 +130,17 @@ def test_partition_regular_stream_and_route_with_supplied_partition(client, monk
 
     def fake_partition(
         _bbox,
+        _boundary,
         _target,
         _minimum,
         _maximum,
         _sectors,
         _enforce,
         _road_types,
+        _traffic_observations,
+        _access_targets,
+        _access_dataset_source,
+        _access_dataset_complete,
         progress_queue,
         _cancel_event,
     ):
@@ -173,6 +180,58 @@ def test_partition_regular_stream_and_route_with_supplied_partition(client, monk
     response = client.post("/api/v1/route", json=route_payload)
     assert response.status_code == 200
     assert response.json()["success"] is True
+
+
+def test_route_rejects_points_outside_exact_boundary(client):
+    partition = empty_partition()
+    partition.boundary = AdministrativeBoundary(
+        type="Polygon",
+        coordinates=[[[0, 0], [0.005, 0], [0, 0.005], [0, 0]]],
+    )
+    response = client.post(
+        "/api/v1/route",
+        json={
+            "origin": {"lat": 0.001, "lon": 0.001},
+            "destination": {"lat": 0.008, "lon": 0.008},
+            "partition": partition.model_dump(),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert "administrative boundary" in response.json()["blocked_reason"]
+
+
+def test_reviews_are_post_analysis_and_bound_to_plan_digest(client):
+    partition = empty_partition()
+    partition.plan_id = compute_plan_id(partition)
+    attestations = [
+        {
+            "plan_id": partition.plan_id,
+            "review_type": review_type,
+            "reviewer": "Qualified Reviewer",
+            "organization": "City Transport Office",
+            "reviewed_at": "2026-08-31",
+            "reference": f"review-{index}",
+        }
+        for index, review_type in enumerate(["transport_engineering", "site_inspection"], start=1)
+    ]
+    response = client.post(
+        "/api/v1/partition/review",
+        json={"partition": partition.model_dump(), "review_attestations": attestations},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["readiness"]["transport_engineering_reviewed"] is True
+    assert response.json()["readiness"]["site_inspection_reviewed"] is True
+    assert response.json()["readiness"]["implementation_ready"] is False
+
+    partition.coverage_percent = 99
+    response = client.post(
+        "/api/v1/partition/review",
+        json={"partition": partition.model_dump(), "review_attestations": attestations},
+    )
+    assert response.status_code == 400
 
 
 def test_optimal_size_rejects_invalid_inputs_and_returns_result(client, monkeypatch):
@@ -231,6 +290,7 @@ def test_search_is_cached_bounded_and_upstream_errors_are_generic(client, monkey
 
     async def fake_get(_path, params):
         assert params["q"] == "Budapest"
+        assert params["polygon_geojson"] == 1
         return httpx.Response(
             200,
             json=[
@@ -242,6 +302,10 @@ def test_search_is_cached_bounded_and_upstream_errors_are_generic(client, monkey
                     "lat": "47.5",
                     "lon": "19.04",
                     "boundingbox": ["47.4", "47.6", "18.9", "19.2"],
+                    "geojson": {
+                        "type": "Polygon",
+                        "coordinates": [[[18.9, 47.4], [19.2, 47.4], [19.1, 47.6], [18.9, 47.4]]],
+                    },
                     "type": "city",
                     "importance": 0.8,
                 }
@@ -250,7 +314,10 @@ def test_search_is_cached_bounded_and_upstream_errors_are_generic(client, monkey
         )
 
     monkeypatch.setattr(search, "nominatim_get", fake_get)
-    assert client.get("/api/v1/search", params={"q": "Budapest"}).status_code == 200
+    result = client.get("/api/v1/search", params={"q": "Budapest"})
+    assert result.status_code == 200
+    assert result.json()["results"][0]["boundary_source"] == "nominatim"
+    assert result.json()["results"][0]["boundary"]["type"] == "Polygon"
     assert client.get("/api/v1/search", params={"q": "x"}).status_code == 422
     assert client.get("/api/v1/search", params={"q": "   "}).status_code == 422
     assert client.get("/api/v1/search", params={"q": "x" * 201}).status_code == 422

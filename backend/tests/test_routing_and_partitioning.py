@@ -3,6 +3,9 @@ import pytest
 from shapely.geometry import LineString, Polygon
 
 from app.models.schemas import (
+    AccessTarget,
+    AdministrativeBoundary,
+    AnalysisEvidence,
     BoundingBox,
     CityPartition,
     Coordinates,
@@ -11,9 +14,15 @@ from app.models.schemas import (
     ModificationType,
     RouteRequest,
     StreetModification,
+    TrafficObservation,
 )
-from app.services.partitioning.city_partitioner import CityPartitioner, SuperblockCell
+from app.services.partitioning.city_partitioner import (
+    CityPartitioner,
+    SuperblockCell,
+    assess_plan_readiness,
+)
 from app.services.routing.superblock_router import SuperblockRouter
+from app.services.traffic import apply_traffic_observations_to_graph
 
 
 def partition_graph() -> nx.MultiDiGraph:
@@ -80,7 +89,103 @@ def test_partition_respects_arterial_types_and_enforcement_toggle():
     ).partition()
     assert enforced.superblocks[0].constraint_validated is True
     assert enforced.total_street_cuts > 0
+    assert len(enforced.plan_id) == 64
     assert 0 <= enforced.coverage_percent <= 100
+    assert enforced.readiness.status == "model_only"
+    assert enforced.readiness.implementation_ready is False
+    assert "Transport-engineering review is pending" in enforced.readiness.blockers
+
+
+def test_measured_volume_replaces_topology_for_arterial_selection():
+    graph = partition_graph()
+    evidence = apply_traffic_observations_to_graph(
+        graph,
+        [TrafficObservation(osm_id=201, volume_vph=1200, source="Measured counter")],
+    )
+    bbox = BoundingBox(north=0.002, south=0, east=0.002, west=0)
+    partitioner = CityPartitioner(graph, bbox, traffic_evidence=evidence)
+    partitioner._prepare_network()
+    partitioner._identify_arterials()
+
+    selected_osmids = {graph[u][v][key]["osmid"] for u, v, key in partitioner.arterial_edges}
+    assert selected_osmids == {201}
+    assert evidence["traffic_mode"] == "measured_volume"
+
+
+def test_sparse_measured_traffic_remains_blocked_from_implementation():
+    graph = partition_graph()
+    evidence = apply_traffic_observations_to_graph(
+        graph,
+        [TrafficObservation(osm_id=101, volume_vph=1000, source="One counter")],
+    )
+    bbox = BoundingBox(north=0.002, south=0, east=0.002, west=0)
+    result = CityPartitioner(graph, bbox, traffic_evidence=evidence).partition()
+
+    assert result.evidence.traffic_mode == "measured_volume"
+    assert any("Measured traffic coverage" in blocker for blocker in result.readiness.blockers)
+
+
+def test_complete_evidence_and_both_post_analysis_reviews_pass_release_gate():
+    readiness = assess_plan_readiness(
+        evidence=AnalysisEvidence(
+            boundary_mode="administrative_polygon",
+            traffic_mode="measured_volume",
+            traffic_observation_count=100,
+            measured_edge_coverage_percent=90,
+            access_mode="authoritative_targets",
+            access_target_count=25,
+            access_dataset_source="Municipal cadastre 2026",
+            access_dataset_complete=True,
+        ),
+        has_boundary=True,
+        modeled_directional_validation_passed=True,
+        validated_target_count=25,
+        total_unreachable_targets=0,
+        review_types={"transport_engineering", "site_inspection"},
+    )
+
+    assert readiness.status == "implementation_ready"
+    assert readiness.implementation_ready is True
+    assert readiness.blockers == []
+
+
+def test_access_validation_uses_explicit_targets_not_every_graph_node():
+    graph = partition_graph()
+    bbox = BoundingBox(north=0.002, south=0, east=0.002, west=0)
+    target = AccessTarget(
+        id="parcel-1",
+        coordinates=Coordinates(lat=0.001, lon=0.001),
+        kind="parcel",
+        source="Municipal cadastre 2026",
+    )
+    partitioner = CityPartitioner(graph, bbox, access_targets=[target])
+    interior = graph.subgraph([5, 6, 7]).copy()
+
+    assert partitioner._find_unreachable_access_targets(interior, [], [5, 7], None, [target]) == []
+    blocked = partitioner._find_unreachable_access_targets(interior, [], [], None, [target])
+    assert [item.target_id for item in blocked] == ["parcel-1"]
+
+
+def test_partition_coverage_uses_exact_administrative_polygon():
+    graph = partition_graph()
+    bbox = BoundingBox(north=0.002, south=0, east=0.002, west=0)
+    boundary = AdministrativeBoundary(
+        type="Polygon",
+        coordinates=[[[0, 0], [0.002, 0], [0.002, 0.0015], [0, 0.0015], [0, 0]]],
+    )
+    result = CityPartitioner(
+        graph,
+        bbox,
+        boundary=boundary,
+        target_size_ha=5,
+        min_area_ha=0.5,
+        max_area_ha=20,
+        arterial_road_types={"primary"},
+    ).partition()
+
+    assert result.boundary == boundary
+    assert result.evidence.boundary_mode == "administrative_polygon"
+    assert 0 <= result.coverage_percent <= 100
 
 
 def test_small_cell_merge_does_not_duplicate_an_earlier_neighbor():

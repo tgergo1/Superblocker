@@ -5,7 +5,14 @@ import {
   type PartitionRequest,
   type PartitionResponse,
 } from '../services/api';
-import type { BoundingBox, PartitionProgress, CityPartition } from '../types';
+import type { MultiPolygon, Polygon } from 'geojson';
+import type {
+  AccessTarget,
+  BoundingBox,
+  PartitionProgress,
+  CityPartition,
+  TrafficObservation,
+} from '../types';
 
 // Partition stage information for detailed progress tracking
 export interface PartitionStageInfo {
@@ -38,7 +45,10 @@ export interface DetailedPartitionProgress extends PartitionProgress {
   startTime: number | null;
 }
 
-export function usePartition(bbox: BoundingBox | null) {
+export function usePartition(
+  bbox: BoundingBox | null,
+  boundary: Polygon | MultiPolygon | null = null,
+) {
   const [parameters, setParameters] = useState<PartitionParameters>({
     targetSizeHectares: 12,
     minAreaHectares: 6,
@@ -59,6 +69,10 @@ export function usePartition(bbox: BoundingBox | null) {
 
   // Track the partition result separately to persist it
   const [partition, setPartition] = useState<CityPartition | null>(null);
+  const [trafficObservations, setTrafficObservations] = useState<TrafficObservation[]>([]);
+  const [accessTargets, setAccessTargets] = useState<AccessTarget[]>([]);
+  const [accessDatasetSource, setAccessDatasetSource] = useState<string | null>(null);
+  const [accessDatasetComplete, setAccessDatasetComplete] = useState(false);
 
   const calculateTimes = useCallback((percent: number): { elapsed: number; remaining: number } => {
     const startTime = startTimeRef.current;
@@ -96,6 +110,11 @@ export function usePartition(bbox: BoundingBox | null) {
 
       const request: PartitionRequest = {
         bbox,
+        boundary,
+        traffic_observations: trafficObservations,
+        access_targets: accessTargets,
+        access_dataset_source: accessDatasetSource,
+        access_dataset_complete: accessDatasetComplete,
         target_size_hectares: parameters.targetSizeHectares,
         min_area_hectares: parameters.minAreaHectares,
         max_area_hectares: parameters.maxAreaHectares,
@@ -173,6 +192,10 @@ export function usePartition(bbox: BoundingBox | null) {
     mutation.reset();
     startTimeRef.current = null;
     setPartition(null);
+    setTrafficObservations([]);
+    setAccessTargets([]);
+    setAccessDatasetSource(null);
+    setAccessDatasetComplete(false);
     setProgress({
       stage: 'network',
       percent: 0,
@@ -192,6 +215,14 @@ export function usePartition(bbox: BoundingBox | null) {
     progress,
     parameters,
     setParameters,
+    trafficObservations,
+    setTrafficObservations,
+    accessTargets,
+    setAccessTargets,
+    accessDatasetSource,
+    setAccessDatasetSource,
+    accessDatasetComplete,
+    setAccessDatasetComplete,
     runPartition,
     cancel,
     reset,

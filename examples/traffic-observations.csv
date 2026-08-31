@@ -1,0 +1,3 @@
+osm_id,volume_vph,source,observed_at
+12345678,840,Example municipal peak-hour count,2026-08-15T08:00:00+02:00
+23456789,1210,Example municipal peak-hour count,2026-08-15T08:00:00+02:00

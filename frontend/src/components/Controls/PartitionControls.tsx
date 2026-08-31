@@ -2,8 +2,10 @@ import { useMemo, useState } from 'react';
 import type {
   PartitionProgress,
   CityPartition,
+  AccessTarget,
   ModificationType,
   StreetModification,
+  TrafficObservation,
 } from '../../types';
 import './PartitionControls.css';
 
@@ -100,6 +102,15 @@ interface PartitionControlsProps {
   showModalFilters: boolean;
   onShowModalFiltersChange: (show: boolean) => void;
   error?: Error | null;
+  boundaryMode: 'administrative_polygon' | 'bounding_box_fallback';
+  trafficObservations: TrafficObservation[];
+  onTrafficObservationsChange: (observations: TrafficObservation[]) => void;
+  accessTargets: AccessTarget[];
+  onAccessTargetsChange: (targets: AccessTarget[]) => void;
+  accessDatasetSource: string | null;
+  onAccessDatasetSourceChange: (source: string | null) => void;
+  accessDatasetComplete: boolean;
+  onAccessDatasetCompleteChange: (complete: boolean) => void;
 }
 
 export function PartitionControls({
@@ -116,8 +127,19 @@ export function PartitionControls({
   showModalFilters,
   onShowModalFiltersChange,
   error,
+  boundaryMode,
+  trafficObservations,
+  onTrafficObservationsChange,
+  accessTargets,
+  onAccessTargetsChange,
+  accessDatasetSource,
+  onAccessDatasetSourceChange,
+  accessDatasetComplete,
+  onAccessDatasetCompleteChange,
 }: PartitionControlsProps) {
   const [settingsExpanded, setSettingsExpanded] = useState(false);
+  const [evidenceExpanded, setEvidenceExpanded] = useState(false);
+  const [evidenceError, setEvidenceError] = useState<string | null>(null);
   const [visibleActionCount, setVisibleActionCount] = useState(50);
   const streetActions = useMemo(
     () => partition?.superblocks.flatMap((superblock, superblockIndex) =>
@@ -155,12 +177,91 @@ export function PartitionControls({
   // Calculate elapsed time if loading
   const elapsedSeconds = progress?.elapsedTime ?? 0;
   const validatedSuperblocks = partition?.superblocks.filter(
-    (superblock) => superblock.constraint_validated,
+    (superblock) => superblock.modeled_directional_validation_passed,
   ).length ?? 0;
   const allCrossTrafficBlocked = Boolean(
     partition && partition.total_superblocks > 0 && validatedSuperblocks === partition.total_superblocks,
   );
   const totalModifications = streetActions.length;
+
+  const loadTrafficFile = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      let rows: Array<Record<string, unknown>>;
+      if (file.name.toLowerCase().endsWith('.json')) {
+        const value = JSON.parse(text) as unknown;
+        rows = Array.isArray(value) ? value as Array<Record<string, unknown>> : [];
+      } else {
+        const lines = text.split(/\r?\n/).filter(line => line.trim());
+        const headers = (lines.shift() ?? '').split(',').map(value => value.trim());
+        rows = lines.map(line => Object.fromEntries(
+          line.split(',').map((value, index) => [headers[index], value.trim()]),
+        ));
+      }
+      const observations = rows.map((row, index) => {
+        const osmId = Number(row.osm_id);
+        const volume = Number(row.volume_vph);
+        const source = String(row.source ?? '').trim();
+        if (!Number.isInteger(osmId) || osmId <= 0 || !Number.isFinite(volume) || volume < 0 || !source) {
+          throw new Error(`Invalid traffic row ${index + 1}`);
+        }
+        return {
+          osm_id: osmId,
+          volume_vph: Math.round(volume),
+          source,
+          observed_at: row.observed_at ? String(row.observed_at) : null,
+        } satisfies TrafficObservation;
+      });
+      if (!observations.length) throw new Error('The traffic file contains no observations');
+      onTrafficObservationsChange(observations);
+      setEvidenceError(null);
+    } catch (fileError) {
+      setEvidenceError(fileError instanceof Error ? fileError.message : 'Invalid traffic file');
+    }
+  };
+
+  const loadAccessFile = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const collection = JSON.parse(await file.text()) as {
+        type?: string;
+        features?: Array<{
+          id?: string | number;
+          geometry?: { type?: string; coordinates?: unknown };
+          properties?: Record<string, unknown>;
+        }>;
+      };
+      if (collection.type !== 'FeatureCollection' || !Array.isArray(collection.features)) {
+        throw new Error('Access data must be a GeoJSON FeatureCollection');
+      }
+      const source = accessDatasetSource?.trim() || file.name;
+      const targets = collection.features.map((feature, index) => {
+        if (feature.geometry?.type !== 'Point' || !Array.isArray(feature.geometry.coordinates)) {
+          throw new Error(`Access feature ${index + 1} must be a Point`);
+        }
+        const [lon, lat] = feature.geometry.coordinates as number[];
+        const kind = String(feature.properties?.kind ?? 'address');
+        if (!Number.isFinite(lon) || !Number.isFinite(lat)
+          || !['address', 'parcel', 'building', 'emergency', 'delivery'].includes(kind)) {
+          throw new Error(`Invalid access feature ${index + 1}`);
+        }
+        return {
+          id: String(feature.id ?? feature.properties?.id ?? `access-${index + 1}`),
+          coordinates: { lat, lon },
+          kind: kind as AccessTarget['kind'],
+          label: feature.properties?.label ? String(feature.properties.label) : null,
+          source,
+        } satisfies AccessTarget;
+      });
+      if (!targets.length) throw new Error('The access file contains no targets');
+      onAccessTargetsChange(targets);
+      if (!accessDatasetSource) onAccessDatasetSourceChange(file.name);
+      setEvidenceError(null);
+    } catch (fileError) {
+      setEvidenceError(fileError instanceof Error ? fileError.message : 'Invalid access file');
+    }
+  };
 
   return (
     <div className={`partition-controls ${partition ? 'has-results' : ''}`}>
@@ -176,6 +277,73 @@ export function PartitionControls({
           Enter and return on the same side; cross-traffic stays on boundary roads.
         </div>
       </div>
+
+      <button
+        type="button"
+        className="settings-toggle evidence-toggle"
+        onClick={() => setEvidenceExpanded(!evidenceExpanded)}
+        aria-expanded={evidenceExpanded}
+        aria-controls="evidence-inputs-panel"
+      >
+        <span className="settings-icon">{evidenceExpanded ? '▼' : '▶'}</span>
+        <span>Evidence inputs</span>
+        <span className={`input-status ${boundaryMode === 'administrative_polygon' ? 'ready' : 'missing'}`}>
+          {boundaryMode === 'administrative_polygon' ? 'Exact boundary' : 'BBox fallback'}
+        </span>
+      </button>
+
+      {evidenceExpanded && (
+        <div className="settings-panel evidence-panel" id="evidence-inputs-panel">
+          <div className="evidence-row">
+            <div>
+              <strong>Measured traffic</strong>
+              <small>CSV/JSON: osm_id, volume_vph, source, observed_at</small>
+            </div>
+            <label className="file-button">
+              {trafficObservations.length ? `${trafficObservations.length} loaded` : 'Load counts'}
+              <input
+                type="file"
+                accept=".csv,.json,text/csv,application/json"
+                onChange={(event) => void loadTrafficFile(event.target.files?.[0])}
+              />
+            </label>
+          </div>
+          <div className="evidence-row">
+            <div>
+              <strong>Access targets</strong>
+              <small>GeoJSON Point features for addresses, parcels, and services</small>
+            </div>
+            <label className="file-button">
+              {accessTargets.length ? `${accessTargets.length} loaded` : 'Load GeoJSON'}
+              <input
+                type="file"
+                accept=".geojson,.json,application/geo+json,application/json"
+                onChange={(event) => void loadAccessFile(event.target.files?.[0])}
+              />
+            </label>
+          </div>
+          <label className="param-label" htmlFor="access-dataset-source">
+            <span>Access dataset source</span>
+          </label>
+          <input
+            id="access-dataset-source"
+            className="evidence-source-input"
+            value={accessDatasetSource ?? ''}
+            onChange={(event) => onAccessDatasetSourceChange(event.target.value || null)}
+            placeholder="Authority and dataset version"
+          />
+          <label className="checkbox-label evidence-complete-check">
+            <input
+              type="checkbox"
+              checked={accessDatasetComplete}
+              disabled={!accessTargets.length}
+              onChange={(event) => onAccessDatasetCompleteChange(event.target.checked)}
+            />
+            <span>I attest this is the complete authoritative access dataset for the area</span>
+          </label>
+          {evidenceError && <div className="control-error" role="alert">{evidenceError}</div>}
+        </div>
+      )}
 
       {/* Progress Indicator */}
       {isLoading && progress && (
@@ -240,13 +408,35 @@ export function PartitionControls({
             <span>
               <strong>
                 {allCrossTrafficBlocked
-                  ? 'Directional cross-traffic paths blocked'
-                  : 'Cross-traffic validation incomplete'}
+                  ? 'Modeled cross-sector paths blocked'
+                  : 'Modeled path validation incomplete'}
               </strong>
               <small>
-                {validatedSuperblocks}/{partition.total_superblocks} superblocks pass the directional path test
+                {validatedSuperblocks}/{partition.total_superblocks} cells pass the graph path test; this is not field compliance
               </small>
             </span>
+          </div>
+          <div className={`readiness-banner ${partition.readiness.implementation_ready ? 'ready' : 'blocked'}`}>
+            <strong>
+              {partition.readiness.implementation_ready
+                ? 'Implementation gate passed'
+                : partition.readiness.status === 'review_pending'
+                  ? 'Professional reviews pending'
+                  : 'Model-only proposal'}
+            </strong>
+            <small>
+              {partition.readiness.implementation_ready
+                ? 'Evidence and both required reviews are recorded.'
+                : `${partition.readiness.blockers.length} release gate${partition.readiness.blockers.length === 1 ? '' : 's'} remain.`}
+            </small>
+            {partition.plan_id && (
+              <code className="plan-id">Plan {partition.plan_id.slice(0, 16)}</code>
+            )}
+            {!partition.readiness.implementation_ready && (
+              <ul className="readiness-blockers">
+                {partition.readiness.blockers.map(blocker => <li key={blocker}>{blocker}</li>)}
+              </ul>
+            )}
           </div>
           <div className="summary-title">City plan</div>
           <div className="summary-grid">
@@ -273,11 +463,26 @@ export function PartitionControls({
             <span>{partition.total_two_way_conversions} two-way access changes</span>
             <span>{partition.total_street_cuts} street cuts</span>
           </div>
-          {partition.total_unreachable_addresses > 0 && (
+          {partition.total_unreachable_access_targets > 0 && (
             <div className="warning-banner">
-              {partition.total_unreachable_addresses} network nodes require local-access review
+              {partition.total_unreachable_access_targets} supplied access targets lack modeled entry-and-return access
             </div>
           )}
+          <div className="evidence-summary">
+            <span>
+              Boundary: {partition.evidence.boundary_mode === 'administrative_polygon' ? 'administrative polygon' : 'bounding-box fallback'}
+            </span>
+            <span>
+              Traffic: {partition.evidence.traffic_mode === 'measured_volume'
+                ? `${partition.evidence.traffic_observation_count} counts · ${partition.evidence.measured_edge_coverage_percent.toFixed(1)}% road-length coverage`
+                : 'topology model'}
+            </span>
+            <span>
+              Access: {partition.evidence.access_target_count
+                ? `${partition.evidence.access_target_count} supplied targets`
+                : 'not supplied'}
+            </span>
+          </div>
         </div>
       )}
 
@@ -285,13 +490,13 @@ export function PartitionControls({
         <section className="street-action-plan" aria-labelledby="street-action-plan-title">
           <div className="action-plan-header">
             <div>
-              <span className="action-plan-kicker">Implementation schedule</span>
+              <span className="action-plan-kicker">Proposed works schedule</span>
               <h3 id="street-action-plan-title">Street-by-street actions</h3>
             </div>
             <span className="action-plan-count">{streetActions.length}</span>
           </div>
           <p className="action-plan-intro">
-            Each instruction uses the same sign and color as its marker on the map.
+            Model-generated instructions use the same sign and color as the map. They remain blocked from implementation until the readiness gate passes.
           </p>
           <ol className="street-action-list">
             {streetActions.slice(0, visibleActionCount).map(({ modification, superblockIndex, key }) => {

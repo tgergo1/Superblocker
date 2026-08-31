@@ -1,4 +1,6 @@
-from app.models.schemas import StreetNetworkResponse
+import networkx as nx
+
+from app.models.schemas import StreetNetworkResponse, TrafficObservation
 
 # Road capacity estimates (vehicles per hour per lane)
 # Based on Highway Capacity Manual and urban planning literature
@@ -173,3 +175,77 @@ def apply_real_traffic_data(
     )
 
     return network
+
+
+def apply_traffic_observations_to_graph(
+    graph: nx.MultiDiGraph,
+    observations: list[TrafficObservation],
+) -> dict[str, object]:
+    """Attach measured volume and provenance to every matching OSM edge.
+
+    Returns physical-edge coverage metadata. An observation applies to all
+    directed graph edges belonging to the same OSM way, while coverage counts
+    the physical segment only once.
+    """
+    by_osm_id = {observation.osm_id: observation for observation in observations}
+    physical_edges: dict[tuple[int, int, int], tuple[float, bool]] = {}
+
+    for u, v, _key, data in graph.edges(keys=True, data=True):
+        osmids = data.get("osmid", [])
+        if not isinstance(osmids, (list, tuple, set)):
+            osmids = [osmids]
+        observation = next((by_osm_id.get(int(osmid)) for osmid in osmids if osmid), None)
+        if observation is not None:
+            data["measured_volume_vph"] = observation.volume_vph
+            data["traffic_source"] = observation.source
+            data["traffic_observed_at"] = observation.observed_at
+
+        normalized_osmid = next((int(osmid) for osmid in osmids if osmid), 0)
+        physical_key = (min(int(u), int(v)), max(int(u), int(v)), normalized_osmid)
+        length = max(0.0, float(data.get("length", 0) or 0))
+        previous = physical_edges.get(physical_key)
+        if previous is None or length > previous[0]:
+            physical_edges[physical_key] = (length, observation is not None)
+
+    total_length = sum(length for length, _observed in physical_edges.values())
+    observed_length = sum(length for length, observed in physical_edges.values() if observed)
+    coverage = (observed_length / total_length * 100) if total_length else 0.0
+    return {
+        "traffic_mode": "measured_volume" if observations else "modeled_topology",
+        "traffic_observation_count": len(observations),
+        "measured_edge_coverage_percent": round(coverage, 2),
+        "traffic_sources": sorted({observation.source for observation in observations}),
+    }
+
+
+def apply_traffic_observations_to_network(
+    network: StreetNetworkResponse,
+    observations: list[TrafficObservation],
+) -> StreetNetworkResponse:
+    """Replace estimates with measured values in the public road layer."""
+    if not observations:
+        network.metadata.update(
+            traffic_mode="modeled_topology",
+            traffic_observation_count=0,
+            traffic_sources=[],
+        )
+        return network
+
+    by_osm_id = {observation.osm_id: observation for observation in observations}
+    updated = apply_real_traffic_data(
+        network,
+        {observation.osm_id: observation.volume_vph for observation in observations},
+    )
+    for feature in updated.features:
+        properties = feature["properties"]
+        observation = by_osm_id.get(int(properties.get("osmid", 0) or 0))
+        if observation is not None:
+            properties["traffic_source"] = observation.source
+            properties["traffic_observed_at"] = observation.observed_at
+            properties["measured_volume_vph"] = observation.volume_vph
+    updated.metadata.update(
+        traffic_mode="measured_volume",
+        traffic_observation_count=len(observations),
+        traffic_sources=sorted({observation.source for observation in observations}),
+    )
+    return updated

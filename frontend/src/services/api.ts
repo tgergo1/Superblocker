@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
   BoundingBox,
+  AccessTarget,
   CityPartition,
   Coordinates,
   PartitionProgress,
@@ -8,7 +9,9 @@ import type {
   SearchResponse,
   SizeRecommendation,
   StreetNetworkResponse,
+  TrafficObservation,
 } from '../types';
+import type { MultiPolygon, Polygon } from 'geojson';
 
 export const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
@@ -242,6 +245,11 @@ export async function analyzeAreaWithProgress(
 
 export interface PartitionRequest {
   bbox: BoundingBox;
+  boundary?: Polygon | MultiPolygon | null;
+  traffic_observations?: TrafficObservation[];
+  access_targets?: AccessTarget[];
+  access_dataset_source?: string | null;
+  access_dataset_complete?: boolean;
   target_size_hectares?: number;
   min_area_hectares?: number;
   max_area_hectares?: number;
@@ -258,6 +266,11 @@ export interface PartitionResponse {
 function partitionBody(request: PartitionRequest): Record<string, unknown> {
   return {
     bbox: request.bbox,
+    boundary: request.boundary ?? null,
+    traffic_observations: request.traffic_observations ?? [],
+    access_targets: request.access_targets ?? [],
+    access_dataset_source: request.access_dataset_source ?? null,
+    access_dataset_complete: request.access_dataset_complete ?? false,
     target_size_hectares: request.target_size_hectares ?? 12,
     min_area_hectares: request.min_area_hectares ?? 6,
     max_area_hectares: request.max_area_hectares ?? 20,

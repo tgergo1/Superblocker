@@ -1,0 +1,14 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "id": "example-address-1",
+      "geometry": { "type": "Point", "coordinates": [19.0402, 47.4979] },
+      "properties": {
+        "kind": "address",
+        "label": "Example access target"
+      }
+    }
+  ]
+}

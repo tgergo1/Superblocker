@@ -61,11 +61,19 @@ function App() {
     progress: partitionProgress,
     parameters: partitionParameters,
     setParameters: setPartitionParameters,
+    trafficObservations,
+    setTrafficObservations,
+    accessTargets,
+    setAccessTargets,
+    accessDatasetSource,
+    setAccessDatasetSource,
+    accessDatasetComplete,
+    setAccessDatasetComplete,
     runPartition,
     cancel: cancelPartition,
     error: partitionError,
     reset: resetPartition,
-  } = usePartition(bbox);
+  } = usePartition(bbox, selectedPlace?.boundary ?? null);
 
   const activeStreetNetwork = partitionData?.street_network ?? null;
 
@@ -132,6 +140,7 @@ function App() {
           route={route}
           showRoute={showRoute}
           selectedPlaceName={selectedPlace?.display_name}
+          analysisBoundary={selectedPlace?.boundary ?? null}
           emptyStateMessage="Run the automated analysis to extract closed cells from the complete selected road network and move cross-traffic to boundary roads."
           hideLegends={routeValidatorExpanded}
         />
@@ -173,6 +182,15 @@ function App() {
               showModalFilters={showModalFilters}
               onShowModalFiltersChange={setShowModalFilters}
               error={partitionError}
+              boundaryMode={selectedPlace?.boundary ? 'administrative_polygon' : 'bounding_box_fallback'}
+              trafficObservations={trafficObservations}
+              onTrafficObservationsChange={setTrafficObservations}
+              accessTargets={accessTargets}
+              onAccessTargetsChange={setAccessTargets}
+              accessDatasetSource={accessDatasetSource}
+              onAccessDatasetSourceChange={setAccessDatasetSource}
+              accessDatasetComplete={accessDatasetComplete}
+              onAccessDatasetCompleteChange={setAccessDatasetComplete}
             />
           </div>
         </div>
@@ -194,11 +212,15 @@ function App() {
           <div className="details-body">
             {/* Status indicators */}
             <div className="status-row">
-              <span className={`status-badge ${selectedEnforcedSuperblock.constraint_validated ? 'valid' : 'invalid'}`}>
-                {selectedEnforcedSuperblock.constraint_validated ? '✓ Directional test passed' : '✕ Cross-traffic remains'}
+              <span className={`status-badge ${selectedEnforcedSuperblock.modeled_directional_validation_passed ? 'valid' : 'invalid'}`}>
+                {selectedEnforcedSuperblock.modeled_directional_validation_passed ? '✓ Model paths blocked' : '✕ Modeled cross-path remains'}
               </span>
-              <span className={`status-badge ${selectedEnforcedSuperblock.all_addresses_reachable ? 'reachable' : 'unreachable'}`}>
-                {selectedEnforcedSuperblock.all_addresses_reachable ? '✓ All Reachable' : '⚠ Some Unreachable'}
+              <span className={`status-badge ${selectedEnforcedSuperblock.all_access_targets_reachable === false ? 'unreachable' : 'reachable'}`}>
+                {selectedEnforcedSuperblock.all_access_targets_reachable === null
+                  ? 'No access dataset'
+                  : selectedEnforcedSuperblock.all_access_targets_reachable
+                    ? '✓ Access targets reachable'
+                    : '⚠ Access target blocked'}
               </span>
             </div>
 
@@ -276,22 +298,22 @@ function App() {
             </div>
 
             {/* Unreachable addresses warning */}
-            {selectedEnforcedSuperblock.unreachable_addresses.length > 0 && (
+            {selectedEnforcedSuperblock.unreachable_access_targets.length > 0 && (
               <>
                 <div className="details-section-title warning">
-                  ⚠ Unreachable ({selectedEnforcedSuperblock.unreachable_addresses.length})
+                  ⚠ Unreachable access targets ({selectedEnforcedSuperblock.unreachable_access_targets.length})
                 </div>
                 <div className="unreachable-list">
-                  {selectedEnforcedSuperblock.unreachable_addresses.slice(0, 3).map((addr, i) => (
+                  {selectedEnforcedSuperblock.unreachable_access_targets.slice(0, 3).map((target, i) => (
                     <div key={i} className="unreachable-item">
                       <span className="unreachable-icon">⚠</span>
-                      <span>Node {addr.node_id}</span>
-                      <span className="unreachable-reason">{addr.reason}</span>
+                      <span>{target.label || target.target_id}</span>
+                      <span className="unreachable-reason">{target.reason}</span>
                     </div>
                   ))}
-                  {selectedEnforcedSuperblock.unreachable_addresses.length > 3 && (
+                  {selectedEnforcedSuperblock.unreachable_access_targets.length > 3 && (
                     <div className="unreachable-more">
-                      +{selectedEnforcedSuperblock.unreachable_addresses.length - 3} more...
+                      +{selectedEnforcedSuperblock.unreachable_access_targets.length - 3} more...
                     </div>
                   )}
                 </div>

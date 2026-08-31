@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -11,6 +12,7 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from shapely.geometry import Point, shape
 
 from app.core.config import get_settings
 from app.core.workload import guard_expensive_request
@@ -18,10 +20,12 @@ from app.models.schemas import (
     AnalysisRequest,
     AnalysisResponse,
     BoundingBox,
+    CityPartition,
     Coordinates,
     PartitionProgress,
     PartitionRequest,
     PartitionResponse,
+    PartitionReviewRequest,
     RouteRequest,
     RouteResult,
     StreetNetworkRequest,
@@ -33,10 +37,18 @@ from app.services.osm_service import (
     get_street_network_graph,
     graph_to_street_network,
 )
-from app.services.partitioning.city_partitioner import CityPartitioner
+from app.services.partitioning.city_partitioner import (
+    CityPartitioner,
+    assess_plan_readiness,
+    compute_plan_id,
+)
 from app.services.routing.superblock_router import SuperblockRouter
 from app.services.sizing.size_optimizer import calculate_optimal_superblock_size
-from app.services.traffic import estimate_traffic
+from app.services.traffic import (
+    apply_traffic_observations_to_graph,
+    apply_traffic_observations_to_network,
+    estimate_traffic,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -353,14 +365,18 @@ class PartitionStore:
         self._lock = threading.RLock()
 
     @staticmethod
-    def key(bbox: BoundingBox) -> str:
-        return "_".join(
+    def key(bbox: BoundingBox, boundary=None) -> str:
+        bbox_key = "_".join(
             str(round(value, 6)) for value in (bbox.north, bbox.south, bbox.east, bbox.west)
         )
+        if boundary is None:
+            return bbox_key
+        boundary_json = json.dumps(boundary.model_dump(), sort_keys=True, separators=(",", ":"))
+        return f"{bbox_key}_{hashlib.sha256(boundary_json.encode()).hexdigest()[:16]}"
 
     def put(self, partition: object, graph: object, bbox: BoundingBox) -> None:
         with self._lock:
-            key = self.key(bbox)
+            key = self.key(bbox, getattr(partition, "boundary", None))
             self._entries[key] = CachedPartition(partition, graph, time.monotonic())
             self._entries.move_to_end(key)
             while len(self._entries) > self._max_entries:
@@ -374,23 +390,30 @@ class PartitionStore:
                     del self._entries[key]
                     continue
                 bbox = cached.partition.bbox
-                if (
+                inside_bounds = (
                     bbox.west <= origin.lon <= bbox.east
                     and bbox.south <= origin.lat <= bbox.north
                     and bbox.west <= destination.lon <= bbox.east
                     and bbox.south <= destination.lat <= bbox.north
-                ):
+                )
+                boundary = cached.partition.boundary
+                inside_boundary = boundary is None or (
+                    shape(boundary.model_dump()).covers(Point(origin.lon, origin.lat))
+                    and shape(boundary.model_dump()).covers(Point(destination.lon, destination.lat))
+                )
+                if inside_bounds and inside_boundary:
                     self._entries.move_to_end(key)
                     return cached
         return None
 
-    def get_exact(self, bbox: BoundingBox) -> CachedPartition | None:
+    def get_exact(self, bbox: BoundingBox, boundary=None) -> CachedPartition | None:
         with self._lock:
-            cached = self._entries.get(self.key(bbox))
+            cache_key = self.key(bbox, boundary)
+            cached = self._entries.get(cache_key)
             if cached is None:
                 return None
             if time.monotonic() - cached.created_at > self._ttl_seconds:
-                del self._entries[self.key(bbox)]
+                del self._entries[cache_key]
                 return None
             return cached
 
@@ -403,12 +426,17 @@ partition_store = PartitionStore(
 
 def run_partition_sync(
     bbox: BoundingBox,
+    boundary,
     target_size: float,
     min_area: float,
     max_area: float,
     num_sectors: int,
     enforce_constraints: bool,
     arterial_road_types: set[str],
+    traffic_observations,
+    access_targets,
+    access_dataset_source: str | None,
+    access_dataset_complete: bool,
     progress_queue: queue.Queue,
     cancel_event: threading.Event | None = None,
 ):
@@ -450,18 +478,24 @@ def run_partition_sync(
     loop = asyncio.new_event_loop()
     try:
         # Fetch graph
-        graph = loop.run_until_complete(get_street_network_graph(bbox))
+        graph = loop.run_until_complete(get_street_network_graph(bbox, boundary=boundary))
+        traffic_evidence = apply_traffic_observations_to_graph(graph, traffic_observations)
 
         # Create partitioner
         partitioner = CityPartitioner(
             graph=graph,
             bbox=bbox,
+            boundary=boundary,
             target_size_ha=target_size,
             min_area_ha=min_area,
             max_area_ha=max_area,
             num_sectors=num_sectors,
             arterial_road_types=arterial_road_types,
             enforce_constraints=enforce_constraints,
+            traffic_evidence=traffic_evidence,
+            access_targets=access_targets,
+            access_dataset_source=access_dataset_source,
+            access_dataset_complete=access_dataset_complete,
             progress_callback=progress_callback,
         )
 
@@ -469,7 +503,11 @@ def run_partition_sync(
         start_time = time.time()
         partition = partitioner.partition()
         elapsed = time.time() - start_time
-        network = estimate_traffic(graph_to_street_network(graph, bbox))
+        network = estimate_traffic(graph_to_street_network(graph, bbox, boundary=boundary))
+        network = apply_traffic_observations_to_network(network, traffic_observations)
+        network.metadata["measured_edge_coverage_percent"] = traffic_evidence[
+            "measured_edge_coverage_percent"
+        ]
 
         logger.info(
             "Partition completed in %.1fs (superblocks=%s coverage=%.1f%%)",
@@ -522,12 +560,17 @@ async def partition_city(
             analysis_executor,
             run_partition_sync,
             request.bbox,
+            request.boundary,
             request.target_size_hectares,
             request.min_area_hectares,
             request.max_area_hectares,
             request.num_sectors,
             request.enforce_constraints,
             {road_type.value for road_type in request.arterial_road_types},
+            request.traffic_observations,
+            request.access_targets,
+            request.access_dataset_source,
+            request.access_dataset_complete,
             progress_queue,
             None,
         )
@@ -574,12 +617,17 @@ async def partition_city_stream(
             analysis_executor,
             run_partition_sync,
             request.bbox,
+            request.boundary,
             request.target_size_hectares,
             request.min_area_hectares,
             request.max_area_hectares,
             request.num_sectors,
             request.enforce_constraints,
             {road_type.value for road_type in request.arterial_road_types},
+            request.traffic_observations,
+            request.access_targets,
+            request.access_dataset_source,
+            request.access_dataset_complete,
             progress_queue,
             cancel_event,
         )
@@ -633,6 +681,36 @@ async def partition_city_stream(
     )
 
 
+@router.post("/partition/review", response_model=CityPartition)
+async def review_partition(
+    request: PartitionReviewRequest,
+    _permit: None = Depends(guard_expensive_request),
+):
+    """Apply post-analysis professional attestations to this exact plan digest."""
+    partition = request.partition.model_copy(deep=True)
+    if not partition.plan_id or compute_plan_id(partition) != partition.plan_id:
+        raise HTTPException(
+            status_code=400,
+            detail="The supplied plan ID does not match the partition contents",
+        )
+
+    validated_target_count = sum(
+        superblock.access_target_count for superblock in partition.superblocks
+    )
+    partition.readiness = assess_plan_readiness(
+        evidence=partition.evidence,
+        has_boundary=partition.boundary is not None,
+        modeled_directional_validation_passed=all(
+            superblock.modeled_directional_validation_passed for superblock in partition.superblocks
+        )
+        and bool(partition.superblocks),
+        validated_target_count=validated_target_count,
+        total_unreachable_targets=partition.total_unreachable_access_targets,
+        review_types={review.review_type for review in request.review_attestations},
+    )
+    return partition
+
+
 # =============================================================================
 # Routing Endpoints
 # =============================================================================
@@ -655,7 +733,9 @@ async def compute_route(
     """
     try:
         partition = request.partition
-        cached = partition_store.get_exact(partition.bbox) if partition else None
+        cached = (
+            partition_store.get_exact(partition.bbox, partition.boundary) if partition else None
+        )
         if partition is None:
             cached = partition_store.find(request.origin, request.destination)
             partition = cached.partition if cached else None
@@ -680,8 +760,26 @@ async def compute_route(
                 success=False,
                 blocked_reason="Origin and destination must be inside the partition bounds.",
             )
+        if partition.boundary is not None:
+            boundary_geometry = shape(partition.boundary.model_dump())
+            if not (
+                boundary_geometry.covers(Point(request.origin.lon, request.origin.lat))
+                and boundary_geometry.covers(
+                    Point(request.destination.lon, request.destination.lat)
+                )
+            ):
+                return RouteResult(
+                    success=False,
+                    blocked_reason=(
+                        "Origin and destination must be inside the administrative boundary."
+                    ),
+                )
 
-        graph = cached.graph if cached else await get_street_network_graph(bbox)
+        graph = (
+            cached.graph
+            if cached
+            else await get_street_network_graph(bbox, boundary=partition.boundary)
+        )
         if cached is None:
             partition_store.put(partition, graph, bbox)
 
