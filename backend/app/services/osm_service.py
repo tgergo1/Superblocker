@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import logging
 import math
 import re
@@ -8,10 +10,10 @@ from typing import Any
 
 import networkx as nx
 import osmnx as ox
-from shapely.geometry import mapping
+from shapely.geometry import mapping, shape
 
 from app.core.config import get_settings
-from app.models.schemas import BoundingBox, StreetNetworkResponse
+from app.models.schemas import AdministrativeBoundary, BoundingBox, StreetNetworkResponse
 from app.services.cache_service import get_cache_service
 from app.utils.geo import validate_bbox_size
 
@@ -130,6 +132,7 @@ def graph_to_street_network(
     graph: nx.MultiDiGraph,
     bbox: BoundingBox,
     network_type: str = "drive",
+    boundary: AdministrativeBoundary | None = None,
 ) -> StreetNetworkResponse:
     """Convert an already-fetched graph into the public GeoJSON response."""
     gdf_edges = ox.graph_to_gdfs(graph, nodes=False, edges=True).reset_index()
@@ -203,13 +206,41 @@ def graph_to_street_network(
             "total_length_km": round(total_length / 1000, 2),
             "road_type_counts": road_types,
             "network_type": network_type,
+            "analysis_boundary": boundary.model_dump() if boundary else None,
+            "boundary_mode": "administrative_polygon" if boundary else "bounding_box_fallback",
         },
     )
+
+
+def _boundary_cache_token(boundary: AdministrativeBoundary | None) -> str | None:
+    if boundary is None:
+        return None
+    payload = json.dumps(boundary.model_dump(), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()[:20]
+
+
+def _download_graph(
+    bbox: BoundingBox,
+    network_type: str,
+    boundary: AdministrativeBoundary | None,
+) -> nx.MultiDiGraph:
+    """Download a road graph clipped by an exact polygon when available."""
+    common = {
+        "network_type": network_type,
+        "simplify": True,
+        "retain_all": False,
+        "truncate_by_edge": True,
+    }
+    if boundary is not None:
+        return ox.graph_from_polygon(shape(boundary.model_dump()), **common)
+    bbox_tuple = (bbox.west, bbox.south, bbox.east, bbox.north)
+    return ox.graph_from_bbox(bbox=bbox_tuple, **common)
 
 
 async def get_street_network(
     bbox: BoundingBox,
     network_type: str = "drive",
+    boundary: AdministrativeBoundary | None = None,
 ) -> StreetNetworkResponse:
     """
     Fetch street network from OSM for a bounding box.
@@ -235,6 +266,7 @@ async def get_street_network(
         "east": round(bbox.east, 5),
         "west": round(bbox.west, 5),
         "network_type": network_type_value,
+        "boundary": _boundary_cache_token(boundary),
     }
 
     # Check cache first
@@ -260,15 +292,7 @@ async def get_street_network(
 
     # Fetch the network using OSMnx
     # OSMnx 2.x expects bbox as tuple: (left, bottom, right, top) = (west, south, east, north)
-    bbox_tuple = (bbox.west, bbox.south, bbox.east, bbox.north)
-    G = await asyncio.to_thread(
-        ox.graph_from_bbox,
-        bbox=bbox_tuple,
-        network_type=network_type_value,
-        simplify=True,
-        retain_all=False,
-        truncate_by_edge=True,
-    )
+    G = await asyncio.to_thread(_download_graph, bbox, network_type_value, boundary)
     logger.info(
         "Street network fetched in %.1fs (nodes=%s edges=%s)",
         time.time() - start_time,
@@ -276,7 +300,7 @@ async def get_street_network(
         G.number_of_edges(),
     )
 
-    response = graph_to_street_network(G, bbox, network_type_value)
+    response = graph_to_street_network(G, bbox, network_type_value, boundary)
 
     # Cache the result
     cache_service.set(
@@ -296,6 +320,7 @@ async def get_street_network(
 async def get_street_network_graph(
     bbox: BoundingBox,
     network_type: str = "drive",
+    boundary: AdministrativeBoundary | None = None,
 ):
     """
     Fetch street network as a NetworkX MultiDiGraph.
@@ -319,15 +344,7 @@ async def get_street_network_graph(
     )
 
     # Fetch the network using OSMnx
-    bbox_tuple = (bbox.west, bbox.south, bbox.east, bbox.north)
-    G = await asyncio.to_thread(
-        ox.graph_from_bbox,
-        bbox=bbox_tuple,
-        network_type=network_type_value,
-        simplify=True,
-        retain_all=False,
-        truncate_by_edge=True,
-    )
+    G = await asyncio.to_thread(_download_graph, bbox, network_type_value, boundary)
 
     logger.info(
         "Street network graph fetched (nodes=%s edges=%s)",

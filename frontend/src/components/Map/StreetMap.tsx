@@ -5,7 +5,7 @@ import type { IControl, StyleSpecification } from 'maplibre-gl';
 import { GeoJsonLayer, PolygonLayer, ScatterplotLayer, PathLayer, TextLayer } from '@deck.gl/layers';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import type { LayersList } from '@deck.gl/core';
-import type { Feature, Geometry, LineString } from 'geojson';
+import type { Feature, Geometry, LineString, MultiPolygon, Polygon } from 'geojson';
 import type { ViewState, StreetNetworkResponse, RoadProperties, EnforcedSuperblock, CityPartition, RouteResult } from '../../types';
 import type { SuperblockCandidate } from '../../services/api';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -203,6 +203,7 @@ interface StreetMapProps {
   route?: RouteResult | null;
   showRoute?: boolean;
   selectedPlaceName?: string;
+  analysisBoundary?: Polygon | MultiPolygon | null;
   emptyStateMessage?: string;
   hideLegends?: boolean;
 }
@@ -224,6 +225,7 @@ export function StreetMap({
   route,
   showRoute = true,
   selectedPlaceName,
+  analysisBoundary,
   emptyStateMessage,
   hideLegends = false,
 }: StreetMapProps) {
@@ -353,6 +355,23 @@ export function StreetMap({
   const layers = useMemo(() => {
     const result: LayersList = [];
 
+    if (analysisBoundary) {
+      result.push(
+        new PolygonLayer<Polygon | MultiPolygon>({
+          id: 'administrative-analysis-boundary',
+          data: [analysisBoundary],
+          pickable: false,
+          stroked: true,
+          filled: true,
+          getPolygon: geometry => geometry.coordinates,
+          getFillColor: [37, 99, 235, 13],
+          getLineColor: [29, 78, 216, 220],
+          getLineWidth: 3,
+          lineWidthMinPixels: 2,
+        }),
+      );
+    }
+
     // Partition fills render below the road network so streets, labels, and
     // access changes remain readable at every zoom level.
     if (showPartition && partition && partition.superblocks.length > 0) {
@@ -368,10 +387,10 @@ export function StreetMap({
             if (selectedEnforcedSuperblock?.id === d.id) {
               return [59, 130, 246, 82];
             }
-            if (d.constraint_validated && d.all_addresses_reachable) {
+            if (d.modeled_directional_validation_passed && d.all_access_targets_reachable) {
               return [34, 197, 94, 48];
             }
-            if (d.constraint_validated) {
+            if (d.modeled_directional_validation_passed) {
               return [251, 191, 36, 54];
             }
             return [239, 68, 68, 62];
@@ -712,7 +731,7 @@ export function StreetMap({
     }
 
     return result;
-  }, [streetNetwork, superblocks, showSuperblocks, colorBy, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute, modifiedStreets, getStreetModification, showDetailedPlanSigns, boundaryRoadWidth]);
+  }, [analysisBoundary, streetNetwork, superblocks, showSuperblocks, colorBy, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute, modifiedStreets, getStreetModification, showDetailedPlanSigns, boundaryRoadWidth]);
 
   // Store overlay reference
   const overlayRef = useRef<MapboxOverlay | null>(null);
@@ -737,6 +756,7 @@ export function StreetMap({
 
   const hasMapData = Boolean(
     streetNetwork?.features.length ||
+    analysisBoundary ||
     superblocks?.length ||
     partition?.superblocks.length ||
     route?.success
@@ -842,7 +862,7 @@ export function StreetMap({
             <span>{hoveredFeature.properties?.capacity} veh/h</span>
           </div>
           <div className="tooltip-row">
-            <span>Est. volume:</span>
+            <span>{hoveredFeature.properties?.is_real_data ? 'Measured volume:' : 'Modeled volume:'}</span>
             <span>{hoveredFeature.properties?.estimated_volume} veh/h</span>
           </div>
         </div>
@@ -1118,15 +1138,15 @@ export function StreetMap({
               </div>
               <div className="legend-item">
                 <span className="plan-area-status valid" />
-                <span className="legend-label">No cross-traffic path</span>
+                <span className="legend-label">Model paths blocked + supplied access reachable</span>
               </div>
               <div className="legend-item">
                 <span className="plan-area-status review" />
-                <span className="legend-label">Local access review</span>
+                <span className="legend-label">Model passed; evidence/review incomplete</span>
               </div>
               <div className="legend-item">
                 <span className="plan-area-status invalid" />
-                <span className="legend-label">Cross-traffic remains</span>
+                <span className="legend-label">Modeled cross-sector path remains</span>
               </div>
               {showEntryPoints && (
                 <>
@@ -1227,8 +1247,12 @@ export function StreetMap({
                   <span>{partition.total_superblocks}</span>
                 </div>
                 <div className="info-row">
-                  <span>Cell coverage:</span>
+                  <span>Boundary coverage:</span>
                   <span>{partition.coverage_percent.toFixed(1)}%</span>
+                </div>
+                <div className={`info-row ${partition.readiness.implementation_ready ? '' : 'warning'}`}>
+                  <span>Release status:</span>
+                  <span>{partition.readiness.implementation_ready ? 'Ready' : 'Blocked'}</span>
                 </div>
                 <div className="info-row">
                   <span>Boundary roads:</span>
@@ -1247,10 +1271,10 @@ export function StreetMap({
                   <span>Street cuts:</span>
                   <span>{partition.total_street_cuts}</span>
                 </div>
-                {partition.total_unreachable_addresses > 0 && (
+                {partition.total_unreachable_access_targets > 0 && (
                   <div className="info-row warning">
-                    <span>Unreachable:</span>
-                    <span>{partition.total_unreachable_addresses}</span>
+                    <span>Access targets blocked:</span>
+                    <span>{partition.total_unreachable_access_targets}</span>
                   </div>
                 )}
               </div>

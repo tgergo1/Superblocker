@@ -12,6 +12,8 @@ const place: SearchResult = {
   lat: 47.5,
   lon: 19.04,
   boundingbox: { north: 47.6, south: 47.4, east: 19.2, west: 18.9 },
+  boundary: null,
+  boundary_source: 'bounding_box_fallback',
   type: 'city',
   importance: 0.8,
 };

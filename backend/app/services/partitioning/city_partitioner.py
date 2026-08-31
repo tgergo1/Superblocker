@@ -12,6 +12,8 @@ The algorithm:
 5. Validate coverage and accessibility
 """
 
+import hashlib
+import json
 import logging
 import math
 import uuid
@@ -21,18 +23,23 @@ from dataclasses import dataclass
 import networkx as nx
 import osmnx as ox
 import pyproj
-from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box, shape
 from shapely.ops import polygonize, transform, unary_union
+from shapely.strtree import STRtree
 
 from app.models.schemas import (
+    AccessTarget,
+    AdministrativeBoundary,
+    AnalysisEvidence,
     BoundingBox,
     CityPartition,
     Coordinates,
     EnforcedSuperblock,
     EntryPoint,
     PartitionProgress,
+    PlanReadiness,
     StreetModification,
-    UnreachableAddress,
+    UnreachableAccessTarget,
 )
 from app.services.constraint.constraint_enforcer import ConstraintEnforcer
 
@@ -79,6 +86,78 @@ class SuperblockCell:
     entry_nodes: list[int]
 
 
+MIN_MEASURED_EDGE_COVERAGE_PERCENT = 80.0
+
+
+def assess_plan_readiness(
+    *,
+    evidence: AnalysisEvidence,
+    has_boundary: bool,
+    modeled_directional_validation_passed: bool,
+    validated_target_count: int,
+    total_unreachable_targets: int,
+    review_types: set[str] | None = None,
+) -> PlanReadiness:
+    """Evaluate the implementation gate from immutable plan evidence."""
+    reviews = review_types or set()
+    blockers: list[str] = []
+    if not has_boundary:
+        blockers.append("Exact administrative boundary is missing")
+    if evidence.traffic_mode != "measured_volume":
+        blockers.append("Measured traffic observations are missing or do not match the network")
+    elif evidence.measured_edge_coverage_percent < MIN_MEASURED_EDGE_COVERAGE_PERCENT:
+        blockers.append(
+            "Measured traffic coverage is "
+            f"{evidence.measured_edge_coverage_percent:.1f}%; at least "
+            f"{MIN_MEASURED_EDGE_COVERAGE_PERCENT:.0f}% of physical road length is required"
+        )
+    if not evidence.access_dataset_complete:
+        blockers.append("Complete authoritative address/parcel access dataset is missing")
+    elif validated_target_count != evidence.access_target_count:
+        blockers.append("Some authoritative access targets fall outside generated cells")
+    if total_unreachable_targets:
+        blockers.append("One or more authoritative access targets are unreachable in the model")
+    if not modeled_directional_validation_passed:
+        blockers.append("Modeled directional validation has not passed for every generated cell")
+    if "transport_engineering" not in reviews:
+        blockers.append("Transport-engineering review is pending")
+    if "site_inspection" not in reviews:
+        blockers.append("On-site inspection is pending")
+
+    implementation_ready = not blockers
+    evidence_complete = (
+        has_boundary
+        and evidence.traffic_mode == "measured_volume"
+        and evidence.measured_edge_coverage_percent >= MIN_MEASURED_EDGE_COVERAGE_PERCENT
+        and evidence.access_dataset_complete
+        and validated_target_count == evidence.access_target_count
+        and not total_unreachable_targets
+        and modeled_directional_validation_passed
+    )
+    status = (
+        "implementation_ready"
+        if implementation_ready
+        else "review_pending"
+        if evidence_complete
+        else "model_only"
+    )
+    return PlanReadiness(
+        status=status,
+        implementation_ready=implementation_ready,
+        modeled_directional_validation_passed=modeled_directional_validation_passed,
+        transport_engineering_reviewed="transport_engineering" in reviews,
+        site_inspection_reviewed="site_inspection" in reviews,
+        blockers=blockers,
+    )
+
+
+def compute_plan_id(partition: CityPartition) -> str:
+    """Return a stable digest binding reviews to this exact generated plan."""
+    payload = partition.model_dump(exclude={"plan_id", "readiness"})
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 class CityPartitioner:
     """
     Partitions a city into superblocks with enforced enter-exit constraints.
@@ -100,12 +179,17 @@ class CityPartitioner:
         self,
         graph: nx.MultiDiGraph,
         bbox: BoundingBox,
+        boundary: AdministrativeBoundary | None = None,
         target_size_ha: float = DEFAULT_TARGET_HA,
         min_area_ha: float = DEFAULT_MIN_HA,
         max_area_ha: float = DEFAULT_MAX_HA,
         num_sectors: int = 4,
         arterial_road_types: set[str] | None = None,
         enforce_constraints: bool = True,
+        traffic_evidence: dict[str, object] | None = None,
+        access_targets: list[AccessTarget] | None = None,
+        access_dataset_source: str | None = None,
+        access_dataset_complete: bool = False,
         progress_callback: Callable[[PartitionProgress], None] | None = None,
     ):
         """
@@ -122,6 +206,12 @@ class CityPartitioner:
         """
         self.graph = graph
         self.bbox = bbox
+        self.boundary = boundary
+        self.analysis_polygon = (
+            shape(boundary.model_dump())
+            if boundary is not None
+            else box(bbox.west, bbox.south, bbox.east, bbox.north)
+        )
         self.target_size_ha = target_size_ha
         self.min_area_ha = min_area_ha
         self.max_area_ha = max_area_ha
@@ -131,11 +221,30 @@ class CityPartitioner:
             f"{road_type}_link" for road_type in configured_types
         }
         self.enforce_constraints = enforce_constraints
+        self.traffic_evidence = traffic_evidence or {
+            "traffic_mode": "modeled_topology",
+            "traffic_observation_count": 0,
+            "measured_edge_coverage_percent": 0.0,
+            "traffic_sources": [],
+        }
+        self.access_targets = access_targets or []
+        self._access_target_points = [
+            Point(target.coordinates.lon, target.coordinates.lat) for target in self.access_targets
+        ]
+        self._access_target_tree = (
+            STRtree(self._access_target_points) if self._access_target_points else None
+        )
+        self.access_dataset_source = access_dataset_source
+        self.access_dataset_complete = access_dataset_complete
         self.progress_callback = progress_callback
 
         # Convert graph to GeoDataFrames for spatial operations
         self.nodes_gdf = None
         self.edges_gdf = None
+        self._edge_records: list[tuple[int, int, int, LineString]] = []
+        self._edge_tree: STRtree | None = None
+        self._arterial_nodes: set[int] = set()
+        self._area_transformer = None
 
         # Results
         self.arterial_edges: set[tuple[int, int, int]] = set()
@@ -197,6 +306,27 @@ class CityPartitioner:
         """Convert graph to GeoDataFrames for spatial operations."""
         try:
             self.nodes_gdf, self.edges_gdf = ox.graph_to_gdfs(self.graph)
+            edge_geometries = []
+            for u, v, key, data in self.graph.edges(keys=True, data=True):
+                geometry = data.get("geometry")
+                if geometry is None:
+                    u_data = self.graph.nodes.get(u, {})
+                    v_data = self.graph.nodes.get(v, {})
+                    if "x" not in u_data or "x" not in v_data:
+                        continue
+                    geometry = LineString([(u_data["x"], u_data["y"]), (v_data["x"], v_data["y"])])
+                self._edge_records.append((u, v, key, geometry))
+                edge_geometries.append(geometry)
+            if edge_geometries:
+                self._edge_tree = STRtree(edge_geometries)
+
+            centroid = self.analysis_polygon.centroid
+            utm_zone = int((centroid.x + 180) / 6) + 1
+            hemisphere = "north" if centroid.y >= 0 else "south"
+            proj_string = f"+proj=utm +zone={utm_zone} +{hemisphere} +datum=WGS84"
+            self._area_transformer = pyproj.Transformer.from_crs(
+                "EPSG:4326", proj_string, always_xy=True
+            ).transform
         except Exception as e:
             logger.error(f"Failed to convert graph to GeoDataFrames: {e}")
             raise
@@ -209,6 +339,29 @@ class CityPartitioner:
         1. Road type (primary, secondary, tertiary)
         2. High betweenness centrality (top 25%)
         """
+        measured_edges = {
+            (u, v, key): float(data["measured_volume_vph"])
+            for u, v, key, data in self.graph.edges(keys=True, data=True)
+            if data.get("measured_volume_vph") is not None
+        }
+        if measured_edges:
+            volumes = sorted(measured_edges.values())
+            threshold = volumes[int((len(volumes) - 1) * 0.60)]
+            self.arterial_edges = {
+                edge for edge, volume in measured_edges.items() if volume >= threshold
+            }
+            self._arterial_nodes = {node for u, v, _key in self.arterial_edges for node in (u, v)}
+            logger.info(
+                "Arterial network: %s measured-volume edges at >= %.0f vehicles/hour",
+                len(self.arterial_edges),
+                threshold,
+            )
+            return
+
+        # No matching observations were supplied: retain a model-only topology
+        # fallback, and make that fallback machine-visible in result evidence.
+        self.traffic_evidence["traffic_mode"] = "modeled_topology"
+
         # Criterion 1: Road type
         type_arterials = set()
         for u, v, key, data in self.graph.edges(keys=True, data=True):
@@ -238,7 +391,7 @@ class CityPartitioner:
                     edge_mapping[simple_key].append((u, v, key))
 
                 # Compute centrality (approximate for large networks)
-                k = min(500, num_nodes) if num_nodes > 1000 else None
+                k = min(128, num_nodes) if num_nodes > 1000 else None
                 centrality = nx.edge_betweenness_centrality(G_simple, k=k, weight="weight", seed=42)
 
                 # Find threshold
@@ -257,6 +410,7 @@ class CityPartitioner:
 
         # Combine both criteria
         self.arterial_edges = type_arterials.union(centrality_arterials)
+        self._arterial_nodes = {node for u, v, _key in self.arterial_edges for node in (u, v)}
         logger.info(
             f"Arterial network: {len(type_arterials)} by type, "
             f"{len(centrality_arterials)} by centrality, "
@@ -293,9 +447,9 @@ class CityPartitioner:
             logger.warning("No arterial geometries found")
             return
 
-        # Add bbox boundary to ensure edge cells are created
-        bbox_polygon = box(self.bbox.west, self.bbox.south, self.bbox.east, self.bbox.north)
-        arterial_lines.append(bbox_polygon.exterior)
+        # Add the exact administrative boundary to close edge cells. A bbox is
+        # used only when the request explicitly lacks an administrative polygon.
+        arterial_lines.append(self.analysis_polygon.boundary)
 
         # Union and polygonize
         try:
@@ -312,7 +466,7 @@ class CityPartitioner:
         # requested area. Clip every candidate before accepting it.
         clipped_polygons: list[Polygon] = []
         for polygon in polygons:
-            clipped = polygon.intersection(bbox_polygon)
+            clipped = polygon.intersection(self.analysis_polygon)
             if isinstance(clipped, Polygon):
                 clipped_polygons.append(clipped)
             elif isinstance(clipped, MultiPolygon):
@@ -353,16 +507,16 @@ class CityPartitioner:
         if polygon.is_empty:
             return 0.0
         try:
-            # Use UTM projection for accurate area calculation
-            centroid = polygon.centroid
-            utm_zone = int((centroid.x + 180) / 6) + 1
-            hemisphere = "north" if centroid.y >= 0 else "south"
-
-            proj_string = f"+proj=utm +zone={utm_zone} +{hemisphere} +datum=WGS84"
-            project = pyproj.Transformer.from_crs(
-                "EPSG:4326", proj_string, always_xy=True
-            ).transform
-
+            project = self._area_transformer
+            if project is None:
+                centroid = self.analysis_polygon.centroid
+                utm_zone = int((centroid.x + 180) / 6) + 1
+                hemisphere = "north" if centroid.y >= 0 else "south"
+                proj_string = f"+proj=utm +zone={utm_zone} +{hemisphere} +datum=WGS84"
+                project = pyproj.Transformer.from_crs(
+                    "EPSG:4326", proj_string, always_xy=True
+                ).transform
+                self._area_transformer = project
             projected = transform(project, polygon)
             return projected.area / 10000  # m² to hectares
 
@@ -386,20 +540,24 @@ class CityPartitioner:
         boundary_edges = []
         interior_edges = []
 
-        # Build spatial index for edges
-        for u, v, key, data in self.graph.edges(keys=True, data=True):
-            geom = data.get("geometry")
+        # Query only edges whose envelopes intersect this cell. The previous
+        # full graph scan for every polygon dominated city-scale runtime.
+        if self._edge_tree is not None:
+            candidate_indices = self._edge_tree.query(polygon, predicate="intersects")
+            candidates = (self._edge_records[int(index)] for index in candidate_indices)
+        else:
+            candidates = (
+                (u, v, key, data.get("geometry"))
+                for u, v, key, data in self.graph.edges(keys=True, data=True)
+            )
+
+        for u, v, key, geom in candidates:
             if geom is None:
                 u_data = self.graph.nodes.get(u, {})
                 v_data = self.graph.nodes.get(v, {})
                 if "x" not in u_data or "x" not in v_data:
                     continue
-                geom = LineString(
-                    [
-                        (u_data["x"], u_data["y"]),
-                        (v_data["x"], v_data["y"]),
-                    ]
-                )
+                geom = LineString([(u_data["x"], u_data["y"]), (v_data["x"], v_data["y"])])
 
             # Check if edge is inside or on boundary of polygon
             if polygon.contains(geom) or polygon.boundary.intersects(geom):
@@ -440,11 +598,7 @@ class CityPartitioner:
         # junction. Any interior node attached to the global arterial network is
         # also a genuine entry, even if that arterial edge was classified just
         # outside this cell's geometry.
-        arterial_nodes: set[int] = set()
-        for u, v, _key in self.arterial_edges:
-            arterial_nodes.add(u)
-            arterial_nodes.add(v)
-        entry_nodes.update(interior_nodes.intersection(arterial_nodes))
+        entry_nodes.update(interior_nodes.intersection(self._arterial_nodes))
 
         # Also include nodes that are on the polygon boundary
         boundary_buffer = polygon.boundary.buffer(0.0001)  # Small buffer for tolerance
@@ -550,14 +704,17 @@ class CityPartitioner:
         """Build adjacency list for cells based on shared boundaries."""
         adjacency: dict[int, list[int]] = {i: [] for i in range(len(self.cells))}
 
-        for i, cell_i in enumerate(self.cells):
-            for j, cell_j in enumerate(self.cells):
+        polygons = [cell.polygon for cell in self.cells]
+        if not polygons:
+            return adjacency
+        tree = STRtree(polygons)
+        for i, polygon in enumerate(polygons):
+            for candidate in tree.query(polygon, predicate="intersects"):
+                j = int(candidate)
                 if i >= j:
                     continue
-
-                # Check if cells share a boundary
-                if cell_i.polygon.touches(cell_j.polygon) or cell_i.polygon.boundary.intersects(
-                    cell_j.polygon.boundary
+                if polygon.touches(polygons[j]) or polygon.boundary.intersects(
+                    polygons[j].boundary
                 ):
                     adjacency[i].append(j)
                     adjacency[j].append(i)
@@ -797,9 +954,13 @@ class CityPartitioner:
                         )
                     )
 
-        # Check accessibility (find unreachable addresses)
-        unreachable = self._find_unreachable_addresses(
-            interior_graph, modifications, cell.entry_nodes, enforcer.sectors
+        access_targets = self._access_targets_for_cell(cell.polygon)
+        unreachable_targets = self._find_unreachable_access_targets(
+            interior_graph,
+            modifications,
+            cell.entry_nodes,
+            enforcer.sectors,
+            access_targets,
         )
 
         # Create EnforcedSuperblock
@@ -812,8 +973,14 @@ class CityPartitioner:
             entry_points=entry_points,
             modifications=modifications,
             constraint_validated=len(violations) == 0,
-            all_addresses_reachable=len(unreachable) == 0,
-            unreachable_addresses=unreachable,
+            all_addresses_reachable=None,
+            unreachable_addresses=[],
+            modeled_directional_validation_passed=len(violations) == 0,
+            access_target_count=len(access_targets),
+            all_access_targets_reachable=(
+                len(unreachable_targets) == 0 if access_targets else None
+            ),
+            unreachable_access_targets=unreachable_targets,
             interior_roads_count=len(cell.interior_edges),
             modal_filter_count=sum(
                 1 for m in modifications if m.modification_type.value == "modal_filter"
@@ -865,11 +1032,13 @@ class CityPartitioner:
                 )
             )
 
-        unreachable = self._find_unreachable_addresses(
+        access_targets = self._access_targets_for_cell(cell.polygon)
+        unreachable_targets = self._find_unreachable_access_targets(
             interior_graph,
             [],
             cell.entry_nodes,
             sectors,
+            access_targets,
         )
 
         return EnforcedSuperblock(
@@ -881,8 +1050,14 @@ class CityPartitioner:
             entry_points=entry_points,
             modifications=[],
             constraint_validated=constraint_validated,
-            all_addresses_reachable=len(unreachable) == 0,
-            unreachable_addresses=unreachable,
+            all_addresses_reachable=None,
+            unreachable_addresses=[],
+            modeled_directional_validation_passed=constraint_validated,
+            access_target_count=len(access_targets),
+            all_access_targets_reachable=(
+                len(unreachable_targets) == 0 if access_targets else None
+            ),
+            unreachable_access_targets=unreachable_targets,
             interior_roads_count=len(cell.interior_edges),
             modal_filter_count=0,
             one_way_conversion_count=0,
@@ -941,29 +1116,24 @@ class CityPartitioner:
 
         return subgraph
 
-    def _find_unreachable_addresses(
+    def _access_targets_for_cell(self, polygon: Polygon) -> list[AccessTarget]:
+        """Return explicit address/parcel targets covered by a generated cell."""
+        if self._access_target_tree is None:
+            return []
+        indices = self._access_target_tree.query(polygon, predicate="covers")
+        return [self.access_targets[int(index)] for index in indices]
+
+    def _find_unreachable_access_targets(
         self,
         graph: nx.MultiDiGraph,
         modifications: list[StreetModification],
         entry_nodes: list[int],
         sectors,
-    ) -> list[UnreachableAddress]:
-        """
-        Find interior nodes that become unreachable after modifications.
-        """
-        if not entry_nodes:
-            return [
-                UnreachableAddress(
-                    node_id=node,
-                    coordinates=Coordinates(
-                        lat=data.get("y", 0),
-                        lon=data.get("x", 0),
-                    ),
-                    nearest_entry_sector=0,
-                    reason="No entry point connects this superblock to the arterial network",
-                )
-                for node, data in graph.nodes(data=True)
-            ]
+        access_targets: list[AccessTarget],
+    ) -> list[UnreachableAccessTarget]:
+        """Validate explicit access targets instead of treating graph nodes as addresses."""
+        if not access_targets:
+            return []
 
         # Apply modifications
         modified_graph = graph.copy()
@@ -1001,41 +1171,68 @@ class CityPartitioner:
                 if edge_data is not None and not modified_graph.has_edge(mod.v, mod.u):
                     modified_graph.add_edge(mod.v, mod.u, **dict(edge_data))
 
-        # Find all nodes reachable from any entry point
-        reachable = set()
+        # A local destination must be reachable from an entry and be able to
+        # return to an entry. This tests modeled vehicle access in both directions.
+        reachable_from_entries = set()
+        can_reach_entries = set()
         for entry in entry_nodes:
             if entry in modified_graph.nodes:
                 try:
-                    reachable.update(nx.descendants(modified_graph, entry))
-                    reachable.add(entry)
+                    reachable_from_entries.update(nx.descendants(modified_graph, entry))
+                    reachable_from_entries.add(entry)
+                    can_reach_entries.update(nx.ancestors(modified_graph, entry))
+                    can_reach_entries.add(entry)
                 except nx.NetworkXError:
                     pass
 
-        # Find unreachable nodes
-        unreachable = []
-        for node in modified_graph.nodes:
-            if node not in reachable and node not in entry_nodes:
-                node_data = modified_graph.nodes[node]
-
-                # Determine nearest entry sector
-                nearest_sector = 0
-                if sectors:
-                    for sector, entries in sectors.entry_points_by_sector.items():
-                        if any(e in reachable for e in entries):
-                            nearest_sector = sector
-                            break
-
-                unreachable.append(
-                    UnreachableAddress(
-                        node_id=node,
-                        coordinates=Coordinates(
-                            lat=node_data.get("y", 0),
-                            lon=node_data.get("x", 0),
-                        ),
-                        nearest_entry_sector=nearest_sector,
-                        reason="No path from any entry point after modifications",
-                    )
+        unreachable: list[UnreachableAccessTarget] = []
+        graph_nodes = list(modified_graph.nodes(data=True))
+        node_points = [
+            Point(float(data.get("x", 0)), float(data.get("y", 0))) for _node, data in graph_nodes
+        ]
+        node_tree = STRtree(node_points) if node_points else None
+        for target in access_targets:
+            snapped_node = None
+            if node_tree is not None:
+                nearest_index = int(
+                    node_tree.nearest(Point(target.coordinates.lon, target.coordinates.lat))
                 )
+                snapped_node = graph_nodes[nearest_index][0]
+
+            is_reachable = (
+                snapped_node is not None
+                and snapped_node in reachable_from_entries
+                and snapped_node in can_reach_entries
+            )
+            if is_reachable:
+                continue
+
+            nearest_sector = None
+            if sectors and entry_nodes:
+                nearest_entry = min(
+                    entry_nodes,
+                    key=lambda node: (
+                        (float(self.graph.nodes[node].get("x", 0)) - target.coordinates.lon) ** 2
+                        + (float(self.graph.nodes[node].get("y", 0)) - target.coordinates.lat) ** 2
+                    ),
+                )
+                nearest_sector = sectors.node_to_sector.get(nearest_entry)
+
+            unreachable.append(
+                UnreachableAccessTarget(
+                    target_id=target.id,
+                    target_kind=target.kind,
+                    label=target.label,
+                    coordinates=target.coordinates,
+                    snapped_node_id=snapped_node,
+                    nearest_entry_sector=nearest_sector,
+                    reason=(
+                        "No entry point connects this cell to the boundary network"
+                        if not entry_nodes
+                        else "No modeled inbound-and-return vehicle path after modifications"
+                    ),
+                )
+            )
 
         return unreachable
 
@@ -1084,22 +1281,23 @@ class CityPartitioner:
         """Build the final CityPartition result."""
         # Calculate covered area from the geometric union rather than summing
         # cells. This keeps overlapping boundaries from inflating coverage.
-        bbox_polygon = box(self.bbox.west, self.bbox.south, self.bbox.east, self.bbox.north)
         covered_geometry = (
-            unary_union([cell.polygon for cell in self.cells]).intersection(bbox_polygon)
+            unary_union([cell.polygon for cell in self.cells]).intersection(self.analysis_polygon)
             if self.cells
             else Polygon()
         )
         total_area = self._calculate_area_hectares(covered_geometry)
-        bbox_area = self._calculate_area_hectares(bbox_polygon)
+        analysis_area = self._calculate_area_hectares(self.analysis_polygon)
 
-        coverage = min(100.0, (total_area / bbox_area * 100)) if bbox_area > 0 else 0
+        coverage = min(100.0, (total_area / analysis_area * 100)) if analysis_area > 0 else 0
 
         total_filters = sum(sb.modal_filter_count for sb in self.superblocks)
         total_oneway = sum(sb.one_way_conversion_count for sb in self.superblocks)
         total_twoway = sum(sb.two_way_conversion_count for sb in self.superblocks)
         total_cuts = sum(sb.street_cut_count for sb in self.superblocks)
-        total_unreachable = sum(len(sb.unreachable_addresses) for sb in self.superblocks)
+        total_unreachable_targets = sum(
+            len(sb.unreachable_access_targets) for sb in self.superblocks
+        )
 
         # Arterial road OSM IDs
         arterial_osm_ids = []
@@ -1108,16 +1306,57 @@ class CityPartitioner:
                 osmid = self.graph[u][v][key].get("osmid", 0)
                 arterial_osm_ids.extend(self._normalize_osm_ids(osmid))
 
-        return CityPartition(
+        modeled_directional_validation_passed = bool(self.superblocks) and all(
+            sb.modeled_directional_validation_passed for sb in self.superblocks
+        )
+        validated_target_count = sum(sb.access_target_count for sb in self.superblocks)
+        access_mode = (
+            "authoritative_targets"
+            if self.access_dataset_complete
+            else "explicit_targets"
+            if self.access_targets
+            else "not_supplied"
+        )
+        evidence = AnalysisEvidence(
+            boundary_mode=("administrative_polygon" if self.boundary else "bounding_box_fallback"),
+            traffic_mode=str(self.traffic_evidence.get("traffic_mode", "modeled_topology")),
+            traffic_observation_count=int(
+                self.traffic_evidence.get("traffic_observation_count", 0)
+            ),
+            measured_edge_coverage_percent=float(
+                self.traffic_evidence.get("measured_edge_coverage_percent", 0.0)
+            ),
+            traffic_sources=list(self.traffic_evidence.get("traffic_sources", [])),
+            access_mode=access_mode,
+            access_target_count=len(self.access_targets),
+            access_dataset_source=self.access_dataset_source,
+            access_dataset_complete=self.access_dataset_complete,
+        )
+
+        readiness = assess_plan_readiness(
+            evidence=evidence,
+            has_boundary=self.boundary is not None,
+            modeled_directional_validation_passed=modeled_directional_validation_passed,
+            validated_target_count=validated_target_count,
+            total_unreachable_targets=total_unreachable_targets,
+        )
+
+        partition = CityPartition(
             superblocks=self.superblocks,
             arterial_network=list(set(arterial_osm_ids)),
             bbox=self.bbox,
+            boundary=self.boundary,
+            evidence=evidence,
+            readiness=readiness,
             total_area_hectares=total_area,
             coverage_percent=coverage,
             total_superblocks=len(self.superblocks),
             total_modal_filters=total_filters,
             total_one_way_conversions=total_oneway,
             total_street_cuts=total_cuts,
-            total_unreachable_addresses=total_unreachable,
+            total_unreachable_addresses=0,
+            total_unreachable_access_targets=total_unreachable_targets,
             total_two_way_conversions=total_twoway,
         )
+        partition.plan_id = compute_plan_id(partition)
+        return partition

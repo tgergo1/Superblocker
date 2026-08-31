@@ -1,3 +1,5 @@
+import asyncio
+
 import networkx as nx
 import pytest
 from pydantic import ValidationError
@@ -5,12 +7,15 @@ from shapely.geometry import LineString, Polygon
 
 from app.api.routes.analysis import _sse_data
 from app.models.schemas import (
+    AdministrativeBoundary,
     AnalysisRequest,
     BoundingBox,
     PartitionRequest,
     StreetNetworkRequest,
+    TrafficObservation,
 )
 from app.services.osm_service import (
+    get_street_network_graph,
     graph_to_street_network,
     normalize_highway_type,
     normalize_lanes,
@@ -64,6 +69,26 @@ def test_schema_rejects_inverted_bounds_and_ranges():
         )
     with pytest.raises(ValidationError):
         PartitionRequest(bbox=bbox, enforce_constraints=False)
+    with pytest.raises(ValidationError):
+        AdministrativeBoundary(type="Polygon", coordinates=[])
+    with pytest.raises(ValidationError):
+        PartitionRequest(bbox=bbox, access_dataset_complete=True)
+    with pytest.raises(ValidationError, match="unique OSM way IDs"):
+        PartitionRequest(
+            bbox=bbox,
+            traffic_observations=[
+                TrafficObservation(osm_id=1, volume_vph=100, source="a"),
+                TrafficObservation(osm_id=1, volume_vph=200, source="b"),
+            ],
+        )
+    with pytest.raises(ValidationError, match="contained"):
+        PartitionRequest(
+            bbox=bbox,
+            boundary=AdministrativeBoundary(
+                type="Polygon",
+                coordinates=[[[0, 0], [2, 0], [2, 1], [0, 0]]],
+            ),
+        )
 
 
 def test_schema_rejects_unknown_algorithm_and_network_type():
@@ -109,6 +134,29 @@ def test_graph_conversion_preserves_edge_keys_and_deduplicates_physical_metrics(
     estimated = estimate_traffic(network)
     assert estimated.metadata["total_capacity"] == 1600
     assert estimated.metadata["total_estimated_volume"] == 960
+
+
+def test_exact_boundary_uses_polygon_graph_download(monkeypatch):
+    graph = make_graph()
+    captured = {}
+
+    def fake_graph_from_polygon(polygon, **kwargs):
+        captured["polygon"] = polygon
+        captured.update(kwargs)
+        return graph
+
+    monkeypatch.setattr("app.services.osm_service.ox.graph_from_polygon", fake_graph_from_polygon)
+    boundary = AdministrativeBoundary(
+        type="Polygon",
+        coordinates=[[[18.99, 46.99], [19.01, 46.99], [19.0, 47.01], [18.99, 46.99]]],
+    )
+    bbox = BoundingBox(north=47.01, south=46.99, east=19.01, west=18.99)
+
+    result = asyncio.run(get_street_network_graph(bbox, boundary=boundary))
+
+    assert result is graph
+    assert captured["polygon"].equals(Polygon(boundary.coordinates[0]))
+    assert captured["network_type"] == "drive"
 
 
 def test_graph_conversion_and_sse_sanitize_non_finite_osm_values():

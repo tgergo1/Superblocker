@@ -1,4 +1,4 @@
-import type { Feature, LineString, Polygon } from 'geojson';
+import type { Feature, LineString, MultiPolygon, Polygon } from 'geojson';
 
 export interface BoundingBox {
   north: number;
@@ -20,6 +20,8 @@ export interface SearchResult {
   lat: number;
   lon: number;
   boundingbox: BoundingBox;
+  boundary: Polygon | MultiPolygon | null;
+  boundary_source: 'nominatim' | 'bounding_box_fallback';
   type: string;
   importance: number;
 }
@@ -133,6 +135,52 @@ export interface UnreachableAddress {
   reason: string;
 }
 
+export interface AccessTarget {
+  id: string;
+  coordinates: Coordinates;
+  kind: 'address' | 'parcel' | 'building' | 'emergency' | 'delivery';
+  label: string | null;
+  source: string;
+}
+
+export interface UnreachableAccessTarget {
+  target_id: string;
+  target_kind: string;
+  label: string | null;
+  coordinates: Coordinates;
+  snapped_node_id: number | null;
+  nearest_entry_sector: number | null;
+  reason: string;
+}
+
+export interface TrafficObservation {
+  osm_id: number;
+  volume_vph: number;
+  source: string;
+  observed_at: string | null;
+}
+
+export interface AnalysisEvidence {
+  boundary_mode: 'administrative_polygon' | 'bounding_box_fallback';
+  traffic_mode: 'measured_volume' | 'modeled_topology';
+  traffic_observation_count: number;
+  measured_edge_coverage_percent: number;
+  traffic_sources: string[];
+  access_mode: 'authoritative_targets' | 'explicit_targets' | 'not_supplied';
+  access_target_count: number;
+  access_dataset_source: string | null;
+  access_dataset_complete: boolean;
+}
+
+export interface PlanReadiness {
+  status: 'model_only' | 'review_pending' | 'implementation_ready';
+  implementation_ready: boolean;
+  modeled_directional_validation_passed: boolean;
+  transport_engineering_reviewed: boolean;
+  site_inspection_reviewed: boolean;
+  blockers: string[];
+}
+
 export interface EnforcedSuperblock {
   id: string;
   geometry: Polygon;
@@ -142,8 +190,12 @@ export interface EnforcedSuperblock {
   entry_points: EntryPoint[];
   modifications: StreetModification[];
   constraint_validated: boolean;
-  all_addresses_reachable: boolean;
+  all_addresses_reachable: boolean | null;
   unreachable_addresses: UnreachableAddress[];
+  modeled_directional_validation_passed: boolean;
+  access_target_count: number;
+  all_access_targets_reachable: boolean | null;
+  unreachable_access_targets: UnreachableAccessTarget[];
   interior_roads_count: number;
   modal_filter_count: number;
   one_way_conversion_count: number;
@@ -153,8 +205,12 @@ export interface EnforcedSuperblock {
 
 export interface CityPartition {
   superblocks: EnforcedSuperblock[];
+  plan_id: string;
   arterial_network: number[];
   bbox: BoundingBox;
+  boundary: Polygon | MultiPolygon | null;
+  evidence: AnalysisEvidence;
+  readiness: PlanReadiness;
   total_area_hectares: number;
   coverage_percent: number;
   total_superblocks: number;
@@ -162,6 +218,7 @@ export interface CityPartition {
   total_one_way_conversions: number;
   total_street_cuts: number;
   total_unreachable_addresses: number;
+  total_unreachable_access_targets: number;
   total_two_way_conversions: number;
 }
 
