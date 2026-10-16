@@ -6,6 +6,7 @@ Rules: free tools and open data only; every feature ships with tests; screening 
 
 ## Done
 
+- [x] Default policy: keeping busy residential streets inside superblocks is now the default (API, partitioner and UI). The older behaviour stays available as `minor_road_boundaries: "allow"`. On the offline Budapest graph the default plan goes from 1,206 superblocks (median 42 ha, 1,350 minor roads loaded, worst boundary increase 623%) to 2,205 (median 15.7 ha, 1 minor road, 142%).
 - [x] Minor-boundary repair: with "Keep busy residential streets inside superblocks", any cell over the maximum size splits along a quiet residential street (never a busy rat run), and that street gets a modal filter so diverted traffic stays on main roads. Oversized-cell splits in the default mode get the same filter. On the offline Budapest graph the option now gives 2,205 superblocks instead of 1,004, median 15.7 ha instead of 59 ha, 336 cells over the maximum instead of 701, 1 minor road loaded instead of 25, and 230 boundary roads over the increase threshold instead of 1,207; runs take 106 s instead of 76 s.
 - [x] Entry-pair cap: the traffic cut is measured over every entry pair (cap raised from 200 to 20,000; any sample left is spread over all sides). On the offline Budapest graph, removed through traffic rises 22% in circulation-sector mode (24,600 to 30,100 veh/h) and 4% in superblock mode, for under 3% more run time.
 - [x] Transit in the pilot ranking: superblocks where under half the streets are within walking distance of a stop rank 15% lower, the "Where to start" list says so, and the map outlines them in purple.
@@ -30,7 +31,10 @@ Rules: free tools and open data only; every feature ships with tests; screening 
 
 ## Next
 
-1. **Default policy.** With the repair, keeping busy residential streets inside beats the default on every measure above (the default loads 1,350 minor roads, worst increase 623%). Make it the default.
-2. **Health, next step.** Calibrate the NO2 share against OKIR stations. Resident weighting is done. The gap between people-weighted and per-superblock results came from outer districts left as single cells of 1,000-12,000 ha (no main road to split on) holding about 30% of residents; those now split along residential streets. Remaining: about 5,300 ha of motorway-only or hillside cells, and the 20-100 ha suburban cells that keep their residential streets inside.
-3. **Data importers.** OpenFreeMap vector basemap.
-4. **Performance.** Constraint enforcement and cell optimisation still take most of the 45 s; parallelise per cell.
+Superblock creation comes first; impact, health and data work support it.
+
+1. **Cells still over the maximum.** 336 of 2,205 default cells stay over the maximum size. Find why each one cannot split (no candidate street, splits under the minimum, hillside or water) and fix the common causes.
+2. **Split streets with several segments.** Only the segment a cell was split on becomes a boundary road; the street's other segments along the split line belong to neither cell.
+3. **Health, next step.** Calibrate the NO2 share against OKIR stations. Resident weighting is done. The gap between people-weighted and per-superblock results came from outer districts left as single cells of 1,000-12,000 ha (no main road to split on) holding about 30% of residents; those now split along residential streets. Remaining: about 5,300 ha of motorway-only or hillside cells, and the 20-100 ha suburban cells that keep their residential streets inside.
+4. **Data importers.** OpenFreeMap vector basemap.
+5. **Performance.** Constraint enforcement and cell optimisation still take most of the 45 s; parallelise per cell.

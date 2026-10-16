@@ -305,7 +305,7 @@ function partitionBody(request: PartitionRequest): Record<string, unknown> {
     active_mode_requirements: request.active_mode_requirements ?? [],
     demand_model: request.demand_model ?? null,
     assignment_settings: request.assignment_settings ?? {},
-    minor_road_boundaries: request.minor_road_boundaries ?? 'allow',
+    minor_road_boundaries: request.minor_road_boundaries ?? 'avoid',
     planning_mode: request.planning_mode ?? 'superblocks',
   };
 }

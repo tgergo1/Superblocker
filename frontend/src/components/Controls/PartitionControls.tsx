@@ -835,13 +835,13 @@ export function PartitionControls({
             <input
               type="checkbox"
               id="partition-keep-residential"
-              checked={parameters.keepResidentialInside ?? false}
+              checked={parameters.keepResidentialInside ?? true}
               onChange={(e) => onParametersChange({ ...parameters, keepResidentialInside: e.target.checked })}
             />
             <span>Keep busy residential streets inside superblocks</span>
           </label>
           <span className="param-hint">
-            Larger cells, but no diverted traffic on residential streets.
+            Busy residential streets are filtered instead of becoming boundary roads; quiet ones may split large cells.
           </span>
 
           <span className="settings-note">

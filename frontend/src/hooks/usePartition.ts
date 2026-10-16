@@ -57,7 +57,7 @@ export function usePartition(
     targetSizeHectares: 12,
     minAreaHectares: 6,
     maxAreaHectares: 20,
-    keepResidentialInside: false,
+    keepResidentialInside: true,
   });
 
   const startTimeRef = useRef<number | null>(null);
