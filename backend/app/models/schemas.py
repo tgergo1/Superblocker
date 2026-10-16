@@ -943,6 +943,7 @@ class SuperblockHealth(BaseModel):
     interior_noise_change_db_high: float
     interior_no2_change_percent_low: float
     interior_no2_change_percent_high: float
+    residents: float | None = Field(default=None, ge=0)
 
 
 class SuperblockPopulation(BaseModel):
@@ -1002,6 +1003,12 @@ class HealthEstimate(BaseModel):
     mean_interior_noise_change_db_high: float = 0.0
     mean_interior_no2_change_percent_low: float = 0.0
     mean_interior_no2_change_percent_high: float = 0.0
+    residents_counted: float | None = Field(default=None, ge=0)
+    residents_noticeably_quieter: float | None = Field(default=None, ge=0)
+    resident_weighted_noise_change_db_low: float | None = None
+    resident_weighted_noise_change_db_high: float | None = None
+    resident_weighted_no2_change_percent_low: float | None = None
+    resident_weighted_no2_change_percent_high: float | None = None
     boundary_roads_noticeably_louder: int = Field(default=0, ge=0)
     maximum_boundary_noise_increase_db: float = Field(default=0.0, ge=0)
     superblocks: list[SuperblockHealth] = Field(default_factory=list)

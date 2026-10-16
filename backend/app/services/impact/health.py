@@ -39,6 +39,9 @@ CALMED_LIMIT_KPH = 30
 # new flow on it from reading as an unbounded increase.
 MIN_BASELINE_PEAK_VPH = 10.0
 
+# About the smallest change in road noise most people notice.
+NOTICEABLE_CHANGE_DB = 3.0
+
 
 def volume_noise_change_db(remaining_share: float) -> float:
     """Level change in dB when traffic is scaled to ``remaining_share``."""
@@ -90,8 +93,17 @@ class HealthEstimator:
         self,
         traffic_impact: TrafficImpactEstimate,
         superblocks_in: Iterable[SuperblockImpactInput] = (),
+        residents: dict[str, float] | None = None,
     ) -> HealthEstimate:
+        """Interior and boundary changes; with ``residents``, also per person.
+
+        Means across superblocks treat a hillside cell with 200 residents like
+        a Józsefváros block with 8,000, so resident-weighted means and the
+        number of residents whose streets get noticeably quieter are added
+        when a population count is available.
+        """
         settings = self.settings
+        residents = residents or {}
         inputs = {block.superblock_id: block for block in superblocks_in}
         superblocks: list[SuperblockHealth] = []
         for item in traffic_impact.superblocks:
@@ -113,6 +125,7 @@ class HealthEstimator:
                     interior_no2_change_percent_high=round(
                         -100.0 * reduction * settings.local_traffic_no2_share_high, 1
                     ),
+                    residents=residents.get(item.superblock_id),
                 )
             )
 
@@ -133,6 +146,15 @@ class HealthEstimator:
             if road.arterial
         ]
         count = max(len(superblocks), 1)
+        weighted = [item for item in superblocks if item.residents]
+        people = sum(item.residents or 0.0 for item in weighted)
+
+        def per_person(attribute: str) -> float | None:
+            if people <= 0:
+                return None
+            total = sum(getattr(item, attribute) * (item.residents or 0.0) for item in weighted)
+            return round(total / people, 1)
+
         return HealthEstimate(
             settings=settings,
             mean_interior_noise_change_db_low=round(
@@ -147,7 +169,25 @@ class HealthEstimator:
             mean_interior_no2_change_percent_high=round(
                 sum(item.interior_no2_change_percent_high for item in superblocks) / count, 1
             ),
-            boundary_roads_noticeably_louder=sum(1 for db in boundary_increases if db >= 3.0),
+            residents_counted=round(people) if people > 0 else None,
+            residents_noticeably_quieter=round(
+                sum(
+                    item.residents or 0.0
+                    for item in weighted
+                    if item.interior_noise_change_db_low <= -NOTICEABLE_CHANGE_DB
+                )
+            )
+            if people > 0
+            else None,
+            resident_weighted_noise_change_db_low=per_person("interior_noise_change_db_low"),
+            resident_weighted_noise_change_db_high=per_person("interior_noise_change_db_high"),
+            resident_weighted_no2_change_percent_low=per_person("interior_no2_change_percent_low"),
+            resident_weighted_no2_change_percent_high=per_person(
+                "interior_no2_change_percent_high"
+            ),
+            boundary_roads_noticeably_louder=sum(
+                1 for db in boundary_increases if db >= NOTICEABLE_CHANGE_DB
+            ),
             maximum_boundary_noise_increase_db=round(max(boundary_increases, default=0.0), 1),
             superblocks=superblocks,
             limitations=[
@@ -161,6 +201,7 @@ class HealthEstimator:
                 f"{settings.local_traffic_no2_share_high:.0%} of street-level NO2; check it "
                 "against the OKIR monitoring stations before quoting a figure.",
                 "Main roads are 'noticeably louder' at 3 dB or more, roughly a doubling of "
-                "traffic, relative to their modelled peak load.",
+                "traffic, relative to their modelled peak load. Residents count as "
+                "'noticeably quieter' when even the cautious estimate is 3 dB or more.",
             ],
         )

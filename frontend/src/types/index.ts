@@ -273,6 +273,12 @@ export interface HealthEstimate {
   mean_interior_noise_change_db_high: number;
   mean_interior_no2_change_percent_low: number;
   mean_interior_no2_change_percent_high: number;
+  residents_counted?: number | null;
+  residents_noticeably_quieter?: number | null;
+  resident_weighted_noise_change_db_low?: number | null;
+  resident_weighted_noise_change_db_high?: number | null;
+  resident_weighted_no2_change_percent_low?: number | null;
+  resident_weighted_no2_change_percent_high?: number | null;
   boundary_roads_noticeably_louder: number;
   maximum_boundary_noise_increase_db: number;
   superblocks: SuperblockHealth[];
