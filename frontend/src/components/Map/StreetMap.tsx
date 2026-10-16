@@ -1588,6 +1588,12 @@ export function StreetMap({
                     <span>{partition.cell_kind_counts.naturally_calm}</span>
                   </div>
                 )}
+                {!!partition.destination_gates && (
+                  <div className="info-row">
+                    <span>Destination-only gates:</span>
+                    <span>{partition.destination_gates}</span>
+                  </div>
+                )}
                 {!!partition.stranded_junctions && (
                   <div className="info-row warning">
                     <span>Junctions left without car access:</span>

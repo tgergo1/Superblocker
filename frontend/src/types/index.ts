@@ -642,6 +642,8 @@ export interface CityPartition {
   undersized_superblocks?: number;
   stranded_junctions?: number;
   access_changes_reopened?: number;
+  crossings_sealed?: number;
+  destination_gates?: number;
   total_modal_filters: number;
   total_one_way_conversions: number;
   total_street_cuts: number;
