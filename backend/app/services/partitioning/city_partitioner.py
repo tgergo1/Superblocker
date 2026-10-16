@@ -113,6 +113,9 @@ MAX_CHAIN_TURN_DEGREES = 50.0
 # one piece may be this fraction of the minimum; merging then joins it to a
 # neighbour.
 UNEVEN_SPLIT_MIN_FACTOR = 0.25
+# How far a clipped split line is pushed past the cell boundary, in degrees
+# (about 10 cm).
+SPLIT_OVERSHOOT = 1e-6
 # Split lines come from main roads (tertiary and above). Outer districts such
 # as Rakosmente have no main road for kilometres, which left single "cells"
 # of thousands of hectares that cut no traffic at all. Cells this many times
@@ -1497,18 +1500,40 @@ class CityPartitioner:
                 return None
 
             if isinstance(clipped, LineString):
-                return clipped
+                return self._past_boundary(clipped)
             if isinstance(clipped, MultiLineString):
                 # A concave cell or one with holes cuts the line into pieces;
                 # keep the piece that holds the road itself.
                 middle = line.interpolate(0.5, normalized=True)
                 piece = min(clipped.geoms, key=lambda part: part.distance(middle))
-                return piece if piece.distance(middle) < 1e-9 else None
+                return self._past_boundary(piece) if piece.distance(middle) < 1e-9 else None
 
             return None
 
         except Exception:
             return None
+
+    @staticmethod
+    def _past_boundary(line: LineString) -> LineString:
+        """``line`` with each end pushed a few centimetres further out.
+
+        A line clipped to a polygon ends on its boundary only up to rounding,
+        and a split line that stops a hair short of the boundary splits
+        nothing; this kept about a third of the cells over twice the maximum
+        size from ever splitting.
+        """
+        coords = list(line.coords)
+
+        def beyond(end, previous):
+            dx, dy = end[0] - previous[0], end[1] - previous[1]
+            length = math.hypot(dx, dy)
+            if not length:
+                return end
+            return (end[0] + dx / length * SPLIT_OVERSHOOT, end[1] + dy / length * SPLIT_OVERSHOOT)
+
+        return LineString(
+            [beyond(coords[0], coords[1]), *coords[1:-1], beyond(coords[-1], coords[-2])]
+        )
 
     def _split_polygon_with_line(self, polygon: Polygon, line: LineString) -> list[Polygon] | None:
         """Split a polygon with a line."""
