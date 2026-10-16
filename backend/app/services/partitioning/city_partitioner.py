@@ -47,6 +47,7 @@ from app.models.schemas import (
     EntryPoint,
     FilterDesignSettings,
     ImpactValidationSummary,
+    ModificationType,
     NetworkAuthorityMode,
     OperationalRequirement,
     OsmContext,
@@ -60,6 +61,7 @@ from app.models.schemas import (
     StudyAreaMode,
     TrafficImpactSettings,
     TrafficObservation,
+    TransportMode,
     TurnModelMode,
     TurnRestriction,
     UnreachableAccessTarget,
@@ -536,6 +538,14 @@ class CityPartitioner:
         self.school_street_settings = school_street_settings or SchoolStreetSettings()
         self.minor_boundary_policy = minor_boundary_policy
         self.use_centrality_boundaries = use_centrality_boundaries
+        # Residential streets busy enough to be boundaries, kept inside cells
+        # by the "avoid" policy; never used as split lines either.
+        self._busy_minor_streets: set[tuple[int, int]] = set()
+        # Residential streets a cell was split along. They bound two cells but
+        # get a modal filter, so diverted traffic stays on the main roads.
+        self._quiet_split_streets: set[tuple[int, int]] = set()
+        self._split_filters: dict[tuple[int, int], StreetModification] = {}
+        self._split_filter_owner: dict[tuple[int, int], int] = {}
         self.filter_designer = FilterDesigner(
             graph, osm_context, filter_design_settings or FilterDesignSettings()
         )
@@ -709,11 +719,11 @@ class CityPartitioner:
                         if cent_value >= threshold:
                             simple_key = (min(edge[0], edge[1]), max(edge[0], edge[1]))
                             if simple_key in edge_mapping:
-                                centrality_arterials.update(
-                                    original
-                                    for original in edge_mapping[simple_key]
-                                    if self._may_bound_by_centrality(original)
-                                )
+                                for original in edge_mapping[simple_key]:
+                                    if self._may_bound_by_centrality(original):
+                                        centrality_arterials.add(original)
+                                    else:
+                                        self._busy_minor_streets.add(simple_key)
 
             except Exception as e:
                 logger.warning(f"Centrality computation failed: {e}")
@@ -1084,15 +1094,22 @@ class CityPartitioner:
         """
         best = self._best_split(cell, self._split_candidates(cell))
         # Circulation sectors are bounded by main roads only, by design.
+        # With the "avoid" policy any cell over the maximum may split along a
+        # quiet residential street; otherwise only cells far over it may.
+        minor_split_factor = 1.0 if self.minor_boundary_policy == "avoid" else OVERSIZED_CELL_FACTOR
+        quiet_street = False
         if (
             best is None
             and self.use_centrality_boundaries
-            and cell.area_hectares > OVERSIZED_CELL_FACTOR * self.max_area_ha
+            and cell.area_hectares > minor_split_factor * self.max_area_ha
         ):
             best = self._best_split(cell, self._split_candidates(cell, MINOR_SPLIT_HIERARCHIES))
+            quiet_street = best is not None
         if best is None:
             return [cell]
         polygons, (u, v, _key) = best
+        if quiet_street:
+            self._quiet_split_streets.add((min(u, v), max(u, v)))
         # The street the cell was split on is now a boundary road of both
         # halves; without this it lies on both rings and belongs to neither.
         self._promote_to_boundary(u, v)
@@ -1104,6 +1121,60 @@ class CityPartitioner:
             for key in self.graph.get_edge_data(a, b, default={}):
                 self.arterial_edges.add((a, b, key))
         self._arterial_nodes.update((u, v))
+
+    def _split_street_filters(self, cell: SuperblockCell) -> list[StreetModification]:
+        """Modal filters on the quiet residential streets this cell was split from."""
+        filters = []
+        for u, v, key in cell.boundary_edges:
+            street = (min(u, v), max(u, v))
+            if street not in self._quiet_split_streets:
+                continue
+            if street not in self._split_filters:
+                data = self.graph[u][v][key]
+                nodes = [self.graph.nodes.get(node, {}) for node in (u, v)]
+                ids = self._normalize_osm_ids(data.get("osmid"))
+                name = data.get("name")
+                self._split_filters[street] = self.filter_designer.design(
+                    [
+                        StreetModification(
+                            u=u,
+                            v=v,
+                            key=key,
+                            osm_id=ids[0] if ids else 0,
+                            name=str(name[0] if isinstance(name, list) else name) if name else None,
+                            modification_type=ModificationType.MODAL_FILTER,
+                            filter_location=Coordinates(
+                                lat=sum(node.get("y", 0) for node in nodes) / 2,
+                                lon=sum(node.get("x", 0) for node in nodes) / 2,
+                            ),
+                            allowed_modes=[
+                                TransportMode.WALK,
+                                TransportMode.WHEEL,
+                                TransportMode.BICYCLE,
+                            ],
+                            construction_treatment=(
+                                "Accessible pass-through modal filter; exact geometry "
+                                "requires survey"
+                            ),
+                            rationale=(
+                                "Modal filter on a residential street that separates two "
+                                "superblocks, so through traffic stays on the main roads"
+                            ),
+                        )
+                    ]
+                )[0]
+            if self._split_filters[street] not in filters:
+                filters.append(self._split_filters[street])
+        return filters
+
+    def _claim_split_filters(self, cell: SuperblockCell, index: int) -> list[StreetModification]:
+        """Split-street filters this cell owns: those no neighbour claimed first."""
+        owned = []
+        for item in self._split_street_filters(cell):
+            street = (min(item.u, item.v), max(item.u, item.v))
+            if self._split_filter_owner.setdefault(street, index) == index:
+                owned.append(item)
+        return owned
 
     def _best_split(
         self, cell: SuperblockCell, candidates: list[tuple[int, int, int]]
@@ -1203,8 +1274,12 @@ class CityPartitioner:
                 # Main roads only by default
                 if HIERARCHY_MAP.get(highway, 6) > MAIN_ROAD_SPLIT_HIERARCHY:
                     continue
-            # Unknown types such as busway or road never qualify as a fallback.
-            elif HIERARCHY_MAP.get(highway) not in hierarchies:
+            # Unknown types such as busway or road never qualify as a fallback,
+            # and busy rat runs stay inside cells to be filtered, not bounded.
+            elif (
+                HIERARCHY_MAP.get(highway) not in hierarchies
+                or (min(u, v), max(u, v)) in self._busy_minor_streets
+            ):
                 continue
             u_data = self.graph.nodes.get(u, {})
             v_data = self.graph.nodes.get(v, {})
@@ -1298,6 +1373,12 @@ class CityPartitioner:
             superblock = self._enforce_cell_constraints(cell, i)
             if superblock is not None:
                 self.superblocks.append(superblock)
+                # Both neighbours see the filter on a shared split street; one owns it.
+                shared = [
+                    item
+                    for item in self._split_street_filters(cell)
+                    if self._split_filter_owner.get((min(item.u, item.v), max(item.u, item.v))) != i
+                ]
                 self._impact_inputs.append(
                     SuperblockImpactInput(
                         superblock_id=superblock.id,
@@ -1306,7 +1387,7 @@ class CityPartitioner:
                         entry_sectors={
                             entry.node_id: entry.sector for entry in superblock.entry_points
                         },
-                        modifications=list(superblock.modifications),
+                        modifications=list(superblock.modifications) + shared,
                     )
                 )
 
@@ -1385,6 +1466,10 @@ class CityPartitioner:
             modifications,
             enforcer.sectors.entry_points_by_sector if enforcer.sectors else {},
         )
+
+        # Filters on residential streets this cell was split from are added
+        # after validation: they sit on boundary roads outside the interior graph.
+        modifications = [*modifications, *self._claim_split_filters(cell, index)]
 
         # Create EnforcedSuperblock
         return EnforcedSuperblock(
@@ -1471,6 +1556,7 @@ class CityPartitioner:
             sectors.entry_points_by_sector if sectors else {},
         )
         turn_valid = turn_valid and constraint_validated
+        split_filters = self._claim_split_filters(cell, index)
 
         return EnforcedSuperblock(
             id=f"sb_{index}_{uuid.uuid4().hex[:8]}",
@@ -1479,7 +1565,7 @@ class CityPartitioner:
             num_sectors=self.num_sectors,
             boundary_roads=self._collect_boundary_osm_ids(cell.boundary_edges),
             entry_points=entry_points,
-            modifications=[],
+            modifications=split_filters,
             constraint_validated=turn_valid,
             all_addresses_reachable=None,
             unreachable_addresses=[],
@@ -1492,7 +1578,7 @@ class CityPartitioner:
             ),
             unreachable_access_targets=unreachable_targets,
             interior_roads_count=len(cell.interior_edges),
-            modal_filter_count=0,
+            modal_filter_count=len(split_filters),
             one_way_conversion_count=0,
             street_cut_count=0,
             two_way_conversion_count=0,

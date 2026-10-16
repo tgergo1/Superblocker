@@ -73,7 +73,9 @@ def test_split_candidates_keep_main_roads_nearest_the_centre(monkeypatch):
     assert {u // 2 for u, _v, _key in candidates} == {3, 5, 6}
 
 
-def _residential_cell(width_deg: float, use_centrality_boundaries: bool = True):
+def _residential_cell(
+    width_deg: float, use_centrality_boundaries: bool = True, minor_boundary_policy: str = "allow"
+):
     """A cell crossed only by north-south residential streets every 0.002 degrees."""
     import networkx as nx
     from shapely.geometry import box
@@ -95,6 +97,7 @@ def _residential_cell(width_deg: float, use_centrality_boundaries: bool = True):
         min_area_ha=6,
         max_area_ha=20,
         use_centrality_boundaries=use_centrality_boundaries,
+        minor_boundary_policy=minor_boundary_policy,
     )
     polygon = box(0.0, 0.0, width_deg, 0.01)
     cell = module.SuperblockCell(
@@ -159,3 +162,46 @@ def test_split_line_through_a_concave_cell_keeps_the_piece_holding_the_road():
     piece = partitioner._extend_line_to_boundary(LineString([(0.4, 2), (0.6, 2)]), u_shape)
     assert piece is not None
     assert piece.bounds == pytest.approx((0, 2, 1, 2))
+
+
+def test_avoid_policy_splits_any_oversized_cell_on_a_quiet_street_and_filters_it():
+    partitioner, cell = _residential_cell(0.006, minor_boundary_policy="avoid")  # about 73 ha
+    pieces = partitioner._split_cell(cell)
+    assert len(pieces) == 2
+    (street,) = partitioner._quiet_split_streets
+    for piece in pieces:
+        (item,) = partitioner._split_street_filters(piece)
+        assert (min(item.u, item.v), max(item.u, item.v)) == street
+        assert item.modification_type == "modal_filter"
+    # Both pieces share one filter object, so it is costed once.
+    assert partitioner._split_street_filters(pieces[0]) == partitioner._split_street_filters(
+        pieces[1]
+    )
+
+
+def test_avoid_policy_never_splits_on_a_busy_rat_run():
+    partitioner, cell = _residential_cell(0.006, minor_boundary_policy="avoid")
+    partitioner._busy_minor_streets = {(min(u, v), max(u, v)) for u, v, _k in cell.interior_edges}
+    assert partitioner._split_cell(cell) == [cell]
+    assert not partitioner._quiet_split_streets
+
+
+def test_main_road_splits_get_no_filter():
+    partitioner, cell = _residential_cell(0.006, minor_boundary_policy="avoid")
+    for u, v, key in cell.interior_edges:
+        partitioner.graph[u][v][key]["highway"] = "tertiary"
+    pieces = partitioner._split_cell(cell)
+    assert len(pieces) == 2
+    assert not partitioner._quiet_split_streets
+    assert all(partitioner._split_street_filters(piece) == [] for piece in pieces)
+
+
+def test_simple_superblocks_claim_split_filters_once():
+    partitioner, cell = _residential_cell(0.006, minor_boundary_policy="avoid")
+    first, second = partitioner._split_cell(cell)
+    owner = partitioner._create_simple_superblock(first, 0)
+    neighbour = partitioner._create_simple_superblock(second, 1)
+    assert owner.modal_filter_count == 1
+    assert owner.modifications == partitioner._split_street_filters(first)
+    assert neighbour.modal_filter_count == 0
+    assert neighbour.modifications == []
