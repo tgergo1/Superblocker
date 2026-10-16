@@ -6,6 +6,7 @@ Rules: free tools and open data only; every feature ships with tests; screening 
 
 ## Done
 
+- [x] Minor-boundary repair: with "Keep busy residential streets inside superblocks", any cell over the maximum size splits along a quiet residential street (never a busy rat run), and that street gets a modal filter so diverted traffic stays on main roads. Oversized-cell splits in the default mode get the same filter. On the offline Budapest graph the option now gives 2,205 superblocks instead of 1,004, median 15.7 ha instead of 59 ha, 336 cells over the maximum instead of 701, 1 minor road loaded instead of 25, and 230 boundary roads over the increase threshold instead of 1,207; runs take 106 s instead of 76 s.
 - [x] Entry-pair cap: the traffic cut is measured over every entry pair (cap raised from 200 to 20,000; any sample left is spread over all sides). On the offline Budapest graph, removed through traffic rises 22% in circulation-sector mode (24,600 to 30,100 veh/h) and 4% in superblock mode, for under 3% more run time.
 - [x] Transit in the pilot ranking: superblocks where under half the streets are within walking distance of a stop rank 15% lower, the "Where to start" list says so, and the map outlines them in purple.
 - [x] Import the local planning stack (registry, jobs, planning, evidence, SUMO adapter, optimizer, engineering compiler, approvals, workbench).
@@ -29,7 +30,7 @@ Rules: free tools and open data only; every feature ships with tests; screening 
 
 ## Next
 
-1. **Minor-boundary repair.** First step done: the "Keep busy residential streets inside superblocks" option stops residential and living streets becoming boundary roads on centrality alone. On the offline Budapest graph it removes diverted traffic from all 1,311 minor roads, lowers the worst boundary-road increase from 510% to 84% and calms 3,673 km of street instead of 3,277 km, but the median cell grows from 23 ha to 42 ha. Next: split those large cells along low-traffic residential streets with filters, so cells stay near the target size.
+1. **Default policy.** With the repair, keeping busy residential streets inside beats the default on every measure above (the default loads 1,350 minor roads, worst increase 623%). Make it the default.
 2. **Health, next step.** Calibrate the NO2 share against OKIR stations. Resident weighting is done. The gap between people-weighted and per-superblock results came from outer districts left as single cells of 1,000-12,000 ha (no main road to split on) holding about 30% of residents; those now split along residential streets. Remaining: about 5,300 ha of motorway-only or hillside cells, and the 20-100 ha suburban cells that keep their residential streets inside.
 3. **Data importers.** OpenFreeMap vector basemap.
 4. **Performance.** Constraint enforcement and cell optimisation still take most of the 45 s; parallelise per cell.
