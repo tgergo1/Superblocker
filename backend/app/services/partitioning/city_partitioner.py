@@ -599,6 +599,8 @@ class CityPartitioner:
         self.edges_gdf = None
         self._edge_records: list[tuple[int, int, int, LineString]] = []
         self._edge_tree: STRtree | None = None
+        self._edge_geoms = np.empty(0, dtype=object)
+        self._edge_centroids = np.empty(0, dtype=object)
         self._arterial_nodes: set[int] = set()
         self._arterial_edges_by_node: dict[int, list[tuple[int, int, int]]] | None = None
         self._area_transformer = None
@@ -708,6 +710,8 @@ class CityPartitioner:
                 edge_geometries.append(geometry)
             if edge_geometries:
                 self._edge_tree = STRtree(edge_geometries)
+                self._edge_geoms = np.array(edge_geometries, dtype=object)
+                self._edge_centroids = shapely.centroid(self._edge_geoms)
 
             centroid = self.analysis_polygon.centroid
             utm_zone = int((centroid.x + 180) / 6) + 1
@@ -964,8 +968,22 @@ class CityPartitioner:
         # Query only edges whose envelopes intersect this cell. The previous
         # full graph scan for every polygon dominated city-scale runtime.
         if self._edge_tree is not None:
-            candidate_indices = self._edge_tree.query(polygon, predicate="intersects")
-            candidates = (self._edge_records[int(index)] for index in candidate_indices)
+            shapely.prepare(polygon)
+            ring = polygon.boundary
+            shapely.prepare(ring)
+            indices = self._edge_tree.query(polygon, predicate="intersects")
+            geoms = self._edge_geoms[indices]
+            touching = shapely.contains(polygon, geoms) | shapely.intersects(ring, geoms)
+            centred = shapely.contains(polygon, self._edge_centroids[indices])
+            for index, keep, centre in zip(indices, touching, centred, strict=True):
+                if not keep:
+                    continue
+                u, v, key, _geom = self._edge_records[int(index)]
+                if (u, v, key) in self.arterial_edges:
+                    boundary_edges.append((u, v, key))
+                elif centre:
+                    interior_edges.append((u, v, key))
+            return boundary_edges, interior_edges
         else:
             candidates = (
                 (u, v, key, data.get("geometry"))
@@ -1930,12 +1948,14 @@ class CityPartitioner:
             setattr(redesigned, field_name, getattr(superblock, field_name))
         redesigned.id = superblock.id
         self.superblocks[position] = redesigned
+        split_filters = {id(item) for item in self._split_filters.values()}
+        own = {id(item) for item in superblock.modifications}
         for impact_input in self._impact_inputs:
             if impact_input.superblock_id == superblock.id:
                 shared = [
                     item
                     for item in impact_input.modifications
-                    if item in self._split_filters.values() and item not in superblock.modifications
+                    if id(item) in split_filters and id(item) not in own
                 ]
                 impact_input.modifications = list(redesigned.modifications) + shared
                 impact_input.entry_sectors = {
