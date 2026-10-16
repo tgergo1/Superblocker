@@ -25,6 +25,7 @@ import networkx as nx
 import osmnx as ox
 import pyproj
 import shapely
+from shapely import affinity
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon, box, shape
 from shapely.ops import polygonize, transform, unary_union
 from shapely.strtree import STRtree
@@ -116,6 +117,9 @@ UNEVEN_SPLIT_MIN_FACTOR = 0.25
 # How far a clipped split line is pushed past the cell boundary, in degrees
 # (about 10 cm).
 SPLIT_OVERSHOOT = 1e-6
+# How much a split's choice weighs the compactness of its least compact piece
+# against how evenly it divides the area (both on a 0-1 scale).
+SPLIT_SHAPE_WEIGHT = 2.0
 # Split lines come from main roads (tertiary and above). Outer districts such
 # as Rakosmente have no main road for kilometres, which left single "cells"
 # of thousands of hectares that cut no traffic at all. Cells this many times
@@ -1263,7 +1267,10 @@ class CityPartitioner:
                         sum(a < self.min_area_ha for a in areas) > 1
                     ):
                         continue
-                    balance = abs(areas[0] - areas[1])
+                    # Even areas, and no long thin sliver among the pieces.
+                    balance = abs(areas[0] - areas[1]) / sum(areas) + SPLIT_SHAPE_WEIGHT * (
+                        1 - min(self._compactness(piece) for piece in result)
+                    )
                     if balance < best_balance:
                         best_balance = balance
                         best = (result, edge, chain)
@@ -1274,6 +1281,16 @@ class CityPartitioner:
                     continue
 
         return best
+
+    @staticmethod
+    def _compactness(polygon: Polygon) -> float:
+        """Polsby-Popper score: 1 for a circle, about 0.3 for an 8:1 strip.
+
+        Longitude is scaled by latitude so the shape is measured on the ground.
+        """
+        scale = math.cos(math.radians(polygon.centroid.y))
+        ground = affinity.scale(polygon, xfact=scale, yfact=1.0, origin=(0, 0))
+        return 4 * math.pi * ground.area / ground.length**2 if ground.length else 0.0
 
     def _edge_line(self, u: int, v: int, key: int) -> LineString | None:
         """The edge's geometry from ``u`` to ``v``."""
