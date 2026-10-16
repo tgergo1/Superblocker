@@ -73,6 +73,7 @@ from app.services.constraint.active_mode_validator import ActiveModeValidator
 from app.services.constraint.constraint_enforcer import ConstraintEnforcer
 from app.services.constraint.operational_validator import OperationalValidator
 from app.services.design.filter_design import FilterDesigner
+from app.services.design.pilot_plan import PilotPlanner
 from app.services.design.public_space import PublicSpaceEstimator
 from app.services.design.school_streets import SchoolStreetPlanner
 from app.services.impact.boundary_impact import (
@@ -1789,6 +1790,27 @@ class CityPartitioner:
             except Exception as error:  # Screening output must not block the plan.
                 logger.warning("Emergency access check failed: %s", error)
 
+        pilot_plan = None
+        if self._impact_inputs:
+            try:
+                centroids = {}
+                areas = {}
+                for superblock in self.superblocks:
+                    centre = shape(superblock.geometry).centroid
+                    centroids[superblock.id] = (centre.y, centre.x)
+                    areas[superblock.id] = superblock.area_hectares
+                pilot_plan = PilotPlanner().plan(
+                    self._impact_inputs,
+                    traffic_impact,
+                    public_space,
+                    school_streets,
+                    emergency_access,
+                    centroids,
+                    areas,
+                )
+            except Exception as error:  # Screening output must not block the plan.
+                logger.warning("Pilot planning failed: %s", error)
+
         modeled_directional_validation_passed = bool(self.superblocks) and all(
             sb.modeled_directional_validation_passed for sb in self.superblocks
         )
@@ -1935,6 +1957,7 @@ class CityPartitioner:
             emergency_access=emergency_access,
             public_space=public_space,
             school_streets=school_streets,
+            pilot_plan=pilot_plan,
             osm_context=self.osm_context,
             evidence=evidence,
             readiness=readiness,

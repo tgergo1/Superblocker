@@ -882,6 +882,38 @@ class SchoolStreetSummary(BaseModel):
     limitations: list[str] = Field(default_factory=list)
 
 
+class PilotCandidate(BaseModel):
+    """One superblock ranked for a reversible trial."""
+
+    superblock_id: str
+    rank: int = Field(default=0, ge=0)
+    score: float = Field(ge=0)
+    trial_measures: int = Field(ge=0)
+    trial_cost_eur: float = Field(ge=0)
+    build_cost_eur: float = Field(ge=0)
+    displaced_peak_vph: float = Field(ge=0)
+    interior_injury_reduction_low_percent: float
+    interior_injury_reduction_high_percent: float
+    school_streets: int = Field(default=0, ge=0)
+    reclaimable_m2: float = Field(default=0.0, ge=0)
+    mean_detour_seconds: float = Field(default=0.0, ge=0)
+    emergency_delay_seconds: float | None = Field(default=None, ge=0)
+    centroid_lat: float | None = None
+    centroid_lon: float | None = None
+
+
+class PilotPlanSummary(BaseModel):
+    """Where to start: superblocks ranked for a trial-then-build rollout."""
+
+    total_trial_cost_eur: float = Field(default=0.0, ge=0)
+    total_build_cost_eur: float = Field(default=0.0, ge=0)
+    top_trial_cost_eur: float = Field(default=0.0, ge=0)
+    mean_injury_reduction_low_percent: float = 0.0
+    mean_injury_reduction_high_percent: float = 0.0
+    candidates: list[PilotCandidate] = Field(default_factory=list, max_length=1000)
+    limitations: list[str] = Field(default_factory=list)
+
+
 class EvaporationScenario(BaseModel):
     """Share of displaced through traffic assumed to disappear rather than reroute."""
 
@@ -1449,6 +1481,7 @@ class CityPartition(BaseModel):
     emergency_access: EmergencyAccessSummary = Field(default_factory=EmergencyAccessSummary)
     public_space: PublicSpaceSummary | None = None
     school_streets: SchoolStreetSummary | None = None
+    pilot_plan: PilotPlanSummary | None = None
     osm_context: OsmContext | None = None
     evidence: AnalysisEvidence = Field(
         default_factory=lambda: AnalysisEvidence(

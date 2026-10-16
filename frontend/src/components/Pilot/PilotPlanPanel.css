@@ -1,0 +1,64 @@
+.pilot-plan-panel .impact-toggle {
+  background: linear-gradient(145deg, #14532d, #15803d);
+}
+
+.pilot-plan-panel .impact-toggle small {
+  color: #bbf7d0;
+}
+
+.pilot-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pilot-list li {
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.pilot-list button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 2px;
+  border: 0;
+  background: transparent;
+  color: #0f172a;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.pilot-list button:hover,
+.pilot-list button:focus-visible {
+  background: #f0fdf4;
+}
+
+.pilot-rank {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #facc15;
+  color: #422006;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.pilot-text strong,
+.pilot-text small {
+  display: block;
+}
+
+.pilot-text strong {
+  font-size: 11px;
+}
+
+.pilot-text small {
+  color: #64748b;
+  font-size: 9px;
+}

@@ -5,6 +5,7 @@ import { PartitionControls } from './components/Controls/PartitionControls';
 import { RouteValidator } from './components/Routing/RouteValidator';
 import { PlanningWorkbench } from './components/Planning/PlanningWorkbench';
 import { TrafficImpactPanel } from './components/Impact/TrafficImpactPanel';
+import { PilotPlanPanel } from './components/Pilot/PilotPlanPanel';
 import { useSearch } from './hooks/useSearch';
 import { usePartition } from './hooks/usePartition';
 import type {
@@ -56,6 +57,7 @@ function App() {
   const [showModalFilters, setShowModalFilters] = useState(true);
   const [selectedEnforcedSuperblock, setSelectedEnforcedSuperblock] = useState<EnforcedSuperblock | null>(null);
   const [showImpact, setShowImpact] = useState(false);
+  const [showPilotRanking, setShowPilotRanking] = useState(true);
   const [impactScenario, setImpactScenario] = useState('central');
 
   // Route state
@@ -165,6 +167,7 @@ function App() {
           analysisBoundary={selectedPlace?.boundary ?? null}
           emptyStateMessage="Run the automated analysis to extract closed cells from the complete selected road network and move cross-traffic to boundary roads."
           hideLegends={routeValidatorExpanded}
+          showPilotRanking={showPilotRanking}
         />
 
         <div className="app-overlay">
@@ -223,6 +226,25 @@ function App() {
                 onShowOnMapChange={setShowImpact}
                 scenario={impactScenario}
                 onScenarioChange={setImpactScenario}
+              />
+            )}
+            {partition?.pilot_plan && partition.pilot_plan.candidates.length > 0 && (
+              <PilotPlanPanel
+                plan={partition.pilot_plan}
+                showOnMap={showPilotRanking}
+                onShowOnMapChange={setShowPilotRanking}
+                onSelect={candidate => {
+                  const superblock = partition.superblocks.find(item => item.id === candidate.superblock_id);
+                  if (superblock) setSelectedEnforcedSuperblock(superblock);
+                  if (candidate.centroid_lat != null && candidate.centroid_lon != null) {
+                    setViewState(prev => ({
+                      ...prev,
+                      latitude: candidate.centroid_lat as number,
+                      longitude: candidate.centroid_lon as number,
+                      zoom: Math.max(prev.zoom, 15),
+                    }));
+                  }
+                }}
               />
             )}
             {partition && (

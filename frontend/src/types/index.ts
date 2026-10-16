@@ -230,6 +230,34 @@ export interface SchoolStreetSummary {
   limitations: string[];
 }
 
+export interface PilotCandidate {
+  superblock_id: string;
+  rank: number;
+  score: number;
+  trial_measures: number;
+  trial_cost_eur: number;
+  build_cost_eur: number;
+  displaced_peak_vph: number;
+  interior_injury_reduction_low_percent: number;
+  interior_injury_reduction_high_percent: number;
+  school_streets: number;
+  reclaimable_m2: number;
+  mean_detour_seconds: number;
+  emergency_delay_seconds?: number | null;
+  centroid_lat?: number | null;
+  centroid_lon?: number | null;
+}
+
+export interface PilotPlanSummary {
+  total_trial_cost_eur: number;
+  total_build_cost_eur: number;
+  top_trial_cost_eur: number;
+  mean_injury_reduction_low_percent: number;
+  mean_injury_reduction_high_percent: number;
+  candidates: PilotCandidate[];
+  limitations: string[];
+}
+
 export interface PublicSpaceSummary {
   settings: { reallocation_share: number; max_plazas_per_superblock: number };
   calmed_street_km: number;
@@ -536,6 +564,7 @@ export interface CityPartition {
   emergency_access?: EmergencyAccessSummary;
   public_space?: PublicSpaceSummary | null;
   school_streets?: SchoolStreetSummary | null;
+  pilot_plan?: PilotPlanSummary | null;
   evidence: AnalysisEvidence;
   readiness: PlanReadiness;
   total_area_hectares: number;
