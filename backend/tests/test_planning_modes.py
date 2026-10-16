@@ -721,6 +721,21 @@ def test_route_out_along_a_split_street_half_is_sealed():
     assert [(m.u, m.v) for m in west.modifications] == [(2, 3)]
 
 
+def test_route_onto_a_neighbouring_street_does_not_hide_a_crossing():
+    partitioner = _two_superblocks_meeting_at_a_junction()
+    # A short street owned by no cell also runs from junction 1 to junction 5.
+    # It is not the west superblock's route, so it must not stop the search
+    # for the crossing through 3.
+    partitioner.graph.add_node(8, x=0.004, y=-0.002)
+    for u, v in ((1, 8), (8, 5)):
+        partitioner.graph.add_edge(u, v, 0, highway="residential", length=100.0)
+        partitioner.graph.add_edge(v, u, 0, highway="residential", length=100.0)
+    partitioner._seal_crossings()
+    _west, east = partitioner.superblocks
+    assert partitioner.crossings_sealed == 1
+    assert [(m.u, m.v) for m in east.modifications] == [(3, 4)]
+
+
 def test_crossing_that_is_the_only_way_in_gets_a_destination_gate():
     from app.models.schemas import VehicleClass
 

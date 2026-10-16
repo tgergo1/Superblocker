@@ -2305,6 +2305,12 @@ class CityPartitioner:
                 for nxt in minor_successors(node):
                     if nxt in parent:
                         continue
+                    # Only routes that drive into this superblock are its own;
+                    # a start onto a neighbour's street is the neighbour's.
+                    if node == start and (
+                        owner.get((node, nxt)) is None or owner[(node, nxt)].id != home
+                    ):
+                        continue
                     parent[nxt] = node
                     if nxt in main:
                         other = owner.get((node, nxt))
