@@ -586,6 +586,18 @@ export function PartitionControls({
               with {partition.public_space.plaza_candidates} candidate plazas (green dots on the map).
             </div>
           )}
+          {partition.health && partition.health.superblocks.length > 0 && (
+            <div className="health-summary" title={partition.health.limitations.join(' ')}>
+              Inside superblocks, about {Math.abs(partition.health.mean_interior_noise_change_db_low).toFixed(0)}–
+              {Math.abs(partition.health.mean_interior_noise_change_db_high).toFixed(0)} dB quieter and{' '}
+              {Math.abs(partition.health.mean_interior_no2_change_percent_low).toFixed(0)}–
+              {Math.abs(partition.health.mean_interior_no2_change_percent_high).toFixed(0)}% less NO₂ on average
+              {partition.health.boundary_roads_noticeably_louder > 0
+                ? `; ${partition.health.boundary_roads_noticeably_louder} main roads get noticeably louder (3 dB or more).`
+                : '; no main road gets noticeably louder.'}{' '}
+              Screening estimate.
+            </div>
+          )}
           {partition.school_streets && partition.school_streets.facilities_loaded > 0 && (
             <div className="school-summary">
               {partition.school_streets.interior_school_streets} school streets inside superblocks

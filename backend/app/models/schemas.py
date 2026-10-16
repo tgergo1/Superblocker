@@ -914,6 +914,40 @@ class PilotPlanSummary(BaseModel):
     limitations: list[str] = Field(default_factory=list)
 
 
+class HealthSettings(BaseModel):
+    """Assumptions behind the noise and NO2 screening estimate."""
+
+    speed_noise_reduction_db_low: float = Field(default=1.0, ge=0, le=10)
+    speed_noise_reduction_db_high: float = Field(default=3.0, ge=0, le=10)
+    local_traffic_no2_share_low: float = Field(default=0.3, ge=0, le=1)
+    local_traffic_no2_share_high: float = Field(default=0.6, ge=0, le=1)
+
+
+class SuperblockHealth(BaseModel):
+    """Estimated interior noise and NO2 change for one superblock (negative is better)."""
+
+    superblock_id: str
+    interior_noise_change_db_low: float
+    interior_noise_change_db_high: float
+    interior_no2_change_percent_low: float
+    interior_no2_change_percent_high: float
+
+
+class HealthEstimate(BaseModel):
+    """Screening estimate of noise and NO2 changes inside and around superblocks."""
+
+    method: str = "traffic_energy_and_share_scaling"
+    settings: HealthSettings = Field(default_factory=HealthSettings)
+    mean_interior_noise_change_db_low: float = 0.0
+    mean_interior_noise_change_db_high: float = 0.0
+    mean_interior_no2_change_percent_low: float = 0.0
+    mean_interior_no2_change_percent_high: float = 0.0
+    boundary_roads_noticeably_louder: int = Field(default=0, ge=0)
+    maximum_boundary_noise_increase_db: float = Field(default=0.0, ge=0)
+    superblocks: list[SuperblockHealth] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
 class EvaporationScenario(BaseModel):
     """Share of displaced through traffic assumed to disappear rather than reroute."""
 
@@ -1482,6 +1516,7 @@ class CityPartition(BaseModel):
     public_space: PublicSpaceSummary | None = None
     school_streets: SchoolStreetSummary | None = None
     pilot_plan: PilotPlanSummary | None = None
+    health: HealthEstimate | None = None
     osm_context: OsmContext | None = None
     evidence: AnalysisEvidence = Field(
         default_factory=lambda: AnalysisEvidence(
