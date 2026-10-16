@@ -1082,25 +1082,35 @@ class CityPartitioner:
         boundary; a cell far over the maximum size falls back to residential
         streets.
         """
-        best_split = self._best_split(cell, self._split_candidates(cell))
+        best = self._best_split(cell, self._split_candidates(cell))
         # Circulation sectors are bounded by main roads only, by design.
         if (
-            best_split is None
+            best is None
             and self.use_centrality_boundaries
             and cell.area_hectares > OVERSIZED_CELL_FACTOR * self.max_area_ha
         ):
-            best_split = self._best_split(
-                cell, self._split_candidates(cell, MINOR_SPLIT_HIERARCHIES)
-            )
-        if best_split is None:
+            best = self._best_split(cell, self._split_candidates(cell, MINOR_SPLIT_HIERARCHIES))
+        if best is None:
             return [cell]
-        return self._cells_from_polygons(best_split)
+        polygons, (u, v, _key) = best
+        # The street the cell was split on is now a boundary road of both
+        # halves; without this it lies on both rings and belongs to neither.
+        self._promote_to_boundary(u, v)
+        return self._cells_from_polygons(polygons)
+
+    def _promote_to_boundary(self, u: int, v: int) -> None:
+        """Treat every carriageway between ``u`` and ``v`` as a boundary road."""
+        for a, b in ((u, v), (v, u)):
+            for key in self.graph.get_edge_data(a, b, default={}):
+                self.arterial_edges.add((a, b, key))
+        self._arterial_nodes.update((u, v))
 
     def _best_split(
         self, cell: SuperblockCell, candidates: list[tuple[int, int, int]]
-    ) -> list[Polygon] | None:
-        """The most even two-way split of ``cell`` along one of ``candidates``."""
+    ) -> tuple[list[Polygon], tuple[int, int, int]] | None:
+        """The most even two-way split of ``cell``, and the street it runs along."""
         best_split = None
+        best_edge = None
         best_balance = float("inf")
 
         for u, v, key in candidates:
@@ -1138,12 +1148,15 @@ class CityPartitioner:
                 if balance < best_balance and all(a >= self.min_area_ha for a in areas):
                     best_balance = balance
                     best_split = result
+                    best_edge = (u, v, key)
 
             except Exception as e:
                 logger.debug(f"Split attempt failed: {e}")
                 continue
 
-        return best_split
+        if best_split is None or best_edge is None:
+            return None
+        return best_split, best_edge
 
     def _cells_from_polygons(self, polygons: list[Polygon]) -> list[SuperblockCell]:
         new_cells = []
@@ -1186,11 +1199,12 @@ class CityPartitioner:
             highway = self.graph[u][v][key].get("highway", "")
             if isinstance(highway, list):
                 highway = highway[0]
-            level = HIERARCHY_MAP.get(highway, 6)
             if hierarchies is None:
-                if level > MAIN_ROAD_SPLIT_HIERARCHY:  # Main roads only by default
+                # Main roads only by default
+                if HIERARCHY_MAP.get(highway, 6) > MAIN_ROAD_SPLIT_HIERARCHY:
                     continue
-            elif level not in hierarchies:
+            # Unknown types such as busway or road never qualify as a fallback.
+            elif HIERARCHY_MAP.get(highway) not in hierarchies:
                 continue
             u_data = self.graph.nodes.get(u, {})
             v_data = self.graph.nodes.get(v, {})

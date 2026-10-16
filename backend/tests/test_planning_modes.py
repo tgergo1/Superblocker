@@ -115,8 +115,27 @@ def test_oversized_cell_without_main_roads_splits_along_residential_streets():
     assert sum(piece.area_hectares for piece in pieces) == pytest.approx(
         cell.area_hectares, rel=0.01
     )
-    # The middle street gives the most even split.
+    # The middle street gives the most even split, and becomes a boundary
+    # road of both halves rather than disappearing between them.
     assert abs(pieces[0].area_hectares - pieces[1].area_hectares) < 1.0
+    assert (10, 11, 0) in partitioner.arterial_edges
+    for piece in pieces:
+        assert (10, 11, 0) in piece.boundary_edges
+        assert (10, 11, 0) not in piece.interior_edges
+
+
+def test_fallback_ignores_road_types_it_does_not_know():
+    partitioner, cell = _residential_cell(0.02)
+    for u, v, key in cell.interior_edges:
+        partitioner.graph[u][v][key]["highway"] = "busway"
+    assert partitioner._split_candidates(cell, module_hierarchies()) == []
+    assert partitioner._split_cell(cell) == [cell]
+
+
+def module_hierarchies():
+    from app.services.partitioning.city_partitioner import MINOR_SPLIT_HIERARCHIES
+
+    return MINOR_SPLIT_HIERARCHIES
 
 
 def test_circulation_sectors_never_split_on_residential_streets():
