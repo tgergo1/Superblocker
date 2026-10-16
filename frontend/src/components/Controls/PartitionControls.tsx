@@ -554,7 +554,9 @@ export function PartitionControls({
           <div className="summary-title">City plan</div>
           <div className="summary-grid">
             <div className="summary-item">
-              <span className="summary-value">{partition.total_superblocks}</span>
+              <span className="summary-value">
+                {partition.cell_kind_counts?.superblock ?? partition.total_superblocks}
+              </span>
               <span className="summary-label">Superblocks</span>
             </div>
             <div className="summary-item">

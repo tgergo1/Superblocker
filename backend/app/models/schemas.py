@@ -293,6 +293,22 @@ class ModificationType(StrEnum):
     FULL_CLOSURE = "full_closure"  # Street cut / close to all vehicle traffic
 
 
+class CellKind(StrEnum):
+    """What a cell bounded by main roads turns out to be once its streets are read."""
+
+    SUPERBLOCK = "superblock"  # Through routes inside; filters keep them local
+    NATURALLY_CALM = "naturally_calm"  # Only dead ends inside; no through route to remove
+    NON_STREET_LAND = "non_street_land"  # No streets inside: parks, rail, water, hillside
+
+
+class SizeStatus(StrEnum):
+    """Where a cell's area sits against the requested superblock size range."""
+
+    WITHIN = "within"
+    UNDER_MINIMUM = "under_minimum"
+    OVER_MAXIMUM = "over_maximum"
+
+
 class EntryPoint(BaseModel):
     """An entry/exit point into a superblock from the arterial network."""
 
@@ -1538,6 +1554,8 @@ class EnforcedSuperblock(BaseModel):
     geometry: dict  # GeoJSON polygon
     area_hectares: float
     num_sectors: int  # Number of angular sectors (typically 4-8)
+    cell_kind: CellKind = CellKind.SUPERBLOCK
+    size_status: SizeStatus = SizeStatus.WITHIN
 
     # Boundary information
     boundary_roads: list[int]  # OSM IDs of arterial boundary roads
@@ -1614,6 +1632,13 @@ class CityPartition(BaseModel):
     total_area_hectares: float
     coverage_percent: float  # % of bbox area covered by superblocks
     total_superblocks: int
+    # Every cell between boundary roads by kind. Superblocks proper have through
+    # routes; calm cells need no filters; street-free cells are counted but are
+    # not in ``superblocks``, so ``total_superblocks`` is calm cells plus these.
+    cell_kind_counts: dict[str, int] = Field(default_factory=dict)
+    # Superblocks proper (not calm or street-free cells) outside the size range.
+    oversized_superblocks: int = 0
+    undersized_superblocks: int = 0
     total_modal_filters: int
     total_one_way_conversions: int
     total_street_cuts: int

@@ -580,11 +580,16 @@ export interface PlanReadiness {
   blockers: string[];
 }
 
+export type CellKind = 'superblock' | 'naturally_calm' | 'non_street_land';
+export type SizeStatus = 'within' | 'under_minimum' | 'over_maximum';
+
 export interface EnforcedSuperblock {
   id: string;
   geometry: Polygon;
   area_hectares: number;
   num_sectors: number;
+  cell_kind?: CellKind;
+  size_status?: SizeStatus;
   boundary_roads: number[];
   entry_points: EntryPoint[];
   modifications: StreetModification[];
@@ -631,6 +636,9 @@ export interface CityPartition {
   total_area_hectares: number;
   coverage_percent: number;
   total_superblocks: number;
+  cell_kind_counts?: Partial<Record<CellKind, number>>;
+  oversized_superblocks?: number;
+  undersized_superblocks?: number;
   total_modal_filters: number;
   total_one_way_conversions: number;
   total_street_cuts: number;
