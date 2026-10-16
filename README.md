@@ -143,7 +143,7 @@ The right-hand planner runs one workflow: **Analyze entire city**. Results inclu
 - display toggles for entry directions and street actions;
 - a route tester that sends inter-cell travel onto boundary roads.
 
-The basemap defaults to OpenStreetMap's no-key raster endpoint. Set `VITE_OSM_TILE_URL` to use another OSM-compatible raster tile service in a deployment.
+The basemap defaults to OpenStreetMap's no-key raster endpoint. Set `VITE_OSM_TILE_URL` to use another OSM-compatible raster tile service in a deployment, or `VITE_BASEMAP_STYLE_URL` to a vector style such as OpenFreeMap's no-key `https://tiles.openfreemap.org/styles/positron`.
 
 ## Architecture
 
@@ -204,6 +204,7 @@ Copy [`backend/.env.example`](backend/.env.example) and [`frontend/.env.example`
 | --- | --- | --- |
 | `VITE_API_URL` | `/api/v1` | Backend API base URL |
 | `VITE_OSM_TILE_URL` | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | Raster basemap template |
+| `VITE_BASEMAP_STYLE_URL` | unset | Vector basemap style, such as OpenFreeMap's `https://tiles.openfreemap.org/styles/positron`; falls back to the raster basemap if it fails to load |
 | `NOMINATIM_USER_AGENT` | project identifier | Identifies geocoder requests |
 | `NOMINATIM_MIN_INTERVAL_SECONDS` | `1.0` | Aggregate geocoder throttle |
 | `MAX_BBOX_SPAN_DEGREES` | `0.5` | Maximum latitude/longitude span |
