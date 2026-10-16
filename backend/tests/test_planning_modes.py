@@ -161,7 +161,7 @@ def test_split_line_through_a_concave_cell_keeps_the_piece_holding_the_road():
     u_shape = Polygon([(0, 0), (3, 0), (3, 3), (2, 3), (2, 1), (1, 1), (1, 3), (0, 3)])
     piece = partitioner._extend_line_to_boundary(LineString([(0.4, 2), (0.6, 2)]), u_shape)
     assert piece is not None
-    assert piece.bounds == pytest.approx((0, 2, 1, 2))
+    assert piece.bounds == pytest.approx((0, 2, 1, 2), abs=1e-5)
 
 
 def test_avoid_policy_splits_any_oversized_cell_on_a_quiet_street_and_filters_it():
@@ -355,3 +355,19 @@ def test_uneven_split_keeps_one_piece_at_the_minimum():
     assert 45 < cell.area_hectares < 52  # its one street halves it into 2 x 24.6 ha
     assert partitioner._best_split(cell, cell.interior_edges, min_piece_ha=6.5) is None
     assert partitioner._split_cell(cell) == [cell]
+
+
+def test_split_lines_reach_past_the_cell_boundary():
+    from shapely.geometry import LineString, Polygon
+
+    partitioner, _cell = _residential_cell(0.02)
+    # A skewed quadrilateral where the clipped line's ends land on the
+    # boundary only up to rounding.
+    cell = Polygon([(0.0, 0.0), (0.0137, 0.0011), (0.0151, 0.0123), (0.0007, 0.0097)])
+    line = partitioner._extend_line_to_boundary(
+        LineString([(0.0031, 0.0021), (0.0113, 0.0089)]), cell
+    )
+    assert line is not None
+    assert not cell.contains(line)
+    pieces = partitioner._split_polygon_with_line(cell, line)
+    assert pieces is not None and len(pieces) == 2
