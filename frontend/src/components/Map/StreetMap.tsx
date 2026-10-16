@@ -447,6 +447,10 @@ export function StreetMap({
             if (selectedEnforcedSuperblock?.id === d.id) {
               return [59, 130, 246, 82];
             }
+            // Cells with only dead ends inside need no filters: shown quiet, not as plans.
+            if (d.cell_kind === 'naturally_calm' || d.cell_kind === 'non_street_land') {
+              return [148, 163, 184, 36];
+            }
             if (d.modeled_directional_validation_passed && d.all_access_targets_reachable) {
               return [34, 197, 94, 48];
             }
@@ -1508,6 +1512,18 @@ export function StreetMap({
                   <span>Superblocks:</span>
                   <span>{partition.total_superblocks}</span>
                 </div>
+                {!!partition.cell_kind_counts?.naturally_calm && (
+                  <div className="info-row">
+                    <span>Already calm (dead ends only):</span>
+                    <span>{partition.cell_kind_counts.naturally_calm}</span>
+                  </div>
+                )}
+                {!!partition.oversized_superblocks && (
+                  <div className="info-row warning">
+                    <span>Over the size limit:</span>
+                    <span>{partition.oversized_superblocks}</span>
+                  </div>
+                )}
                 <div className="info-row">
                   <span>Eligible roads accounted:</span>
                   <span>{partition.eligible_road_coverage_percent.toFixed(1)}%</span>

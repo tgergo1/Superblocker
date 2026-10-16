@@ -458,3 +458,39 @@ def test_split_never_leaves_a_piece_without_entries():
     # A rejected cut leaves no boundary road behind, in either direction.
     if len(pieces) == 1:
         assert not {(1, 2, 0), (2, 1, 0)} & partitioner.arterial_edges
+
+
+def test_cells_report_whether_they_have_through_routes():
+    import networkx as nx
+    from shapely.geometry import box
+
+    from app.models.schemas import CellKind, SizeStatus
+    from app.services.partitioning.city_partitioner import SuperblockCell
+
+    partitioner = CityPartitioner(
+        nx.MultiDiGraph(),
+        BoundingBox(north=0.011, south=-0.001, east=0.021, west=-0.001),
+        min_area_ha=6,
+        max_area_ha=20,
+    )
+
+    def cell(interior, entries, area=12.0):
+        return SuperblockCell(
+            polygon=box(0, 0, 0.01, 0.01),
+            area_hectares=area,
+            boundary_edges=[],
+            interior_edges=interior,
+            entry_nodes=entries,
+        )
+
+    # Two dead-end streets, each off a different entry: nothing to cut through.
+    calm = cell([(1, 2, 0), (2, 3, 0), (4, 5, 0)], [1, 4], area=45.0)
+    assert partitioner._cell_kind(calm) == CellKind.NATURALLY_CALM
+    # One street joining two entries is a through route.
+    through = cell([(1, 2, 0), (2, 4, 0)], [1, 4])
+    assert partitioner._cell_kind(through) == CellKind.SUPERBLOCK
+    assert partitioner._cell_kind(cell([], [1])) == CellKind.NON_STREET_LAND
+
+    assert partitioner._size_status(45.0) == SizeStatus.OVER_MAXIMUM
+    assert partitioner._size_status(3.0) == SizeStatus.UNDER_MINIMUM
+    assert partitioner._size_status(12.0) == SizeStatus.WITHIN

@@ -290,8 +290,22 @@ function App() {
 
             <div className="detail-row">
               <span>Area:</span>
-              <span>{selectedEnforcedSuperblock.area_hectares.toFixed(1)} ha</span>
+              <span>
+                {selectedEnforcedSuperblock.area_hectares.toFixed(1)} ha
+                {selectedEnforcedSuperblock.size_status === 'over_maximum' && ' (over the size limit)'}
+                {selectedEnforcedSuperblock.size_status === 'under_minimum' && ' (under the minimum size)'}
+              </span>
             </div>
+            {selectedEnforcedSuperblock.cell_kind && selectedEnforcedSuperblock.cell_kind !== 'superblock' && (
+              <div className="detail-row">
+                <span>Cell:</span>
+                <span>
+                  {selectedEnforcedSuperblock.cell_kind === 'naturally_calm'
+                    ? 'Already calm: only dead-end streets inside, no through route to filter'
+                    : 'No streets inside'}
+                </span>
+              </div>
+            )}
             <div className="detail-row">
               <span>Interior Roads:</span>
               <span>{selectedEnforcedSuperblock.interior_roads_count}</span>

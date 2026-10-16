@@ -40,6 +40,7 @@ from app.models.schemas import (
     AssignmentComparison,
     AssignmentSettings,
     BoundingBox,
+    CellKind,
     CityPartition,
     Coordinates,
     DataQualityMetrics,
@@ -59,6 +60,7 @@ from app.models.schemas import (
     PublicSpaceSettings,
     ReadinessGate,
     SchoolStreetSettings,
+    SizeStatus,
     StreetModification,
     StudyAreaMode,
     TrafficImpactSettings,
@@ -1622,6 +1624,8 @@ class CityPartitioner:
 
             superblock = self._enforce_cell_constraints(cell, i)
             if superblock is not None:
+                superblock.cell_kind = self._cell_kind(cell)
+                superblock.size_status = self._size_status(cell.area_hectares)
                 self.superblocks.append(superblock)
                 # Both neighbours see the filter on a shared split street; one owns it.
                 shared = [
@@ -1640,6 +1644,33 @@ class CityPartitioner:
                         modifications=list(superblock.modifications) + shared,
                     )
                 )
+
+    def _cell_kind(self, cell: SuperblockCell) -> CellKind:
+        """Read whether a cell has through routes to remove at all.
+
+        A cell whose interior streets never join two entries is already calm:
+        every street inside is a dead end off one main road, so it needs no
+        filters and its size does not matter. A cell with no streets inside is
+        land the street network does not reach.
+        """
+        if not cell.interior_edges:
+            return CellKind.NON_STREET_LAND
+        if not cell.entry_nodes:
+            return CellKind.SUPERBLOCK
+        streets = nx.Graph()
+        streets.add_edges_from((u, v) for u, v, _ in cell.interior_edges)
+        entries = set(cell.entry_nodes)
+        for component in nx.connected_components(streets):
+            if len(entries & component) > 1:
+                return CellKind.SUPERBLOCK
+        return CellKind.NATURALLY_CALM
+
+    def _size_status(self, area_hectares: float) -> SizeStatus:
+        if area_hectares > self.max_area_ha:
+            return SizeStatus.OVER_MAXIMUM
+        if area_hectares < self.min_area_ha:
+            return SizeStatus.UNDER_MINIMUM
+        return SizeStatus.WITHIN
 
     def _enforce_cell_constraints(
         self, cell: SuperblockCell, index: int
@@ -2554,6 +2585,21 @@ class CityPartitioner:
             total_area_hectares=total_area,
             coverage_percent=coverage,
             total_superblocks=len(self.superblocks),
+            cell_kind_counts={
+                kind.value: sum(1 for sb in self.superblocks if sb.cell_kind == kind)
+                for kind in CellKind
+            },
+            oversized_superblocks=sum(
+                1
+                for sb in self.superblocks
+                if sb.cell_kind == CellKind.SUPERBLOCK and sb.size_status == SizeStatus.OVER_MAXIMUM
+            ),
+            undersized_superblocks=sum(
+                1
+                for sb in self.superblocks
+                if sb.cell_kind == CellKind.SUPERBLOCK
+                and sb.size_status == SizeStatus.UNDER_MINIMUM
+            ),
             total_modal_filters=total_filters,
             total_one_way_conversions=total_oneway,
             total_street_cuts=total_cuts,
