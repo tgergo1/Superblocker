@@ -29,19 +29,48 @@ from shapely.strtree import STRtree
 
 from app.models.schemas import (
     AccessTarget,
+    ActiveModeRequirement,
     AdministrativeBoundary,
     AnalysisEvidence,
+    ApprovalType,
+    AreaExclusion,
+    AssignmentComparison,
+    AssignmentSettings,
     BoundingBox,
     CityPartition,
     Coordinates,
+    DataQualityMetrics,
+    DemandModel,
     EnforcedSuperblock,
     EntryPoint,
+    ImpactValidationSummary,
+    NetworkAuthorityMode,
+    OperationalRequirement,
     PartitionProgress,
     PlanReadiness,
+    PlanStage,
+    ReadinessGate,
     StreetModification,
+    StudyAreaMode,
+    TrafficImpactSettings,
+    TrafficObservation,
+    TurnModelMode,
+    TurnRestriction,
     UnreachableAccessTarget,
+    VehicleClass,
 )
+from app.services.assignment.network_assignment import (
+    NetworkAssignmentEngine,
+    calibrate_assignment,
+)
+from app.services.constraint.active_mode_validator import ActiveModeValidator
 from app.services.constraint.constraint_enforcer import ConstraintEnforcer
+from app.services.constraint.operational_validator import OperationalValidator
+from app.services.impact.boundary_impact import (
+    BoundaryImpactEstimator,
+    SuperblockImpactInput,
+)
+from app.services.network.turn_graph import TurnGraphBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +115,36 @@ class SuperblockCell:
     entry_nodes: list[int]
 
 
-MIN_MEASURED_EDGE_COVERAGE_PERCENT = 80.0
+MIN_COMPLETE_COVERAGE_PERCENT = 99.5
+MIN_AUTHORITATIVE_NETWORK_COVERAGE_PERCENT = 95.0
+MIN_DIRECTIONAL_TRAFFIC_COVERAGE_PERCENT = 90.0
+MIN_PEAK_PERIOD_COVERAGE_PERCENT = 90.0
+MIN_TURN_COVERAGE_PERCENT = 80.0
+MIN_LANE_COVERAGE_PERCENT = 90.0
+MIN_SIGNAL_COVERAGE_PERCENT = 90.0
+MIN_ACCESS_ENTRANCE_COVERAGE_PERCENT = 99.5
+MIN_TRANSIT_COVERAGE_PERCENT = 90.0
+MIN_EMERGENCY_COVERAGE_PERCENT = 90.0
+MIN_CALIBRATION_GEH_PASS_PERCENT = 85.0
+
+ENGINEERING_APPROVALS = {
+    ApprovalType.TRANSPORT_ENGINEERING,
+    ApprovalType.SITE_INSPECTION,
+    ApprovalType.ACCESSIBILITY_REVIEW,
+    ApprovalType.TRANSIT_OPERATOR_REVIEW,
+    ApprovalType.EMERGENCY_SERVICES_REVIEW,
+}
+PILOT_APPROVALS = ENGINEERING_APPROVALS | {
+    ApprovalType.ROAD_MANAGER_APPROVAL,
+    ApprovalType.TRANSPORT_AUTHORITY_APPROVAL,
+    ApprovalType.ENVIRONMENTAL_SCREENING,
+    ApprovalType.PUBLIC_CONSULTATION_RECORD,
+    ApprovalType.PILOT_MONITORING_PLAN,
+}
+PERMANENT_APPROVALS = PILOT_APPROVALS | {
+    ApprovalType.PILOT_EVALUATION,
+    ApprovalType.PERMANENT_WORKS_APPROVAL,
+}
 
 
 def assess_plan_readiness(
@@ -96,64 +154,235 @@ def assess_plan_readiness(
     modeled_directional_validation_passed: bool,
     validated_target_count: int,
     total_unreachable_targets: int,
-    review_types: set[str] | None = None,
+    coverage_percent: float = 0.0,
+    verified_approval_types: set[ApprovalType] | None = None,
 ) -> PlanReadiness:
-    """Evaluate the implementation gate from immutable plan evidence."""
-    reviews = review_types or set()
-    blockers: list[str] = []
-    if not has_boundary:
-        blockers.append("Exact administrative boundary is missing")
-    if evidence.traffic_mode != "measured_volume":
-        blockers.append("Measured traffic observations are missing or do not match the network")
-    elif evidence.measured_edge_coverage_percent < MIN_MEASURED_EDGE_COVERAGE_PERCENT:
-        blockers.append(
-            "Measured traffic coverage is "
-            f"{evidence.measured_edge_coverage_percent:.1f}%; at least "
-            f"{MIN_MEASURED_EDGE_COVERAGE_PERCENT:.0f}% of physical road length is required"
-        )
-    if not evidence.access_dataset_complete:
-        blockers.append("Complete authoritative address/parcel access dataset is missing")
-    elif validated_target_count != evidence.access_target_count:
-        blockers.append("Some authoritative access targets fall outside generated cells")
-    if total_unreachable_targets:
-        blockers.append("One or more authoritative access targets are unreachable in the model")
-    if not modeled_directional_validation_passed:
-        blockers.append("Modeled directional validation has not passed for every generated cell")
-    if "transport_engineering" not in reviews:
-        blockers.append("Transport-engineering review is pending")
-    if "site_inspection" not in reviews:
-        blockers.append("On-site inspection is pending")
+    """Evaluate progressive gates without inferring professional approval."""
+    approvals = verified_approval_types or set()
+    gates: list[ReadinessGate] = []
 
-    implementation_ready = not blockers
-    evidence_complete = (
-        has_boundary
-        and evidence.traffic_mode == "measured_volume"
-        and evidence.measured_edge_coverage_percent >= MIN_MEASURED_EDGE_COVERAGE_PERCENT
-        and evidence.access_dataset_complete
-        and validated_target_count == evidence.access_target_count
-        and not total_unreachable_targets
-        and modeled_directional_validation_passed
+    topology_blockers: list[str] = []
+    if not has_boundary:
+        topology_blockers.append("An exact study-area polygon is missing")
+    if evidence.turn_model_mode != TurnModelMode.TURN_EXPANDED:
+        topology_blockers.append("The network is edge-only; turn movements are not modeled")
+    accounted_coverage = min(100.0, coverage_percent)
+    if accounted_coverage < MIN_COMPLETE_COVERAGE_PERCENT:
+        topology_blockers.append(
+            f"Only {accounted_coverage:.1f}% of eligible physical road length is assigned to a "
+            "generated cell, boundary corridor, or reviewed exclusion; "
+            f"at least {MIN_COMPLETE_COVERAGE_PERCENT:.1f}% is required"
+        )
+    if not modeled_directional_validation_passed:
+        topology_blockers.append(
+            "Turn-aware directional validation has not passed for every generated cell"
+        )
+    gates.append(
+        ReadinessGate(
+            stage=PlanStage.TOPOLOGY_CANDIDATE,
+            passed=not topology_blockers,
+            blockers=topology_blockers,
+        )
     )
-    status = (
-        "implementation_ready"
-        if implementation_ready
-        else "review_pending"
-        if evidence_complete
-        else "model_only"
+
+    data_blockers: list[str] = []
+    if evidence.study_area_mode != StudyAreaMode.FUNCTIONAL_URBAN_AREA:
+        data_blockers.append("Demand and spillover are not modeled over a functional urban area")
+    if evidence.network_authority_mode != NetworkAuthorityMode.AUTHORITATIVE_CONFLATED:
+        data_blockers.append("The street network is not conflated with an authoritative register")
+    if evidence.traffic_mode != "measured_volume":
+        data_blockers.append("Measured time-dependent traffic observations are missing")
+    quality = evidence.data_quality
+    if quality.authoritative_network_coverage_percent < MIN_AUTHORITATIVE_NETWORK_COVERAGE_PERCENT:
+        data_blockers.append(
+            "Authoritative road-network coverage is "
+            f"{quality.authoritative_network_coverage_percent:.1f}%; "
+            f"{MIN_AUTHORITATIVE_NETWORK_COVERAGE_PERCENT:.0f}% is required"
+        )
+    if quality.directional_traffic_coverage_percent < MIN_DIRECTIONAL_TRAFFIC_COVERAGE_PERCENT:
+        data_blockers.append(
+            "Directional traffic coverage is "
+            f"{quality.directional_traffic_coverage_percent:.1f}%; "
+            f"{MIN_DIRECTIONAL_TRAFFIC_COVERAGE_PERCENT:.0f}% is required"
+        )
+    if quality.peak_period_coverage_percent < MIN_PEAK_PERIOD_COVERAGE_PERCENT:
+        data_blockers.append(
+            f"Peak-period coverage is below {MIN_PEAK_PERIOD_COVERAGE_PERCENT:.0f}%"
+        )
+    if quality.turning_movement_coverage_percent < MIN_TURN_COVERAGE_PERCENT:
+        data_blockers.append(f"Turning-movement coverage is below {MIN_TURN_COVERAGE_PERCENT:.0f}%")
+    if quality.lane_coverage_percent < MIN_LANE_COVERAGE_PERCENT:
+        data_blockers.append(f"Directional lane coverage is below {MIN_LANE_COVERAGE_PERCENT:.0f}%")
+    if quality.signal_coverage_percent < MIN_SIGNAL_COVERAGE_PERCENT:
+        data_blockers.append(f"Signal-control coverage is below {MIN_SIGNAL_COVERAGE_PERCENT:.0f}%")
+    if not evidence.access_dataset_complete:
+        data_blockers.append("Complete authoritative entrance/access evidence is missing")
+    elif validated_target_count != evidence.access_target_count:
+        data_blockers.append("Some authoritative access targets fall outside generated cells")
+    if quality.access_entrance_coverage_percent < MIN_ACCESS_ENTRANCE_COVERAGE_PERCENT:
+        data_blockers.append(
+            f"Surveyed entrance coverage is below {MIN_ACCESS_ENTRANCE_COVERAGE_PERCENT:.1f}%"
+        )
+    if quality.transit_coverage_percent < MIN_TRANSIT_COVERAGE_PERCENT:
+        data_blockers.append(
+            f"Transit operations coverage is below {MIN_TRANSIT_COVERAGE_PERCENT:.0f}%"
+        )
+    if quality.emergency_coverage_percent < MIN_EMERGENCY_COVERAGE_PERCENT:
+        data_blockers.append(
+            f"Emergency-service coverage is below {MIN_EMERGENCY_COVERAGE_PERCENT:.0f}%"
+        )
+    if total_unreachable_targets:
+        data_blockers.append("One or more authoritative access targets are unreachable")
+    required_categories = {
+        "road_network",
+        "traffic",
+        "demand",
+        "turns_signals",
+        "access",
+        "transit",
+        "emergency",
+        "freight_curb",
+        "active_modes",
+        "crashes_safety",
+        "environment",
+        "demographics_equity",
+        "planning_constraints",
+    }
+    qualified_categories = {
+        manifest.category
+        for manifest in evidence.dataset_manifests
+        if manifest.complete and manifest.quality_score >= 0.8
+    }
+    for category in sorted(required_categories - qualified_categories):
+        data_blockers.append(f"Qualified {category.replace('_', ' ')} dataset is missing")
+    gates.append(
+        ReadinessGate(
+            stage=PlanStage.DATA_QUALIFIED,
+            passed=not topology_blockers and not data_blockers,
+            blockers=data_blockers,
+        )
     )
+
+    calibration_blockers: list[str] = []
+    calibration = evidence.baseline_calibration
+    if calibration is None or not calibration.validated:
+        calibration_blockers.append("An independently validated baseline calibration is missing")
+    else:
+        if not calibration.holdout_dataset_ids:
+            calibration_blockers.append("Calibration has no independent holdout dataset")
+        if calibration.geh_under_5_percent < MIN_CALIBRATION_GEH_PASS_PERCENT:
+            calibration_blockers.append(
+                f"Calibration GEH pass rate is below {MIN_CALIBRATION_GEH_PASS_PERCENT:.0f}%"
+            )
+        if calibration.stochastic_runs < 5:
+            calibration_blockers.append("Calibration contains fewer than five stochastic runs")
+    gates.append(
+        ReadinessGate(
+            stage=PlanStage.BASELINE_CALIBRATED,
+            passed=gates[-1].passed and not calibration_blockers,
+            blockers=calibration_blockers,
+        )
+    )
+
+    impact_blockers: list[str] = []
+    impact = evidence.impact_validation
+    if impact is None or not impact.all_required_checks_passed():
+        impact_blockers.append(
+            "Boundary capacity, spillover, service, safety, environment, equity, and uncertainty checks have not all passed"
+        )
+    gates.append(
+        ReadinessGate(
+            stage=PlanStage.IMPACT_VALIDATED,
+            passed=gates[-1].passed and not impact_blockers,
+            blockers=impact_blockers,
+        )
+    )
+
+    engineering_missing = ENGINEERING_APPROVALS - approvals
+    engineering_blockers = [
+        f"Verified {approval.value.replace('_', ' ')} artifact is missing"
+        for approval in sorted(engineering_missing, key=lambda value: value.value)
+    ]
+    gates.append(
+        ReadinessGate(
+            stage=PlanStage.ENGINEERING_REVIEWED,
+            passed=gates[-1].passed and not engineering_blockers,
+            blockers=engineering_blockers,
+        )
+    )
+
+    pilot_missing = PILOT_APPROVALS - approvals
+    pilot_blockers = [
+        f"Verified {approval.value.replace('_', ' ')} artifact is missing"
+        for approval in sorted(pilot_missing, key=lambda value: value.value)
+    ]
+    gates.append(
+        ReadinessGate(
+            stage=PlanStage.APPROVED_FOR_PILOT,
+            passed=gates[-1].passed and not pilot_blockers,
+            blockers=pilot_blockers,
+        )
+    )
+
+    permanent_missing = PERMANENT_APPROVALS - approvals
+    permanent_blockers = [
+        f"Verified {approval.value.replace('_', ' ')} artifact is missing"
+        for approval in sorted(permanent_missing, key=lambda value: value.value)
+    ]
+    gates.append(
+        ReadinessGate(
+            stage=PlanStage.APPROVED_FOR_PERMANENT_WORKS,
+            passed=gates[-1].passed and not permanent_blockers,
+            blockers=permanent_blockers,
+        )
+    )
+
+    highest = PlanStage.MODEL_ONLY
+    for gate in gates:
+        if not gate.passed:
+            break
+        highest = gate.stage
+    next_gate = next((gate for gate in gates if not gate.passed), None)
+    blockers = list(next_gate.blockers) if next_gate else []
     return PlanReadiness(
-        status=status,
-        implementation_ready=implementation_ready,
+        status=highest,
+        highest_completed_stage=highest,
+        ready_for_engineering_review=next(
+            gate.passed for gate in gates if gate.stage == PlanStage.IMPACT_VALIDATED
+        ),
+        approved_for_pilot=next(
+            gate.passed for gate in gates if gate.stage == PlanStage.APPROVED_FOR_PILOT
+        ),
+        approved_for_permanent_works=next(
+            gate.passed for gate in gates if gate.stage == PlanStage.APPROVED_FOR_PERMANENT_WORKS
+        ),
+        implementation_ready=next(
+            gate.passed for gate in gates if gate.stage == PlanStage.APPROVED_FOR_PERMANENT_WORKS
+        ),
         modeled_directional_validation_passed=modeled_directional_validation_passed,
-        transport_engineering_reviewed="transport_engineering" in reviews,
-        site_inspection_reviewed="site_inspection" in reviews,
+        transport_engineering_reviewed=ApprovalType.TRANSPORT_ENGINEERING in approvals,
+        site_inspection_reviewed=ApprovalType.SITE_INSPECTION in approvals,
+        verified_approval_types=sorted(approvals, key=lambda value: value.value),
+        gates=gates,
         blockers=blockers,
     )
 
 
 def compute_plan_id(partition: CityPartition) -> str:
-    """Return a stable digest binding reviews to this exact generated plan."""
-    payload = partition.model_dump(exclude={"plan_id", "readiness"})
+    """Bind interventions and input provenance while allowing signed results to attach."""
+    payload = partition.model_dump(
+        exclude={
+            "plan_id": True,
+            "readiness": True,
+            "approval_artifacts": True,
+            "evidence_artifacts": True,
+            "evidence": {
+                "data_quality": True,
+                "baseline_calibration": True,
+                "impact_validation": True,
+            },
+        }
+    )
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -190,6 +419,16 @@ class CityPartitioner:
         access_targets: list[AccessTarget] | None = None,
         access_dataset_source: str | None = None,
         access_dataset_complete: bool = False,
+        evidence_context: AnalysisEvidence | None = None,
+        turn_restrictions: list[TurnRestriction] | None = None,
+        area_exclusions: list[AreaExclusion] | None = None,
+        operational_requirements: list[OperationalRequirement] | None = None,
+        active_mode_requirements: list[ActiveModeRequirement] | None = None,
+        active_mode_graphs: dict[str, nx.MultiDiGraph] | None = None,
+        traffic_observations: list[TrafficObservation] | None = None,
+        demand_model: DemandModel | None = None,
+        assignment_settings: AssignmentSettings | None = None,
+        traffic_impact_settings: TrafficImpactSettings | None = None,
         progress_callback: Callable[[PartitionProgress], None] | None = None,
     ):
         """
@@ -236,6 +475,17 @@ class CityPartitioner:
         )
         self.access_dataset_source = access_dataset_source
         self.access_dataset_complete = access_dataset_complete
+        self.evidence_context = evidence_context
+        self.turn_restrictions = turn_restrictions or []
+        self.area_exclusions = area_exclusions or []
+        self.operational_requirements = operational_requirements or []
+        self.active_mode_requirements = active_mode_requirements or []
+        self.active_mode_graphs = active_mode_graphs or {}
+        self.traffic_observations = traffic_observations or []
+        self.demand_model = demand_model
+        self.assignment_settings = assignment_settings or AssignmentSettings()
+        self.traffic_impact_settings = traffic_impact_settings or TrafficImpactSettings()
+        self._impact_inputs: list[SuperblockImpactInput] = []
         self.progress_callback = progress_callback
 
         # Convert graph to GeoDataFrames for spatial operations
@@ -480,10 +730,11 @@ class CityPartitioner:
 
             area_ha = self._calculate_area_hectares(polygon)
 
-            # Skip very small or very large polygons
-            if area_ha < 0.5:  # Less than 0.5 hectare - too small
-                continue
-            if area_ha > 100:  # More than 100 hectares - too large (probably exterior)
+            # The administrative boundary closes the outer face, so every
+            # non-empty polygon is part of the accounting surface. Size is an
+            # optimization objective below, not a reason to silently drop a
+            # district and leave its streets unassigned.
+            if area_ha <= 0:
                 continue
 
             # Find boundary and interior edges
@@ -898,6 +1149,17 @@ class CityPartitioner:
             superblock = self._enforce_cell_constraints(cell, i)
             if superblock is not None:
                 self.superblocks.append(superblock)
+                self._impact_inputs.append(
+                    SuperblockImpactInput(
+                        superblock_id=superblock.id,
+                        interior_edges=list(cell.interior_edges),
+                        boundary_edges=list(cell.boundary_edges),
+                        entry_sectors={
+                            entry.node_id: entry.sector for entry in superblock.entry_points
+                        },
+                        modifications=list(superblock.modifications),
+                    )
+                )
 
     def _enforce_cell_constraints(
         self, cell: SuperblockCell, index: int
@@ -906,8 +1168,12 @@ class CityPartitioner:
         Enforce constraints for a single cell and create an EnforcedSuperblock.
         """
         if not cell.entry_nodes:
-            # No vehicle connection to the boundary network is available.
-            return self._create_simple_superblock(cell, index)
+            # A road-bearing cell without a connection to the boundary network
+            # is not a valid access design. Empty faces are accounting areas,
+            # not superblocks.
+            if not cell.interior_edges:
+                return None
+            return self._create_simple_superblock(cell, index, constraint_validated=False)
 
         # Build interior subgraph
         interior_graph = self._build_interior_subgraph(cell)
@@ -962,6 +1228,11 @@ class CityPartitioner:
             enforcer.sectors,
             access_targets,
         )
+        turn_valid, vehicle_class_validation = self._validate_turn_aware_constraints(
+            interior_graph,
+            modifications,
+            enforcer.sectors.entry_points_by_sector if enforcer.sectors else {},
+        )
 
         # Create EnforcedSuperblock
         return EnforcedSuperblock(
@@ -972,10 +1243,12 @@ class CityPartitioner:
             boundary_roads=self._collect_boundary_osm_ids(cell.boundary_edges),
             entry_points=entry_points,
             modifications=modifications,
-            constraint_validated=len(violations) == 0,
+            constraint_validated=len(violations) == 0 and turn_valid,
             all_addresses_reachable=None,
             unreachable_addresses=[],
-            modeled_directional_validation_passed=len(violations) == 0,
+            modeled_directional_validation_passed=turn_valid,
+            turn_aware_validation_passed=turn_valid,
+            vehicle_class_validation=vehicle_class_validation,
             access_target_count=len(access_targets),
             all_access_targets_reachable=(
                 len(unreachable_targets) == 0 if access_targets else None
@@ -1040,6 +1313,12 @@ class CityPartitioner:
             sectors,
             access_targets,
         )
+        turn_valid, vehicle_class_validation = self._validate_turn_aware_constraints(
+            interior_graph,
+            [],
+            sectors.entry_points_by_sector if sectors else {},
+        )
+        turn_valid = turn_valid and constraint_validated
 
         return EnforcedSuperblock(
             id=f"sb_{index}_{uuid.uuid4().hex[:8]}",
@@ -1049,10 +1328,12 @@ class CityPartitioner:
             boundary_roads=self._collect_boundary_osm_ids(cell.boundary_edges),
             entry_points=entry_points,
             modifications=[],
-            constraint_validated=constraint_validated,
+            constraint_validated=turn_valid,
             all_addresses_reachable=None,
             unreachable_addresses=[],
-            modeled_directional_validation_passed=constraint_validated,
+            modeled_directional_validation_passed=turn_valid,
+            turn_aware_validation_passed=turn_valid,
+            vehicle_class_validation=vehicle_class_validation,
             access_target_count=len(access_targets),
             all_access_targets_reachable=(
                 len(unreachable_targets) == 0 if access_targets else None
@@ -1064,6 +1345,22 @@ class CityPartitioner:
             street_cut_count=0,
             two_way_conversion_count=0,
         )
+
+    def _validate_turn_aware_constraints(
+        self,
+        interior_graph: nx.MultiDiGraph,
+        modifications: list[StreetModification],
+        entry_points_by_sector: dict[int, list[int]],
+    ) -> tuple[bool, dict[str, bool]]:
+        """Validate legal movements independently for important vehicle classes."""
+        if not entry_points_by_sector:
+            return True, {VehicleClass.CAR.value: True, VehicleClass.EMERGENCY.value: True}
+        builder = TurnGraphBuilder(interior_graph, self.turn_restrictions)
+        results: dict[str, bool] = {}
+        for vehicle_class in (VehicleClass.CAR, VehicleClass.EMERGENCY):
+            turn_graph = builder.build(vehicle_class, modifications)
+            results[vehicle_class.value] = not turn_graph.sector_violations(entry_points_by_sector)
+        return results[VehicleClass.CAR.value], results
 
     def _boundary_road_id_for_node(self, cell: SuperblockCell, node_id: int) -> int:
         """Return a connected boundary way ID for an entry point when available."""
@@ -1131,66 +1428,28 @@ class CityPartitioner:
         sectors,
         access_targets: list[AccessTarget],
     ) -> list[UnreachableAccessTarget]:
-        """Validate explicit access targets instead of treating graph nodes as addresses."""
+        """Validate class-specific legal inbound and return paths to real entrances."""
         if not access_targets:
             return []
 
-        # Apply modifications
-        modified_graph = graph.copy()
-        for mod in modifications:
-            if mod.modification_type.value == "modal_filter":
-                # Remove edges
-                if modified_graph.has_edge(mod.u, mod.v):
-                    for k in list(modified_graph[mod.u][mod.v].keys()):
-                        modified_graph.remove_edge(mod.u, mod.v, k)
-                if modified_graph.has_edge(mod.v, mod.u):
-                    for k in list(modified_graph[mod.v][mod.u].keys()):
-                        modified_graph.remove_edge(mod.v, mod.u, k)
-            elif mod.modification_type.value == "one_way" and mod.direction:
-                if mod.direction == "u_to_v":
-                    if modified_graph.has_edge(mod.v, mod.u):
-                        for k in list(modified_graph[mod.v][mod.u].keys()):
-                            modified_graph.remove_edge(mod.v, mod.u, k)
-                else:
-                    if modified_graph.has_edge(mod.u, mod.v):
-                        for k in list(modified_graph[mod.u][mod.v].keys()):
-                            modified_graph.remove_edge(mod.u, mod.v, k)
-            elif mod.modification_type.value == "full_closure":
-                if modified_graph.has_edge(mod.u, mod.v):
-                    for k in list(modified_graph[mod.u][mod.v].keys()):
-                        modified_graph.remove_edge(mod.u, mod.v, k)
-                if modified_graph.has_edge(mod.v, mod.u):
-                    for k in list(modified_graph[mod.v][mod.u].keys()):
-                        modified_graph.remove_edge(mod.v, mod.u, k)
-            elif mod.modification_type.value == "two_way":
-                if not graph.has_edge(mod.u, mod.v):
-                    continue
-                edge_data = graph[mod.u][mod.v].get(mod.key)
-                if edge_data is None:
-                    edge_data = next(iter(graph[mod.u][mod.v].values()), None)
-                if edge_data is not None and not modified_graph.has_edge(mod.v, mod.u):
-                    modified_graph.add_edge(mod.v, mod.u, **dict(edge_data))
-
-        # A local destination must be reachable from an entry and be able to
-        # return to an entry. This tests modeled vehicle access in both directions.
-        reachable_from_entries = set()
-        can_reach_entries = set()
-        for entry in entry_nodes:
-            if entry in modified_graph.nodes:
-                try:
-                    reachable_from_entries.update(nx.descendants(modified_graph, entry))
-                    reachable_from_entries.add(entry)
-                    can_reach_entries.update(nx.ancestors(modified_graph, entry))
-                    can_reach_entries.add(entry)
-                except nx.NetworkXError:
-                    pass
-
         unreachable: list[UnreachableAccessTarget] = []
-        graph_nodes = list(modified_graph.nodes(data=True))
+        graph_nodes = list(graph.nodes(data=True))
         node_points = [
             Point(float(data.get("x", 0)), float(data.get("y", 0))) for _node, data in graph_nodes
         ]
         node_tree = STRtree(node_points) if node_points else None
+        requested_classes = {
+            VehicleClass.CAR if vehicle_class == VehicleClass.ALL_MOTOR else vehicle_class
+            for target in access_targets
+            for vehicle_class in target.permitted_vehicle_classes
+        }
+        turn_graphs = {
+            vehicle_class: TurnGraphBuilder(graph, self.turn_restrictions).build(
+                vehicle_class,
+                modifications,
+            )
+            for vehicle_class in requested_classes
+        }
         for target in access_targets:
             snapped_node = None
             if node_tree is not None:
@@ -1199,12 +1458,25 @@ class CityPartitioner:
                 )
                 snapped_node = graph_nodes[nearest_index][0]
 
-            is_reachable = (
-                snapped_node is not None
-                and snapped_node in reachable_from_entries
-                and snapped_node in can_reach_entries
-            )
-            if is_reachable:
+            failed_vehicle_classes: list[VehicleClass] = []
+            for requested_class in target.permitted_vehicle_classes:
+                vehicle_class = (
+                    VehicleClass.CAR
+                    if requested_class == VehicleClass.ALL_MOTOR
+                    else requested_class
+                )
+                turn_graph = turn_graphs[vehicle_class]
+                inbound = snapped_node is not None and any(
+                    entry == snapped_node or turn_graph.has_path_between_nodes(entry, snapped_node)
+                    for entry in entry_nodes
+                )
+                outbound = snapped_node is not None and any(
+                    entry == snapped_node or turn_graph.has_path_between_nodes(snapped_node, entry)
+                    for entry in entry_nodes
+                )
+                if not inbound or not outbound:
+                    failed_vehicle_classes.append(requested_class)
+            if not failed_vehicle_classes:
                 continue
 
             nearest_sector = None
@@ -1226,10 +1498,12 @@ class CityPartitioner:
                     coordinates=target.coordinates,
                     snapped_node_id=snapped_node,
                     nearest_entry_sector=nearest_sector,
+                    failed_vehicle_classes=failed_vehicle_classes,
                     reason=(
                         "No entry point connects this cell to the boundary network"
                         if not entry_nodes
-                        else "No modeled inbound-and-return vehicle path after modifications"
+                        else "No legal inbound-and-return path for: "
+                        + ", ".join(vehicle_class.value for vehicle_class in failed_vehicle_classes)
                     ),
                 )
             )
@@ -1277,19 +1551,93 @@ class CityPartitioner:
 
         return deduped
 
+    def _calculate_eligible_road_coverage(
+        self,
+        covered_geometry,
+        excluded_geometry,
+    ) -> tuple[float, float, float, list[int]]:
+        """Account for every physical road as a cell road or boundary corridor."""
+        arterial_physical = {(min(u, v), max(u, v), key) for u, v, key in self.arterial_edges}
+        physical_edges: dict[tuple[int, int, int], tuple[float, bool, list[int]]] = {}
+        for u, v, key, data in self.graph.edges(keys=True, data=True):
+            physical_key = (min(int(u), int(v)), max(int(u), int(v)), int(key))
+            length = max(0.0, float(data.get("length", 0) or 0))
+            geometry = data.get("geometry")
+            if geometry is None:
+                u_data = self.graph.nodes.get(u, {})
+                v_data = self.graph.nodes.get(v, {})
+                if not {"x", "y"}.issubset(u_data) or not {"x", "y"}.issubset(v_data):
+                    continue
+                geometry = LineString([(u_data["x"], u_data["y"]), (v_data["x"], v_data["y"])])
+            midpoint = geometry.interpolate(0.5, normalized=True)
+            accounted = (
+                physical_key in arterial_physical
+                or covered_geometry.covers(midpoint)
+                or excluded_geometry.covers(midpoint)
+            )
+            osm_ids = self._normalize_osm_ids(data.get("osmid"))
+            previous = physical_edges.get(physical_key)
+            if previous is None or length > previous[0]:
+                physical_edges[physical_key] = (length, accounted, osm_ids)
+
+        eligible_length_m = sum(item[0] for item in physical_edges.values())
+        accounted_length_m = sum(
+            length for length, accounted, _osmids in physical_edges.values() if accounted
+        )
+        coverage_percent = (
+            accounted_length_m / eligible_length_m * 100 if eligible_length_m else 0.0
+        )
+        unaccounted_ids = sorted(
+            {
+                osmid
+                for _length, accounted, osmids in physical_edges.values()
+                if not accounted
+                for osmid in osmids
+            }
+        )
+        return (
+            eligible_length_m / 1000,
+            accounted_length_m / 1000,
+            min(100.0, coverage_percent),
+            unaccounted_ids,
+        )
+
     def _build_result(self) -> CityPartition:
         """Build the final CityPartition result."""
         # Calculate covered area from the geometric union rather than summing
-        # cells. This keeps overlapping boundaries from inflating coverage.
+        # successfully represented superblocks. This keeps failed/empty faces
+        # from being presented as completed plan area.
         covered_geometry = (
-            unary_union([cell.polygon for cell in self.cells]).intersection(self.analysis_polygon)
-            if self.cells
+            unary_union([shape(item.geometry) for item in self.superblocks]).intersection(
+                self.analysis_polygon
+            )
+            if self.superblocks
             else Polygon()
         )
         total_area = self._calculate_area_hectares(covered_geometry)
         analysis_area = self._calculate_area_hectares(self.analysis_polygon)
 
         coverage = min(100.0, (total_area / analysis_area * 100)) if analysis_area > 0 else 0
+        reviewed_exclusion_geometries = [
+            shape(exclusion.geometry.model_dump()).intersection(self.analysis_polygon)
+            for exclusion in self.area_exclusions
+            if exclusion.reviewed
+        ]
+        excluded_geometry = (
+            unary_union(reviewed_exclusion_geometries)
+            if reviewed_exclusion_geometries
+            else Polygon()
+        )
+        excluded_area = self._calculate_area_hectares(excluded_geometry)
+        excluded_area_percent = (
+            min(100.0, excluded_area / analysis_area * 100) if analysis_area > 0 else 0.0
+        )
+        (
+            eligible_road_length_km,
+            accounted_road_length_km,
+            eligible_road_coverage_percent,
+            unaccounted_road_osm_ids,
+        ) = self._calculate_eligible_road_coverage(covered_geometry, excluded_geometry)
 
         total_filters = sum(sb.modal_filter_count for sb in self.superblocks)
         total_oneway = sum(sb.one_way_conversion_count for sb in self.superblocks)
@@ -1298,6 +1646,19 @@ class CityPartitioner:
         total_unreachable_targets = sum(
             len(sb.unreachable_access_targets) for sb in self.superblocks
         )
+        all_modifications = [
+            modification
+            for superblock in self.superblocks
+            for modification in superblock.modifications
+        ]
+        operational_validation = OperationalValidator(
+            self.graph,
+            self.turn_restrictions,
+        ).validate(self.operational_requirements, all_modifications)
+        active_mode_validation = ActiveModeValidator(self.active_mode_graphs).validate(
+            self.active_mode_requirements,
+            all_modifications,
+        )
 
         # Arterial road OSM IDs
         arterial_osm_ids = []
@@ -1305,6 +1666,32 @@ class CityPartitioner:
             if self.graph.has_edge(u, v, key):
                 osmid = self.graph[u][v][key].get("osmid", 0)
                 arterial_osm_ids.extend(self._normalize_osm_ids(osmid))
+
+        assignment_comparison = AssignmentComparison(
+            limitations=[
+                "No time-sliced OD demand model was supplied; network-wide rerouting was not run."
+            ]
+        )
+        if self.demand_model is not None:
+            assignment_comparison = NetworkAssignmentEngine(
+                self.graph,
+                self.turn_restrictions,
+            ).compare(
+                self.demand_model,
+                all_modifications,
+                set(arterial_osm_ids),
+                self.assignment_settings,
+            )
+
+        traffic_impact = None
+        if self._impact_inputs:
+            self._report_progress("impact", 97, "Estimating boundary-road traffic impact...")
+            try:
+                traffic_impact = BoundaryImpactEstimator(
+                    self.graph, self.traffic_impact_settings
+                ).estimate(self._impact_inputs)
+            except Exception as error:  # Screening output must not block the plan.
+                logger.warning("Traffic impact estimate failed: %s", error)
 
         modeled_directional_validation_passed = bool(self.superblocks) and all(
             sb.modeled_directional_validation_passed for sb in self.superblocks
@@ -1331,7 +1718,102 @@ class CityPartitioner:
             access_target_count=len(self.access_targets),
             access_dataset_source=self.access_dataset_source,
             access_dataset_complete=self.access_dataset_complete,
+            study_area_mode=(
+                self.evidence_context.study_area_mode
+                if self.evidence_context
+                else StudyAreaMode.ADMINISTRATIVE_POLYGON
+                if self.boundary
+                else StudyAreaMode.BOUNDING_BOX
+            ),
+            network_authority_mode=(
+                self.evidence_context.network_authority_mode
+                if self.evidence_context
+                else NetworkAuthorityMode.OSM_BOOTSTRAP
+            ),
+            turn_model_mode=TurnModelMode.TURN_EXPANDED,
+            dataset_manifests=(
+                self.evidence_context.dataset_manifests if self.evidence_context else []
+            ),
+            data_quality=(
+                self.evidence_context.data_quality
+                if self.evidence_context
+                else DataQualityMetrics()
+            ),
+            excluded_area_percent=excluded_area_percent,
+            baseline_calibration=(
+                self.evidence_context.baseline_calibration if self.evidence_context else None
+            ),
+            impact_validation=(
+                self.evidence_context.impact_validation if self.evidence_context else None
+            ),
         )
+        if (
+            self.demand_model is not None
+            and assignment_comparison.baseline is not None
+            and evidence.baseline_calibration is None
+        ):
+            evidence.baseline_calibration = calibrate_assignment(
+                assignment_comparison.baseline,
+                self.traffic_observations,
+                model_version=f"{self.demand_model.model_id}:{self.demand_model.version}",
+            )
+        if evidence.impact_validation is None:
+            maximum_queue = max(
+                (
+                    flow.estimated_queue_length_m
+                    for flow in (
+                        assignment_comparison.planned.edge_flows
+                        if assignment_comparison.planned
+                        else []
+                    )
+                ),
+                default=None,
+            )
+            evidence.impact_validation = ImpactValidationSummary(
+                validated=False,
+                scenario_id=(
+                    assignment_comparison.planned.run_id if assignment_comparison.planned else None
+                ),
+                boundary_capacity_passed=assignment_comparison.boundary_capacity_passed,
+                spillover_passed=assignment_comparison.spillover_passed,
+                transit_passed=all(
+                    result.passed
+                    for result in operational_validation.results
+                    if result.service_type == "transit_operation"
+                )
+                and "transit_operation" not in operational_validation.missing_service_types,
+                emergency_passed=all(
+                    result.passed
+                    for result in operational_validation.results
+                    if result.service_type == "emergency_response"
+                )
+                and "emergency_response" not in operational_validation.missing_service_types,
+                freight_passed=all(
+                    result.passed
+                    for result in operational_validation.results
+                    if result.service_type in {"freight_delivery", "refuse_collection"}
+                )
+                and not {
+                    "freight_delivery",
+                    "refuse_collection",
+                }.intersection(operational_validation.missing_service_types),
+                accessibility_passed=(
+                    self.access_dataset_complete and total_unreachable_targets == 0
+                ),
+                active_modes_passed=active_mode_validation.all_hard_constraints_passed,
+                maximum_volume_capacity_ratio=(
+                    assignment_comparison.maximum_boundary_volume_capacity_ratio
+                ),
+                maximum_queue_length_m=maximum_queue,
+                maximum_adjacent_road_volume_change_percent=(
+                    assignment_comparison.maximum_adjacent_road_volume_change_percent
+                ),
+                limitations=[
+                    *assignment_comparison.limitations,
+                    "Safety, environment, equity, and uncertainty modules have not supplied passing evidence.",
+                ],
+            )
+        evidence.data_quality.eligible_road_coverage_percent = eligible_road_coverage_percent
 
         readiness = assess_plan_readiness(
             evidence=evidence,
@@ -1339,6 +1821,7 @@ class CityPartitioner:
             modeled_directional_validation_passed=modeled_directional_validation_passed,
             validated_target_count=validated_target_count,
             total_unreachable_targets=total_unreachable_targets,
+            coverage_percent=eligible_road_coverage_percent,
         )
 
         partition = CityPartition(
@@ -1346,6 +1829,12 @@ class CityPartitioner:
             arterial_network=list(set(arterial_osm_ids)),
             bbox=self.bbox,
             boundary=self.boundary,
+            turn_restrictions=self.turn_restrictions,
+            area_exclusions=self.area_exclusions,
+            operational_validation=operational_validation,
+            active_mode_validation=active_mode_validation,
+            assignment_comparison=assignment_comparison,
+            traffic_impact=traffic_impact,
             evidence=evidence,
             readiness=readiness,
             total_area_hectares=total_area,
@@ -1357,6 +1846,10 @@ class CityPartitioner:
             total_unreachable_addresses=0,
             total_unreachable_access_targets=total_unreachable_targets,
             total_two_way_conversions=total_twoway,
+            eligible_road_length_km=eligible_road_length_km,
+            accounted_road_length_km=accounted_road_length_km,
+            eligible_road_coverage_percent=eligible_road_coverage_percent,
+            unaccounted_road_osm_ids=unaccounted_road_osm_ids,
         )
         partition.plan_id = compute_plan_id(partition)
         return partition

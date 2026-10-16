@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     partition_cache_max_entries: int = 8
     partition_cache_ttl_seconds: int = 3600
     admin_api_key: str | None = None
+    approval_signing_secret: str | None = None
+
+    # Durable registry and content-addressed object storage
+    registry_database_path: str = "state/superblocker.sqlite3"
+    registry_object_directory: str = "state/objects"
+    registry_max_upload_bytes: int = 104_857_600
+    simulation_work_directory: str = "state/simulations"
 
     # Cache settings
     cache_enabled: bool = True

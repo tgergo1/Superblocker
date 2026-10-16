@@ -14,14 +14,21 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from shapely.geometry import Point, shape
 
+from app.api.routes.registry import get_registry_store
 from app.core.config import get_settings
 from app.core.workload import guard_expensive_request
 from app.models.schemas import (
+    AnalysisEvidence,
     AnalysisRequest,
     AnalysisResponse,
+    AssuranceEvidenceType,
     BoundingBox,
+    CalibrationSummary,
     CityPartition,
     Coordinates,
+    DataQualityMetrics,
+    ImpactValidationSummary,
+    PartitionEvidenceRequest,
     PartitionProgress,
     PartitionRequest,
     PartitionResponse,
@@ -31,7 +38,9 @@ from app.models.schemas import (
     StreetNetworkRequest,
     StreetNetworkResponse,
 )
+from app.services.assurance.approvals import verify_approval_artifact, verify_evidence_artifact
 from app.services.detection.superblock_analyzer import SuperblockAnalyzer
+from app.services.network.conflation import NetworkConflator
 from app.services.osm_service import (
     get_street_network,
     get_street_network_graph,
@@ -424,6 +433,69 @@ partition_store = PartitionStore(
 )
 
 
+def _evidence_context(request: PartitionRequest) -> AnalysisEvidence:
+    """Build immutable request evidence before graph-derived values are added."""
+    access_mode = (
+        "authoritative_targets"
+        if request.access_dataset_complete
+        else "explicit_targets"
+        if request.access_targets
+        else "not_supplied"
+    )
+    return AnalysisEvidence(
+        boundary_mode=("administrative_polygon" if request.boundary else "bounding_box_fallback"),
+        traffic_mode=("measured_volume" if request.traffic_observations else "modeled_topology"),
+        traffic_observation_count=len(request.traffic_observations),
+        traffic_sources=sorted(
+            {observation.source for observation in request.traffic_observations}
+        ),
+        access_mode=access_mode,
+        access_target_count=len(request.access_targets),
+        access_dataset_source=request.access_dataset_source,
+        access_dataset_complete=request.access_dataset_complete,
+        study_area_mode=request.study_area_mode,
+        network_authority_mode=request.network_authority_mode,
+        turn_model_mode=request.turn_model_mode,
+        dataset_manifests=request.dataset_manifests,
+        # Unsigned caller-supplied quality percentages never advance a gate.
+        # Values computed during this run are filled by the partitioner; all
+        # remaining values require a signed DATA_QUALITY evidence artifact.
+        data_quality=DataQualityMetrics(),
+        excluded_area_percent=request.excluded_area_percent,
+        baseline_calibration=None,
+        impact_validation=None,
+    )
+
+
+def _validate_registered_dataset_manifests(request: PartitionRequest) -> None:
+    """Reject mutable or unregistered snapshots before an analysis can cite them."""
+    store = get_registry_store()
+    missing = []
+    mismatched = []
+    unverified = []
+    for manifest in request.dataset_manifests:
+        record = store.get_dataset(manifest.dataset_id)
+        if record is None:
+            missing.append(manifest.dataset_id)
+            continue
+        stored_manifest = record["manifest"]
+        if stored_manifest != manifest.model_dump(mode="json"):
+            mismatched.append(manifest.dataset_id)
+        if manifest.complete and not record["checksum_verified"]:
+            unverified.append(manifest.dataset_id)
+    if missing:
+        raise ValueError("dataset manifests are not registered: " + ", ".join(sorted(missing)))
+    if mismatched:
+        raise ValueError(
+            "dataset manifest checksums do not match registry snapshots: "
+            + ", ".join(sorted(mismatched))
+        )
+    if unverified:
+        raise ValueError(
+            "complete datasets lack verified immutable content: " + ", ".join(sorted(unverified))
+        )
+
+
 def run_partition_sync(
     bbox: BoundingBox,
     boundary,
@@ -437,8 +509,17 @@ def run_partition_sync(
     access_targets,
     access_dataset_source: str | None,
     access_dataset_complete: bool,
+    evidence_context: AnalysisEvidence,
+    turn_restrictions,
+    area_exclusions,
+    operational_requirements,
+    active_mode_requirements,
+    demand_model,
+    assignment_settings,
+    authoritative_road_segments,
     progress_queue: queue.Queue,
     cancel_event: threading.Event | None = None,
+    traffic_impact_settings=None,
 ):
     """
     Run city partitioning synchronously in a thread.
@@ -479,6 +560,39 @@ def run_partition_sync(
     try:
         # Fetch graph
         graph = loop.run_until_complete(get_street_network_graph(bbox, boundary=boundary))
+        if authoritative_road_segments:
+            graph, conflation = NetworkConflator().conflate(
+                graph,
+                authoritative_road_segments,
+            )
+            evidence_context.network_authority_mode = "authoritative_conflated"
+            evidence_context.data_quality.authoritative_network_coverage_percent = (
+                conflation.authoritative_network_coverage_percent
+            )
+            evidence_context.data_quality.lane_coverage_percent = conflation.lane_coverage_percent
+            evidence_context.data_quality.signal_coverage_percent = (
+                conflation.signal_coverage_percent
+            )
+        else:
+            evidence_context.network_authority_mode = "osm_bootstrap"
+        active_mode_graphs = {}
+        requested_network_types = {
+            "walk" if requirement.mode in {"walk", "wheel"} else "bike"
+            for requirement in active_mode_requirements
+        }
+        for network_type in sorted(requested_network_types):
+            mode_graph = loop.run_until_complete(
+                get_street_network_graph(
+                    bbox,
+                    network_type=network_type,
+                    boundary=boundary,
+                )
+            )
+            if network_type == "walk":
+                active_mode_graphs["walk"] = mode_graph
+                active_mode_graphs["wheel"] = mode_graph
+            else:
+                active_mode_graphs["bicycle"] = mode_graph
         traffic_evidence = apply_traffic_observations_to_graph(graph, traffic_observations)
 
         # Create partitioner
@@ -496,6 +610,16 @@ def run_partition_sync(
             access_targets=access_targets,
             access_dataset_source=access_dataset_source,
             access_dataset_complete=access_dataset_complete,
+            evidence_context=evidence_context,
+            turn_restrictions=turn_restrictions,
+            area_exclusions=area_exclusions,
+            operational_requirements=operational_requirements,
+            active_mode_requirements=active_mode_requirements,
+            active_mode_graphs=active_mode_graphs,
+            traffic_observations=traffic_observations,
+            demand_model=demand_model,
+            assignment_settings=assignment_settings,
+            traffic_impact_settings=traffic_impact_settings,
             progress_callback=progress_callback,
         )
 
@@ -545,6 +669,7 @@ async def partition_city(
         PartitionResponse with superblocks, arterial network, and statistics
     """
     try:
+        _validate_registered_dataset_manifests(request)
         logger.info(
             "Received /partition request (target=%.2f min=%.2f max=%.2f sectors=%d)",
             request.target_size_hectares,
@@ -571,11 +696,22 @@ async def partition_city(
             request.access_targets,
             request.access_dataset_source,
             request.access_dataset_complete,
+            _evidence_context(request),
+            request.turn_restrictions,
+            request.area_exclusions,
+            request.operational_requirements,
+            request.active_mode_requirements,
+            request.demand_model,
+            request.assignment_settings,
+            request.authoritative_road_segments,
             progress_queue,
             None,
+            request.traffic_impact_settings,
         )
 
         partition = result["partition"]
+        if partition.plan_id:
+            get_registry_store().register_plan(partition, actor_id="synchronous-analysis")
 
         # Cache the result for routing
         partition_store.put(partition, result["graph"], request.bbox)
@@ -606,6 +742,10 @@ async def partition_city_stream(
     Returns Server-Sent Events (SSE) with progress updates followed by final results.
     """
     progress_queue = queue.Queue(maxsize=100)
+    try:
+        _validate_registered_dataset_manifests(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     async def generate():
         loop = asyncio.get_running_loop()
@@ -628,8 +768,17 @@ async def partition_city_stream(
             request.access_targets,
             request.access_dataset_source,
             request.access_dataset_complete,
+            _evidence_context(request),
+            request.turn_restrictions,
+            request.area_exclusions,
+            request.operational_requirements,
+            request.active_mode_requirements,
+            request.demand_model,
+            request.assignment_settings,
+            request.authoritative_road_segments,
             progress_queue,
             cancel_event,
+            request.traffic_impact_settings,
         )
         logger.info("Partition streaming started")
 
@@ -657,6 +806,8 @@ async def partition_city_stream(
         try:
             result = await future
             partition = result["partition"]
+            if partition.plan_id:
+                get_registry_store().register_plan(partition, actor_id="streaming-analysis")
             partition_store.put(partition, result["graph"], request.bbox)
 
             final_data = {
@@ -686,13 +837,36 @@ async def review_partition(
     request: PartitionReviewRequest,
     _permit: None = Depends(guard_expensive_request),
 ):
-    """Apply post-analysis professional attestations to this exact plan digest."""
+    """Apply verified professional/statutory artifacts to this exact plan digest."""
     partition = request.partition.model_copy(deep=True)
     if not partition.plan_id or compute_plan_id(partition) != partition.plan_id:
         raise HTTPException(
             status_code=400,
             detail="The supplied plan ID does not match the partition contents",
         )
+
+    signing_secret = settings.approval_signing_secret
+    if not signing_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Approval verification is not configured on this deployment",
+        )
+    invalid_artifacts = [
+        artifact.artifact_id
+        for artifact in request.approval_artifacts
+        if not verify_approval_artifact(artifact, signing_secret)
+    ]
+    if invalid_artifacts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid approval signatures: {', '.join(invalid_artifacts)}",
+        )
+
+    merged_artifacts = {artifact.artifact_id: artifact for artifact in partition.approval_artifacts}
+    merged_artifacts.update(
+        {artifact.artifact_id: artifact for artifact in request.approval_artifacts}
+    )
+    partition.approval_artifacts = list(merged_artifacts.values())
 
     validated_target_count = sum(
         superblock.access_target_count for superblock in partition.superblocks
@@ -706,7 +880,104 @@ async def review_partition(
         and bool(partition.superblocks),
         validated_target_count=validated_target_count,
         total_unreachable_targets=partition.total_unreachable_access_targets,
-        review_types={review.review_type for review in request.review_attestations},
+        coverage_percent=partition.eligible_road_coverage_percent,
+        verified_approval_types={
+            artifact.approval_type for artifact in partition.approval_artifacts
+        },
+    )
+    return partition
+
+
+@router.post("/partition/evidence", response_model=CityPartition)
+async def attach_partition_evidence(
+    request: PartitionEvidenceRequest,
+    _permit: None = Depends(guard_expensive_request),
+):
+    """Attach verified calibration/impact results; raw request booleans cannot advance gates."""
+    partition = request.partition.model_copy(deep=True)
+    if not partition.plan_id or compute_plan_id(partition) != partition.plan_id:
+        raise HTTPException(
+            status_code=400,
+            detail="The supplied plan ID does not match the partition contents",
+        )
+    signing_secret = settings.approval_signing_secret
+    if not signing_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Evidence verification is not configured on this deployment",
+        )
+    invalid = [
+        artifact.artifact_id
+        for artifact in request.evidence_artifacts
+        if not verify_evidence_artifact(artifact, signing_secret)
+    ]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid evidence signatures or payload hashes: {', '.join(invalid)}",
+        )
+    registered_dataset_ids = {
+        manifest.dataset_id for manifest in partition.evidence.dataset_manifests
+    }
+    unknown_datasets = sorted(
+        {
+            dataset_id
+            for artifact in request.evidence_artifacts
+            for dataset_id in artifact.dataset_ids
+            if dataset_id not in registered_dataset_ids
+        }
+    )
+    if unknown_datasets:
+        raise HTTPException(
+            status_code=400,
+            detail="Evidence references datasets absent from the plan manifest: "
+            + ", ".join(unknown_datasets),
+        )
+    merged = {artifact.artifact_id: artifact for artifact in partition.evidence_artifacts}
+    merged.update({artifact.artifact_id: artifact for artifact in request.evidence_artifacts})
+    partition.evidence_artifacts = list(merged.values())
+    for artifact in request.evidence_artifacts:
+        if artifact.evidence_type == AssuranceEvidenceType.DATA_QUALITY:
+            signed_quality = DataQualityMetrics.model_validate(artifact.payload)
+            computed_quality = partition.evidence.data_quality
+            signed_quality.eligible_road_coverage_percent = partition.eligible_road_coverage_percent
+            signed_quality.authoritative_network_coverage_percent = (
+                computed_quality.authoritative_network_coverage_percent
+            )
+            signed_quality.lane_coverage_percent = computed_quality.lane_coverage_percent
+            signed_quality.signal_coverage_percent = computed_quality.signal_coverage_percent
+            partition.evidence.data_quality = signed_quality
+        elif artifact.evidence_type == AssuranceEvidenceType.BASELINE_CALIBRATION:
+            partition.evidence.baseline_calibration = CalibrationSummary.model_validate(
+                artifact.payload
+            )
+        else:
+            partition.evidence.impact_validation = ImpactValidationSummary.model_validate(
+                artifact.payload
+            )
+        get_registry_store().register_artifact(
+            artifact_id=artifact.artifact_id,
+            artifact_type=artifact.evidence_type.value,
+            plan_id=partition.plan_id,
+            payload=artifact.model_dump(mode="json"),
+            actor_id="verified-evidence-api",
+        )
+    validated_target_count = sum(
+        superblock.access_target_count for superblock in partition.superblocks
+    )
+    partition.readiness = assess_plan_readiness(
+        evidence=partition.evidence,
+        has_boundary=partition.boundary is not None,
+        modeled_directional_validation_passed=all(
+            superblock.modeled_directional_validation_passed for superblock in partition.superblocks
+        )
+        and bool(partition.superblocks),
+        validated_target_count=validated_target_count,
+        total_unreachable_targets=partition.total_unreachable_access_targets,
+        coverage_percent=partition.eligible_road_coverage_percent,
+        verified_approval_types={
+            artifact.approval_type for artifact in partition.approval_artifacts
+        },
     )
     return partition
 

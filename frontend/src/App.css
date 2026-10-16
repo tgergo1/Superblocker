@@ -149,7 +149,7 @@
 }
 
 .overlay-right {
-  width: min(300px, calc(50% - 24px));
+  width: min(370px, calc(50% - 24px));
 }
 
 @media (max-width: 820px) {

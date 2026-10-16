@@ -6,15 +6,25 @@ from app.models.schemas import (
     AccessTarget,
     AdministrativeBoundary,
     AnalysisEvidence,
+    ApprovalType,
+    AreaExclusion,
     BoundingBox,
+    CalibrationSummary,
     CityPartition,
     Coordinates,
+    DataQualityMetrics,
+    DatasetAuthority,
+    DatasetManifest,
     EnforcedSuperblock,
     EntryPoint,
+    ImpactValidationSummary,
     ModificationType,
+    NetworkAuthorityMode,
     RouteRequest,
     StreetModification,
+    StudyAreaMode,
     TrafficObservation,
+    TurnModelMode,
 )
 from app.services.partitioning.city_partitioner import (
     CityPartitioner,
@@ -93,7 +103,7 @@ def test_partition_respects_arterial_types_and_enforcement_toggle():
     assert 0 <= enforced.coverage_percent <= 100
     assert enforced.readiness.status == "model_only"
     assert enforced.readiness.implementation_ready is False
-    assert "Transport-engineering review is pending" in enforced.readiness.blockers
+    assert "An exact study-area polygon is missing" in enforced.readiness.blockers
 
 
 def test_measured_volume_replaces_topology_for_arterial_selection():
@@ -112,6 +122,34 @@ def test_measured_volume_replaces_topology_for_arterial_selection():
     assert evidence["traffic_mode"] == "measured_volume"
 
 
+def test_large_closed_districts_are_kept_for_split_or_explicit_review():
+    graph = nx.MultiDiGraph()
+    graph.graph["crs"] = "EPSG:4326"
+    coordinates = {1: (0.0, 0.0), 2: (0.02, 0.0), 3: (0.02, 0.02), 4: (0.0, 0.02)}
+    for node, (x, y) in coordinates.items():
+        graph.add_node(node, x=x, y=y)
+    for u, v, osmid in ((1, 2, 1), (2, 3, 2), (3, 4, 3), (4, 1, 4)):
+        graph.add_edge(
+            u,
+            v,
+            key=0,
+            osmid=osmid,
+            highway="primary",
+            length=2_000,
+            geometry=LineString([coordinates[u], coordinates[v]]),
+        )
+    partitioner = CityPartitioner(
+        graph,
+        BoundingBox(north=0.02, south=0, east=0.02, west=0),
+    )
+    partitioner._prepare_network()
+    partitioner.arterial_edges = set(graph.edges(keys=True))
+    partitioner._create_cells()
+
+    assert len(partitioner.cells) == 1
+    assert partitioner.cells[0].area_hectares > 100
+
+
 def test_sparse_measured_traffic_remains_blocked_from_implementation():
     graph = partition_graph()
     evidence = apply_traffic_observations_to_graph(
@@ -122,30 +160,101 @@ def test_sparse_measured_traffic_remains_blocked_from_implementation():
     result = CityPartitioner(graph, bbox, traffic_evidence=evidence).partition()
 
     assert result.evidence.traffic_mode == "measured_volume"
-    assert any("Measured traffic coverage" in blocker for blocker in result.readiness.blockers)
+    assert result.readiness.status == "model_only"
+    assert "An exact study-area polygon is missing" in result.readiness.blockers
 
 
-def test_complete_evidence_and_both_post_analysis_reviews_pass_release_gate():
+def test_all_progressive_evidence_and_verified_approvals_pass_release_gate():
+    manifests = [
+        DatasetManifest(
+            dataset_id=f"dataset-{category}",
+            name=category,
+            category=category,
+            source_organization="Competent authority",
+            authority=DatasetAuthority.STATUTORY,
+            version="2026-09-02",
+            captured_at="2026-09-02T00:00:00Z",
+            checksum_sha256="a" * 64,
+            complete=True,
+            quality_score=1,
+        )
+        for category in (
+            "road_network",
+            "traffic",
+            "demand",
+            "turns_signals",
+            "access",
+            "transit",
+            "emergency",
+            "freight_curb",
+            "active_modes",
+            "crashes_safety",
+            "environment",
+            "demographics_equity",
+            "planning_constraints",
+        )
+    ]
+    impact = ImpactValidationSummary(
+        validated=True,
+        boundary_capacity_passed=True,
+        spillover_passed=True,
+        transit_passed=True,
+        emergency_passed=True,
+        freight_passed=True,
+        accessibility_passed=True,
+        active_modes_passed=True,
+        safety_passed=True,
+        environment_passed=True,
+        equity_passed=True,
+        uncertainty_passed=True,
+    )
     readiness = assess_plan_readiness(
         evidence=AnalysisEvidence(
             boundary_mode="administrative_polygon",
             traffic_mode="measured_volume",
             traffic_observation_count=100,
-            measured_edge_coverage_percent=90,
+            measured_edge_coverage_percent=100,
             access_mode="authoritative_targets",
             access_target_count=25,
             access_dataset_source="Municipal cadastre 2026",
             access_dataset_complete=True,
+            study_area_mode=StudyAreaMode.FUNCTIONAL_URBAN_AREA,
+            network_authority_mode=NetworkAuthorityMode.AUTHORITATIVE_CONFLATED,
+            turn_model_mode=TurnModelMode.TURN_EXPANDED,
+            dataset_manifests=manifests,
+            data_quality=DataQualityMetrics(
+                eligible_road_coverage_percent=100,
+                authoritative_network_coverage_percent=100,
+                lane_coverage_percent=100,
+                turn_coverage_percent=100,
+                signal_coverage_percent=100,
+                directional_traffic_coverage_percent=100,
+                peak_period_coverage_percent=100,
+                turning_movement_coverage_percent=100,
+                access_entrance_coverage_percent=100,
+                transit_coverage_percent=100,
+                emergency_coverage_percent=100,
+            ),
+            baseline_calibration=CalibrationSummary(
+                validated=True,
+                calibration_dataset_ids=["dataset-traffic"],
+                holdout_dataset_ids=["dataset-traffic-holdout"],
+                geh_under_5_percent=90,
+                stochastic_runs=10,
+            ),
+            impact_validation=impact,
         ),
         has_boundary=True,
         modeled_directional_validation_passed=True,
         validated_target_count=25,
         total_unreachable_targets=0,
-        review_types={"transport_engineering", "site_inspection"},
+        coverage_percent=100,
+        verified_approval_types=set(ApprovalType),
     )
 
-    assert readiness.status == "implementation_ready"
+    assert readiness.status == "approved_for_permanent_works"
     assert readiness.implementation_ready is True
+    assert readiness.approved_for_pilot is True
     assert readiness.blockers == []
 
 
@@ -164,6 +273,42 @@ def test_access_validation_uses_explicit_targets_not_every_graph_node():
     assert partitioner._find_unreachable_access_targets(interior, [], [5, 7], None, [target]) == []
     blocked = partitioner._find_unreachable_access_targets(interior, [], [], None, [target])
     assert [item.target_id for item in blocked] == ["parcel-1"]
+
+
+def test_access_validation_separates_car_and_emergency_permissions():
+    graph = partition_graph().subgraph([5, 6, 7]).copy()
+    bbox = BoundingBox(north=0.002, south=0, east=0.002, west=0)
+    partitioner = CityPartitioner(graph, bbox)
+    car_target = AccessTarget(
+        id="home-1",
+        coordinates=Coordinates(lat=0.002, lon=0.001),
+        kind="address",
+        source="Entrance survey",
+    )
+    emergency_target = AccessTarget(
+        id="hospital-1",
+        coordinates=Coordinates(lat=0.002, lon=0.001),
+        kind="emergency",
+        source="Emergency service survey",
+    )
+    modification = StreetModification(
+        u=6,
+        v=7,
+        osm_id=202,
+        modification_type=ModificationType.MODAL_FILTER,
+        allowed_vehicle_classes=["emergency"],
+    )
+
+    unreachable = partitioner._find_unreachable_access_targets(
+        graph,
+        [modification],
+        [5],
+        None,
+        [car_target, emergency_target],
+    )
+
+    assert [item.target_id for item in unreachable] == ["home-1"]
+    assert unreachable[0].failed_vehicle_classes == ["all_motor"]
 
 
 def test_partition_coverage_uses_exact_administrative_polygon():
@@ -186,6 +331,46 @@ def test_partition_coverage_uses_exact_administrative_polygon():
     assert result.boundary == boundary
     assert result.evidence.boundary_mode == "administrative_polygon"
     assert 0 <= result.coverage_percent <= 100
+
+
+def test_explicit_exclusion_accounts_for_roads_outside_generated_cells():
+    graph = nx.MultiDiGraph()
+    graph.graph["crs"] = "EPSG:4326"
+    graph.add_node(1, x=0.0002, y=0.0002)
+    graph.add_node(2, x=0.0018, y=0.0018)
+    graph.add_edge(
+        1,
+        2,
+        key=0,
+        osmid=9001,
+        highway="service",
+        length=200,
+        geometry=LineString([(0.0002, 0.0002), (0.0018, 0.0018)]),
+    )
+    bbox = BoundingBox(north=0.002, south=0, east=0.002, west=0)
+    boundary = AdministrativeBoundary(
+        type="Polygon",
+        coordinates=[[[0, 0], [0.002, 0], [0.002, 0.002], [0, 0.002], [0, 0]]],
+    )
+    exclusion = AreaExclusion(
+        exclusion_id="private-site-1",
+        geometry=boundary,
+        category="private_network",
+        reason="Private service network outside the public street intervention scope",
+        source="Road authority inventory",
+        reviewed=True,
+    )
+
+    result = CityPartitioner(
+        graph,
+        bbox,
+        boundary=boundary,
+        area_exclusions=[exclusion],
+    ).partition()
+
+    assert result.eligible_road_coverage_percent == 100
+    assert result.unaccounted_road_osm_ids == []
+    assert [item.exclusion_id for item in result.area_exclusions] == ["private-site-1"]
 
 
 def test_small_cell_merge_does_not_duplicate_an_earlier_neighbor():

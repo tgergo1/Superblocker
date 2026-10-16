@@ -60,3 +60,6 @@ Thumbs.db
 # Cache directory
 backend/cache/
 cache/
+
+# Local planning registry state
+state/

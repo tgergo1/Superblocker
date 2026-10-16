@@ -3,6 +3,7 @@ import { StreetMap } from './components/Map';
 import { SearchBox } from './components/Search';
 import { PartitionControls } from './components/Controls/PartitionControls';
 import { RouteValidator } from './components/Routing/RouteValidator';
+import { PlanningWorkbench } from './components/Planning/PlanningWorkbench';
 import { useSearch } from './hooks/useSearch';
 import { usePartition } from './hooks/usePartition';
 import type {
@@ -69,6 +70,8 @@ function App() {
     setAccessDatasetSource,
     accessDatasetComplete,
     setAccessDatasetComplete,
+    planningEvidence,
+    setPlanningEvidence,
     runPartition,
     cancel: cancelPartition,
     error: partitionError,
@@ -191,7 +194,18 @@ function App() {
               onAccessDatasetSourceChange={setAccessDatasetSource}
               accessDatasetComplete={accessDatasetComplete}
               onAccessDatasetCompleteChange={setAccessDatasetComplete}
+              planningEvidence={planningEvidence}
+              onPlanningEvidenceChange={setPlanningEvidence}
             />
+            {partition && (
+              <PlanningWorkbench
+                partition={partition}
+                demandModel={planningEvidence.demand_model ?? null}
+                operationalRequirements={planningEvidence.operational_requirements ?? []}
+                activeModeRequirements={planningEvidence.active_mode_requirements ?? []}
+                selectedPlaceName={selectedPlace?.display_name ?? 'Selected jurisdiction'}
+              />
+            )}
           </div>
         </div>
       </main>

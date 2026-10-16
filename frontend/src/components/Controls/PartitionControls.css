@@ -560,6 +560,36 @@
   line-height: 1.45;
 }
 
+.partition-controls .readiness-gates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+  margin: 9px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid rgba(100, 116, 139, 0.2);
+  list-style: none;
+}
+
+.partition-controls .readiness-gates li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  color: #64748b;
+  font-size: 8px;
+  line-height: 1.25;
+}
+
+.partition-controls .readiness-gates li.passed {
+  color: #15803d;
+  font-weight: 750;
+}
+
+.partition-controls .readiness-gates li span {
+  flex: 0 0 auto;
+  font-size: 10px;
+}
+
 .partition-controls .evidence-summary {
   display: grid;
   gap: 4px;

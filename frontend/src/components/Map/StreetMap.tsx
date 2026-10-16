@@ -1247,12 +1247,12 @@ export function StreetMap({
                   <span>{partition.total_superblocks}</span>
                 </div>
                 <div className="info-row">
-                  <span>Boundary coverage:</span>
-                  <span>{partition.coverage_percent.toFixed(1)}%</span>
+                  <span>Eligible roads accounted:</span>
+                  <span>{partition.eligible_road_coverage_percent.toFixed(1)}%</span>
                 </div>
-                <div className={`info-row ${partition.readiness.implementation_ready ? '' : 'warning'}`}>
-                  <span>Release status:</span>
-                  <span>{partition.readiness.implementation_ready ? 'Ready' : 'Blocked'}</span>
+                <div className={`info-row ${partition.readiness.approved_for_pilot ? '' : 'warning'}`}>
+                  <span>Assurance stage:</span>
+                  <span>{partition.readiness.status.replaceAll('_', ' ')}</span>
                 </div>
                 <div className="info-row">
                   <span>Boundary roads:</span>

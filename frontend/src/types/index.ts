@@ -107,6 +107,40 @@ export type RoadType =
 // =============================================================================
 
 export type ModificationType = 'modal_filter' | 'one_way' | 'two_way' | 'turn_restriction' | 'full_closure';
+export type VehicleClass = 'all_motor' | 'car' | 'motorcycle' | 'light_goods' | 'heavy_goods' | 'bus' | 'taxi' | 'refuse' | 'emergency' | 'permit';
+
+export interface DemandZone {
+  zone_id: string;
+  centroid: Coordinates;
+  connector_node_ids: number[];
+  name?: string | null;
+  external?: boolean;
+}
+
+export interface DemandTimeSlice {
+  time_slice_id: string;
+  start_time: string;
+  end_time: string;
+  duration_minutes: number;
+}
+
+export interface DemandMatrixEntry {
+  origin_zone_id: string;
+  destination_zone_id: string;
+  time_slice_id: string;
+  vehicle_class: VehicleClass;
+  trips: number;
+}
+
+export interface DemandModel {
+  model_id: string;
+  version: string;
+  source: string;
+  source_reference?: string | null;
+  zones: DemandZone[];
+  time_slices: DemandTimeSlice[];
+  matrix: DemandMatrixEntry[];
+}
 
 export interface EntryPoint {
   node_id: number;
@@ -126,6 +160,16 @@ export interface StreetModification {
   direction: string | null;
   filter_location: Coordinates | null;
   rationale: string;
+  allowed_modes: string[];
+  allowed_vehicle_classes: string[];
+  time_windows: string[];
+  emergency_override_required: boolean;
+  construction_treatment: string | null;
+  estimated_capital_cost: number | null;
+  annual_maintenance_cost: number | null;
+  turn_from_osm_id: number | null;
+  turn_to_osm_id: number | null;
+  via_node_id: number | null;
 }
 
 export interface UnreachableAddress {
@@ -141,6 +185,13 @@ export interface AccessTarget {
   kind: 'address' | 'parcel' | 'building' | 'emergency' | 'delivery';
   label: string | null;
   source: string;
+  entrance_id?: string | null;
+  permitted_vehicle_classes?: string[];
+  service_windows?: string[];
+  minimum_clearance_m?: number | null;
+  maximum_detour_minutes?: number | null;
+  critical?: boolean;
+  surveyed_at?: string | null;
 }
 
 export interface UnreachableAccessTarget {
@@ -150,6 +201,7 @@ export interface UnreachableAccessTarget {
   coordinates: Coordinates;
   snapped_node_id: number | null;
   nearest_entry_sector: number | null;
+  failed_vehicle_classes: string[];
   reason: string;
 }
 
@@ -158,6 +210,43 @@ export interface TrafficObservation {
   volume_vph: number;
   source: string;
   observed_at: string | null;
+  observation_id?: string | null;
+  interval_start?: string | null;
+  interval_end?: string | null;
+  direction?: 'u_to_v' | 'v_to_u' | 'both';
+  lane?: number | null;
+  vehicle_class?: 'all_motor' | 'car' | 'motorcycle' | 'light_goods' | 'heavy_goods' | 'bus' | 'taxi' | 'refuse' | 'emergency' | 'permit';
+  turn_from_osm_id?: number | null;
+  turn_to_osm_id?: number | null;
+  speed_kph?: number | null;
+  occupancy_percent?: number | null;
+  queue_length_m?: number | null;
+  confidence?: number;
+  dataset_id?: string | null;
+}
+
+export type PlanStage =
+  | 'model_only'
+  | 'topology_candidate'
+  | 'data_qualified'
+  | 'baseline_calibrated'
+  | 'impact_validated'
+  | 'engineering_reviewed'
+  | 'approved_for_pilot'
+  | 'approved_for_permanent_works';
+
+export interface DataQualityMetrics {
+  eligible_road_coverage_percent: number;
+  authoritative_network_coverage_percent: number;
+  lane_coverage_percent: number;
+  turn_coverage_percent: number;
+  signal_coverage_percent: number;
+  directional_traffic_coverage_percent: number;
+  peak_period_coverage_percent: number;
+  turning_movement_coverage_percent: number;
+  access_entrance_coverage_percent: number;
+  transit_coverage_percent: number;
+  emergency_coverage_percent: number;
 }
 
 export interface AnalysisEvidence {
@@ -170,14 +259,101 @@ export interface AnalysisEvidence {
   access_target_count: number;
   access_dataset_source: string | null;
   access_dataset_complete: boolean;
+  study_area_mode: 'bounding_box' | 'administrative_polygon' | 'functional_urban_area';
+  network_authority_mode: 'osm_bootstrap' | 'authoritative_conflated';
+  turn_model_mode: 'edge_only' | 'turn_expanded';
+  dataset_manifests: unknown[];
+  data_quality: DataQualityMetrics;
+  excluded_area_percent: number;
+  baseline_calibration: unknown | null;
+  impact_validation: unknown | null;
+}
+
+export interface AssignedEdgeFlow {
+  u: number;
+  v: number;
+  key: number;
+  osm_id: number;
+  time_slice_id: string;
+  vehicle_class: VehicleClass;
+  volume: number;
+  capacity_vph: number;
+  volume_capacity_ratio: number;
+  free_flow_time_seconds: number;
+  assigned_time_seconds: number;
+  estimated_queue_length_m: number;
+  is_boundary_road: boolean;
+}
+
+export interface AssignmentRun {
+  run_id: string;
+  network_state: 'baseline' | 'planned';
+  converged: boolean;
+  iterations: number;
+  relative_gap: number;
+  total_demand: number;
+  assigned_demand: number;
+  blocked_demand: number;
+  edge_flows: AssignedEdgeFlow[];
+}
+
+export interface AssignmentComparison {
+  validated: boolean;
+  baseline: AssignmentRun | null;
+  planned: AssignmentRun | null;
+  maximum_boundary_volume_capacity_ratio: number | null;
+  maximum_adjacent_road_volume_change_percent: number | null;
+  boundary_capacity_passed: boolean;
+  spillover_passed: boolean;
+  all_demand_assigned: boolean;
+  limitations: string[];
+}
+
+export interface OperationalValidationSummary {
+  validated: boolean;
+  all_hard_constraints_passed: boolean;
+  results: Array<{
+    requirement_id: string;
+    service_type: string;
+    vehicle_class: VehicleClass;
+    passed: boolean;
+    baseline_travel_time_minutes: number | null;
+    planned_travel_time_minutes: number | null;
+    detour_percent: number | null;
+    clearance_passed: boolean | null;
+    blockers: string[];
+  }>;
+  missing_service_types: string[];
+}
+
+export interface ActiveModeValidationSummary {
+  validated: boolean;
+  all_hard_constraints_passed: boolean;
+  results: Array<{
+    requirement_id: string;
+    mode: 'walk' | 'wheel' | 'bicycle';
+    passed: boolean;
+    baseline_distance_m: number | null;
+    planned_distance_m: number | null;
+    detour_percent: number | null;
+    geometry_attributes_passed: boolean | null;
+    blockers: string[];
+  }>;
+  missing_modes: string[];
 }
 
 export interface PlanReadiness {
-  status: 'model_only' | 'review_pending' | 'implementation_ready';
+  status: PlanStage;
+  highest_completed_stage: PlanStage;
+  ready_for_engineering_review: boolean;
+  approved_for_pilot: boolean;
+  approved_for_permanent_works: boolean;
   implementation_ready: boolean;
   modeled_directional_validation_passed: boolean;
   transport_engineering_reviewed: boolean;
   site_inspection_reviewed: boolean;
+  verified_approval_types: string[];
+  gates: Array<{ stage: PlanStage; passed: boolean; blockers: string[] }>;
   blockers: string[];
 }
 
@@ -193,6 +369,8 @@ export interface EnforcedSuperblock {
   all_addresses_reachable: boolean | null;
   unreachable_addresses: UnreachableAddress[];
   modeled_directional_validation_passed: boolean;
+  turn_aware_validation_passed: boolean;
+  vehicle_class_validation: Record<string, boolean>;
   access_target_count: number;
   all_access_targets_reachable: boolean | null;
   unreachable_access_targets: UnreachableAccessTarget[];
@@ -209,6 +387,13 @@ export interface CityPartition {
   arterial_network: number[];
   bbox: BoundingBox;
   boundary: Polygon | MultiPolygon | null;
+  approval_artifacts: unknown[];
+  evidence_artifacts: unknown[];
+  turn_restrictions: unknown[];
+  area_exclusions: unknown[];
+  operational_validation: OperationalValidationSummary;
+  active_mode_validation: ActiveModeValidationSummary;
+  assignment_comparison: AssignmentComparison;
   evidence: AnalysisEvidence;
   readiness: PlanReadiness;
   total_area_hectares: number;
@@ -220,6 +405,10 @@ export interface CityPartition {
   total_unreachable_addresses: number;
   total_unreachable_access_targets: number;
   total_two_way_conversions: number;
+  eligible_road_length_km: number;
+  accounted_road_length_km: number;
+  eligible_road_coverage_percent: number;
+  unaccounted_road_osm_ids: number[];
 }
 
 export interface PartitionProgress {
@@ -266,4 +455,97 @@ export interface SizeRecommendation {
   optimal_area_ha: number;
   grid_orientation_deg: number;
   rationale: string;
+}
+
+export interface ScenarioMetric {
+  objective: string;
+  baseline_value: number | null;
+  planned_value: number;
+  unit: string;
+  lower_is_better: boolean;
+  source: string;
+  validated: boolean;
+}
+
+export interface ScenarioCandidate {
+  scenario_id: string;
+  name: string;
+  description: string;
+  modifications: StreetModification[];
+  metrics: ScenarioMetric[];
+  hard_constraint_failures: string[];
+  feasible: boolean;
+  weighted_score: number | null;
+  pareto_rank: number | null;
+  assignment_comparison: AssignmentComparison;
+  operational_validation: OperationalValidationSummary;
+  active_mode_validation: ActiveModeValidationSummary;
+}
+
+export interface ScenarioPortfolio {
+  portfolio_id: string;
+  candidates: ScenarioCandidate[];
+  pareto_scenario_ids: string[];
+  objective_weights: Record<string, number>;
+  recommended_scenario_id: string | null;
+  limitations: string[];
+}
+
+export interface EngineeringPackage {
+  package_id: string;
+  plan_id: string;
+  status: 'draft_for_engineering_review';
+  jurisdiction: string;
+  currency: string;
+  instructions: Array<{
+    instruction_id: string;
+    osm_id: number;
+    street_name: string;
+    coordinates: Coordinates | null;
+    affected_movement: string;
+    treatment: string;
+    signs_and_markings: string[];
+    allowed_modes: string[];
+    allowed_vehicle_classes: VehicleClass[];
+    time_windows: string[];
+    emergency_operation: string | null;
+    construction_notes: string[];
+    inspection_checks: string[];
+    capital_cost: number;
+    annual_maintenance_cost: number;
+    field_verification_required: boolean;
+  }>;
+  bill_of_quantities: Array<Record<string, unknown>>;
+  total_capital_cost: number;
+  total_annual_maintenance_cost: number;
+  gis_feature_collection: GeoJSON.FeatureCollection;
+  blockers: string[];
+  disclaimer: string;
+}
+
+export interface SimulationRun {
+  simulation_id: string;
+  status: 'not_requested' | 'tool_unavailable' | 'exported' | 'completed' | 'failed';
+  engine: 'sumo';
+  engine_version: string | null;
+  network_state: 'baseline' | 'planned';
+  random_seed: number;
+  output_directory: string | null;
+  generated_files: string[];
+  return_code: number | null;
+  limitations: string[];
+}
+
+export interface PlanningEvidencePackage {
+  study_area_mode?: 'bounding_box' | 'administrative_polygon' | 'functional_urban_area';
+  network_authority_mode?: 'osm_bootstrap' | 'authoritative_conflated';
+  dataset_manifests?: unknown[];
+  data_quality?: Partial<DataQualityMetrics>;
+  authoritative_road_segments?: unknown[];
+  turn_restrictions?: unknown[];
+  area_exclusions?: unknown[];
+  operational_requirements?: unknown[];
+  active_mode_requirements?: unknown[];
+  demand_model?: DemandModel | null;
+  assignment_settings?: Record<string, unknown>;
 }
