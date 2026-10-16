@@ -264,3 +264,22 @@ def test_cuts_avoid_streets_kept_open_for_access():
     assert not violations
     assert modifications
     assert {(min(m.u, m.v), max(m.u, m.v)) for m in modifications} == {(3, 4)}
+
+
+def test_a_one_way_trap_does_not_preserve_access():
+    graph = nx.MultiDiGraph()
+    for node, x in ((1, 0.0), (2, 0.005)):
+        graph.add_node(node, x=x, y=0.005)
+    for a, b in ((1, 2), (2, 1)):
+        graph.add_edge(a, b, 0, highway="residential", length=300.0, osmid=12)
+    enforcer = ConstraintEnforcer(
+        interior_graph=graph,
+        boundary_polygon=Polygon([(0, 0), (0.01, 0), (0.01, 0.01), (0, 0.01)]),
+        entry_node_ids=[1],
+    )
+    # Cars could still drive in to node 2, but never back out.
+    trap = StreetModification(
+        u=1, v=2, osm_id=12, modification_type=ModificationType.ONE_WAY, direction="u_to_v"
+    )
+    assert not enforcer._preserves_entry_access([trap])
+    assert enforcer._preserves_entry_access([])
