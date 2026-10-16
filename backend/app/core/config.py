@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     # Optional local OpenStreetMap extract (.osm.pbf, .osm or .osm.bz2). When set,
     # drive and all-road networks load from it instead of the Overpass API.
     osm_extract_path: str | None = None
+    # Optional GTFS feed (zip or stops.txt), e.g. BKK's public Budapest feed. When
+    # set, its stops replace OpenStreetMap stops in the transit access check.
+    gtfs_path: str | None = None
 
 
 @lru_cache
