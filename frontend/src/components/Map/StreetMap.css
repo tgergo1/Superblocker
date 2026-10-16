@@ -765,6 +765,16 @@
   background: #047857;
 }
 
+.plan-sign.school-street {
+  background: #f97316;
+}
+
+.plan-sign.school-frontage {
+  border-color: #c2410c;
+  background: white;
+  color: #c2410c;
+}
+
 .plan-sign.one-way {
   border-color: #2563eb;
   background: white;

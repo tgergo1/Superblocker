@@ -6,7 +6,7 @@ import { GeoJsonLayer, PolygonLayer, ScatterplotLayer, PathLayer, TextLayer } fr
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import type { LayersList } from '@deck.gl/core';
 import type { Feature, Geometry, LineString, MultiPolygon, Polygon } from 'geojson';
-import type { ViewState, StreetNetworkResponse, RoadProperties, EnforcedSuperblock, CityPartition, RouteResult, BoundaryRoadImpact } from '../../types';
+import type { ViewState, StreetNetworkResponse, RoadProperties, EnforcedSuperblock, CityPartition, RouteResult, BoundaryRoadImpact, SchoolStreet } from '../../types';
 import type { SuperblockCandidate } from '../../services/api';
 import { IMPACT_BANDS, impactColor, impactPercent } from '../../utils/impact';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -73,7 +73,7 @@ interface PlanMarkerDatum {
   name: string;
   title: string;
   symbol: string;
-  actionType: PlanActionType | 'entry_point';
+  actionType: PlanActionType | 'entry_point' | 'school';
   angle?: number;
   detail?: string;
 }
@@ -678,6 +678,67 @@ export function StreetMap({
       }
     }
 
+    // Schools: timed school streets inside superblocks, crossings on main roads.
+    if (showPartition && partition?.school_streets && showDetailedPlanSigns && colorBy !== 'impact') {
+      const schools = partition.school_streets.schools.filter(item => item.setting !== 'unassigned');
+      const schoolStreets = schools.filter(item => item.setting === 'interior' && item.street_path.length > 1);
+      if (schoolStreets.length > 0) {
+        result.push(
+          new PathLayer<SchoolStreet>({
+            id: 'school-streets',
+            data: schoolStreets,
+            pickable: false,
+            widthUnits: 'pixels',
+            getWidth: 6,
+            getPath: item => item.street_path.map(point => [point.lon, point.lat] as [number, number]),
+            getColor: [249, 115, 22, 200],
+            capRounded: true,
+          }),
+        );
+      }
+      if (schools.length > 0) {
+        const markers: PlanMarkerDatum[] = schools.map(item => ({
+          position: [item.coordinates.lon, item.coordinates.lat],
+          name: item.name ?? (item.kind === 'kindergarten' ? 'Kindergarten' : 'School'),
+          title: item.setting === 'interior' ? 'School street' : 'School on a main road',
+          symbol: 'S',
+          actionType: 'school',
+          detail: item.treatment,
+        }));
+        result.push(
+          new ScatterplotLayer<PlanMarkerDatum>({
+            id: 'school-markers',
+            data: markers,
+            pickable: true,
+            stroked: true,
+            filled: true,
+            radiusUnits: 'pixels',
+            getRadius: 9,
+            getPosition: d => d.position,
+            getFillColor: d => d.title === 'School street' ? [249, 115, 22, 235] : [255, 255, 255, 235],
+            getLineColor: [194, 65, 12, 255],
+            lineWidthMinPixels: 2,
+            onHover: (info: { object?: PlanMarkerDatum }) => {
+              setHoveredPlanMarker(info.object ?? null);
+            },
+          }),
+          new TextLayer<PlanMarkerDatum>({
+            id: 'school-labels',
+            data: markers,
+            pickable: false,
+            getPosition: d => d.position,
+            getText: d => d.symbol,
+            getSize: 12,
+            getColor: d => d.title === 'School street' ? [255, 255, 255, 255] : [194, 65, 12, 255],
+            getTextAnchor: 'middle',
+            getAlignmentBaseline: 'center',
+            fontFamily: 'Arial, Helvetica, sans-serif',
+            fontWeight: 'bold',
+          }),
+        );
+      }
+    }
+
     // Entry points layer - simple markers at superblock entries
     if (showPartition && showEntryPoints && partition && showDetailedPlanSigns) {
       const entryPointData = partition.superblocks.flatMap((sb, sbIndex) =>
@@ -1273,6 +1334,14 @@ export function StreetMap({
                   <div className="legend-item">
                     <span className="plan-sign bus-gate">B</span>
                     <span className="legend-label">Bus gate · buses and emergency pass</span>
+                  </div>
+                  <div className="legend-item">
+                    <span className="plan-sign school-street">S</span>
+                    <span className="legend-label">School street · closed at school run</span>
+                  </div>
+                  <div className="legend-item">
+                    <span className="plan-sign school-frontage">S</span>
+                    <span className="legend-label">School on a main road · crossing and 30 km/h</span>
                   </div>
                   <div className="legend-item">
                     <span className="plan-sign one-way">&gt;</span>

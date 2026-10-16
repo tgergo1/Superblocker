@@ -836,6 +836,52 @@ class PublicSpaceSummary(BaseModel):
     limitations: list[str] = Field(default_factory=list)
 
 
+class SchoolStreetSettings(BaseModel):
+    """How school and kindergarten frontages are matched and treated."""
+
+    max_frontage_distance_m: float = Field(default=120.0, gt=0, le=500)
+    school_time_windows: list[str] = Field(
+        default_factory=lambda: ["Mo-Fr 07:30-08:30", "Mo-Fr 15:30-16:30"], max_length=10
+    )
+    kindergarten_time_windows: list[str] = Field(
+        default_factory=lambda: ["Mo-Fr 07:00-08:30", "Mo-Fr 16:00-17:30"], max_length=10
+    )
+
+
+class SchoolStreet(BaseModel):
+    """The street in front of one school, and what the plan proposes there."""
+
+    facility_osm_type: Literal["node", "way", "relation"]
+    facility_osm_id: int
+    kind: Literal["school", "kindergarten"]
+    name: str | None = Field(default=None, max_length=300)
+    coordinates: Coordinates
+    setting: Literal["interior", "boundary", "unassigned"]
+    superblock_id: str | None = None
+    street_name: str | None = Field(default=None, max_length=300)
+    osm_id: int | None = None
+    u: int | None = None
+    v: int | None = None
+    key: int | None = None
+    distance_m: float = Field(default=0.0, ge=0)
+    street_path: list[Coordinates] = Field(default_factory=list, max_length=2000)
+    on_transit_route: bool = False
+    time_windows: list[str] = Field(default_factory=list, max_length=10)
+    treatment: str = Field(default="", max_length=600)
+
+
+class SchoolStreetSummary(BaseModel):
+    """Timed school streets inside superblocks and main-road school frontages."""
+
+    settings: SchoolStreetSettings = Field(default_factory=SchoolStreetSettings)
+    facilities_loaded: int = 0
+    interior_school_streets: int = 0
+    boundary_frontages: int = 0
+    unassigned: int = 0
+    schools: list[SchoolStreet] = Field(default_factory=list, max_length=20_000)
+    limitations: list[str] = Field(default_factory=list)
+
+
 class EvaporationScenario(BaseModel):
     """Share of displaced through traffic assumed to disappear rather than reroute."""
 
@@ -1402,6 +1448,7 @@ class CityPartition(BaseModel):
     filter_design: FilterDesignSummary = Field(default_factory=FilterDesignSummary)
     emergency_access: EmergencyAccessSummary = Field(default_factory=EmergencyAccessSummary)
     public_space: PublicSpaceSummary | None = None
+    school_streets: SchoolStreetSummary | None = None
     osm_context: OsmContext | None = None
     evidence: AnalysisEvidence = Field(
         default_factory=lambda: AnalysisEvidence(
@@ -1471,6 +1518,7 @@ class PartitionRequest(BaseModel):
     traffic_impact_settings: TrafficImpactSettings = Field(default_factory=TrafficImpactSettings)
     filter_design_settings: FilterDesignSettings = Field(default_factory=FilterDesignSettings)
     public_space_settings: PublicSpaceSettings = Field(default_factory=PublicSpaceSettings)
+    school_street_settings: SchoolStreetSettings = Field(default_factory=SchoolStreetSettings)
     osm_context: OsmContext | None = None
     fetch_osm_context: bool = True
     target_size_hectares: float = Field(default=12.0, ge=4.0, le=50.0)

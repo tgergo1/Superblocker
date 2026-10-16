@@ -48,6 +48,17 @@ In the app, the **Where does the traffic go?** panel switches scenarios, ranks t
 
 ![Budapest traffic impact](docs/screenshots/budapest-traffic-impact.png)
 
+## Street design layers
+
+Each run also loads OpenStreetMap bus, trolleybus and tram routes, fire and ambulance stations, schools and kindergartens in one cached Overpass query, and uses them to shape the plan:
+
+- **Bus gates.** A filter on a public-transport route becomes a camera-enforced bus gate that buses and emergency vehicles pass; other filters become emergency bollards.
+- **Emergency response.** Response time from the nearest station to the farthest interior node of each superblock, before and after, with and without the exemptions.
+- **School streets.** A school inside a superblock gets a timed closure of its street at drop-off and pick-up, with residents and emergency vehicles exempt. A school on a boundary road gets a crossing and 30 km/h instead, because closing that road would push its traffic into the superblock.
+- **Reclaimed space.** Calmed street length, the carriageway area that could become public space, and junctions whose every leg is calmed as candidate plazas.
+
+All four are screening outputs: they inform the plan but do not count toward the implementation gate.
+
 ## Budapest verification run
 
 Observed in the local app on 2026-08-31 with the default 12 ha target, 6 ha minimum, 20 ha maximum, four entry sectors, the exact Nominatim administrative polygon, and no external traffic/access evidence:

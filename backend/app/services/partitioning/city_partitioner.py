@@ -55,6 +55,7 @@ from app.models.schemas import (
     PlanStage,
     PublicSpaceSettings,
     ReadinessGate,
+    SchoolStreetSettings,
     StreetModification,
     StudyAreaMode,
     TrafficImpactSettings,
@@ -73,6 +74,7 @@ from app.services.constraint.constraint_enforcer import ConstraintEnforcer
 from app.services.constraint.operational_validator import OperationalValidator
 from app.services.design.filter_design import FilterDesigner
 from app.services.design.public_space import PublicSpaceEstimator
+from app.services.design.school_streets import SchoolStreetPlanner
 from app.services.impact.boundary_impact import (
     BoundaryImpactEstimator,
     SuperblockImpactInput,
@@ -441,6 +443,7 @@ class CityPartitioner:
         osm_context: OsmContext | None = None,
         filter_design_settings: FilterDesignSettings | None = None,
         public_space_settings: PublicSpaceSettings | None = None,
+        school_street_settings: SchoolStreetSettings | None = None,
         progress_callback: Callable[[PartitionProgress], None] | None = None,
     ):
         """
@@ -500,6 +503,7 @@ class CityPartitioner:
         self._impact_inputs: list[SuperblockImpactInput] = []
         self.osm_context = osm_context
         self.public_space_settings = public_space_settings or PublicSpaceSettings()
+        self.school_street_settings = school_street_settings or SchoolStreetSettings()
         self.filter_designer = FilterDesigner(
             graph, osm_context, filter_design_settings or FilterDesignSettings()
         )
@@ -1738,6 +1742,19 @@ class CityPartitioner:
         emergency_access = EmergencyAccessSummary(
             limitations=["No OpenStreetMap context layers were loaded."]
         )
+        school_streets = None
+        try:
+            school_streets = SchoolStreetPlanner(
+                self.graph,
+                self.school_street_settings,
+                self.osm_context.transit_way_ids() if self.osm_context else set(),
+            ).plan(
+                self.osm_context.facilities if self.osm_context else [],
+                self._impact_inputs,
+                self.arterial_edges,
+            )
+        except Exception as error:  # Screening output must not block the plan.
+            logger.warning("School street planning failed: %s", error)
         if self.osm_context is not None:
             self._report_progress("impact", 98, "Checking emergency response times...")
             try:
@@ -1892,6 +1909,7 @@ class CityPartitioner:
             filter_design=self.filter_designer.finish(),
             emergency_access=emergency_access,
             public_space=public_space,
+            school_streets=school_streets,
             osm_context=self.osm_context,
             evidence=evidence,
             readiness=readiness,
