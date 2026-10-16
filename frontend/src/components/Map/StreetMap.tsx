@@ -440,6 +440,8 @@ export function StreetMap({
           pickable: true,
           stroked: true,
           filled: true,
+          // Outline widths are screen pixels so they stay visible at city zoom.
+          lineWidthUnits: 'pixels',
           getPolygon: (d: EnforcedSuperblock) => d.geometry.coordinates,
           getFillColor: (d: EnforcedSuperblock) => {
             if (selectedEnforcedSuperblock?.id === d.id) {
