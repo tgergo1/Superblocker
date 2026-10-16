@@ -500,3 +500,26 @@ def test_cells_report_whether_they_have_through_routes():
     partitioner._enforce_all_constraints()
     assert partitioner.superblocks == []
     assert partitioner.non_street_cells == 1
+
+
+def test_cell_with_only_living_streets_splits_along_one():
+    partitioner, cell = _residential_cell(0.02, minor_boundary_policy="avoid")
+    for u, v, key in cell.interior_edges:
+        partitioner.graph.edges[u, v, key]["highway"] = "living_street"
+    pieces = partitioner._split_cell(cell)
+    assert len(pieces) == 2
+    assert abs(pieces[0].area_hectares - pieces[1].area_hectares) < 1.0
+    # The living street is filtered like a residential split street.
+    assert (10, 11) in partitioner._quiet_split_streets
+
+
+def test_residential_streets_split_before_living_streets():
+    partitioner, cell = _residential_cell(0.02, minor_boundary_policy="avoid")
+    # The centre street is a living street; a residential one sits off centre.
+    for u, v, key in cell.interior_edges:
+        if (u, v) != (8, 9):
+            partitioner.graph.edges[u, v, key]["highway"] = "living_street"
+    pieces = partitioner._split_cell(cell)
+    assert len(pieces) == 2
+    assert (8, 9, 0) in partitioner.arterial_edges
+    assert (10, 11, 0) not in partitioner.arterial_edges
