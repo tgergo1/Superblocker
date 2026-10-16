@@ -126,6 +126,7 @@ export interface PartitionParameters {
   minAreaHectares: number;
   maxAreaHectares: number;
   keepResidentialInside?: boolean;
+  planningMode?: 'superblocks' | 'circulation_sectors';
 }
 
 interface PartitionControlsProps {
@@ -195,6 +196,19 @@ export function PartitionControls({
       }))) ?? [],
     [partition],
   );
+
+  const sectorMode = parameters.planningMode === 'circulation_sectors';
+  const ranges = sectorMode
+    ? { target: [50, 300, 10], min: [10, 100, 5], max: [100, 600, 10] }
+    : { target: [6, 25, 1], min: [2, 15, 1], max: [10, 40, 1] };
+
+  const handlePlanningModeChange = (mode: 'superblocks' | 'circulation_sectors') => {
+    onParametersChange(
+      mode === 'circulation_sectors'
+        ? { ...parameters, planningMode: mode, targetSizeHectares: 150, minAreaHectares: 30, maxAreaHectares: 400 }
+        : { ...parameters, planningMode: mode, targetSizeHectares: 12, minAreaHectares: 6, maxAreaHectares: 20 },
+    );
+  };
 
   const handleTargetSizeChange = (value: number) => {
     onParametersChange({
@@ -702,6 +716,29 @@ export function PartitionControls({
       {/* Expandable Settings */}
       {settingsExpanded && (
         <div className="settings-panel" id="partition-settings-panel">
+          <div className="planning-mode" role="radiogroup" aria-label="Planning mode">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!sectorMode}
+              className={!sectorMode ? 'active' : ''}
+              onClick={() => handlePlanningModeChange('superblocks')}
+            >
+              Superblocks
+              <small>Barcelona · 9-25 ha cells</small>
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={sectorMode}
+              className={sectorMode ? 'active' : ''}
+              onClick={() => handlePlanningModeChange('circulation_sectors')}
+            >
+              Circulation sectors
+              <small>Ghent · main roads only</small>
+            </button>
+          </div>
+
           {/* Target Size */}
           <div className="param-group">
             <label className="param-label" htmlFor="partition-target-size">
@@ -711,14 +748,16 @@ export function PartitionControls({
             <input
               type="range"
               id="partition-target-size"
-              min={6}
-              max={25}
-              step={1}
+              min={ranges.target[0]}
+              max={ranges.target[1]}
+              step={ranges.target[2]}
               value={parameters.targetSizeHectares}
               onChange={(e) => handleTargetSizeChange(Number(e.target.value))}
               className="param-slider"
             />
-            <span className="param-hint">Barcelona standard: 9-16 ha</span>
+            <span className="param-hint">
+              {sectorMode ? 'Ghent sectors: 100-300 ha, crossed only via the main road grid' : 'Barcelona standard: 9-16 ha'}
+            </span>
           </div>
 
           {/* Min Area */}
@@ -730,9 +769,9 @@ export function PartitionControls({
             <input
               type="range"
               id="partition-min-area"
-              min={2}
-              max={15}
-              step={1}
+              min={ranges.min[0]}
+              max={ranges.min[1]}
+              step={ranges.min[2]}
               value={parameters.minAreaHectares}
               onChange={(e) => handleMinAreaChange(Number(e.target.value))}
               className="param-slider"
@@ -748,9 +787,9 @@ export function PartitionControls({
             <input
               type="range"
               id="partition-max-area"
-              min={10}
-              max={40}
-              step={1}
+              min={ranges.max[0]}
+              max={ranges.max[1]}
+              step={ranges.max[2]}
               value={parameters.maxAreaHectares}
               onChange={(e) => handleMaxAreaChange(Number(e.target.value))}
               className="param-slider"

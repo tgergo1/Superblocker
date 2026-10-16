@@ -39,6 +39,7 @@ export interface PartitionParameters {
   minAreaHectares: number;
   maxAreaHectares: number;
   keepResidentialInside?: boolean;
+  planningMode?: 'superblocks' | 'circulation_sectors';
 }
 
 export interface DetailedPartitionProgress extends PartitionProgress {
@@ -137,6 +138,7 @@ export function usePartition(
         // Four cardinal entry/return sectors are a product invariant.
         num_sectors: 4,
         minor_road_boundaries: parameters.keepResidentialInside ? 'avoid' : 'allow',
+        planning_mode: parameters.planningMode ?? 'superblocks',
       };
 
       return partitionCityWithProgress(request, (p) => {

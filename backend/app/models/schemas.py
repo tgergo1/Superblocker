@@ -1557,9 +1557,12 @@ class PartitionRequest(BaseModel):
     minor_road_boundaries: Literal["allow", "avoid"] = "allow"
     osm_context: OsmContext | None = None
     fetch_osm_context: bool = True
-    target_size_hectares: float = Field(default=12.0, ge=4.0, le=50.0)
+    # "circulation_sectors" is Ghent's circulation plan: a few large sectors
+    # bounded only by the main road grid, crossed by car only via that grid.
+    planning_mode: Literal["superblocks", "circulation_sectors"] = "superblocks"
+    target_size_hectares: float = Field(default=12.0, ge=4.0, le=400.0)
     min_area_hectares: float = Field(default=6.0, ge=1.0)
-    max_area_hectares: float = Field(default=20.0, le=100.0)
+    max_area_hectares: float = Field(default=20.0, le=800.0)
     enforce_constraints: Literal[True] = True
     num_sectors: int = Field(default=4, ge=3, le=8)  # Angular sectors per superblock
     arterial_road_types: list[RoadType] = Field(
@@ -1573,6 +1576,13 @@ class PartitionRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_area_range(self) -> "PartitionRequest":
+        if self.planning_mode == "superblocks" and (
+            self.target_size_hectares > 50 or self.max_area_hectares > 100
+        ):
+            raise ValueError(
+                "superblock plans allow at most 50 ha target and 100 ha maximum; "
+                "use planning_mode='circulation_sectors' for larger sectors"
+            )
         if self.min_area_hectares > self.max_area_hectares:
             raise ValueError("min_area_hectares must not exceed max_area_hectares")
         if not self.min_area_hectares <= self.target_size_hectares <= self.max_area_hectares:
