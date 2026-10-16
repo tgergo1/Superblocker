@@ -1167,6 +1167,15 @@ class CityPartitioner:
                 filters.append(self._split_filters[street])
         return filters
 
+    def _claim_split_filters(self, cell: SuperblockCell, index: int) -> list[StreetModification]:
+        """Split-street filters this cell owns: those no neighbour claimed first."""
+        owned = []
+        for item in self._split_street_filters(cell):
+            street = (min(item.u, item.v), max(item.u, item.v))
+            if self._split_filter_owner.setdefault(street, index) == index:
+                owned.append(item)
+        return owned
+
     def _best_split(
         self, cell: SuperblockCell, candidates: list[tuple[int, int, int]]
     ) -> tuple[list[Polygon], tuple[int, int, int]] | None:
@@ -1460,10 +1469,7 @@ class CityPartitioner:
 
         # Filters on residential streets this cell was split from are added
         # after validation: they sit on boundary roads outside the interior graph.
-        for item in self._split_street_filters(cell):
-            street = (min(item.u, item.v), max(item.u, item.v))
-            if self._split_filter_owner.setdefault(street, index) == index:
-                modifications = [*modifications, item]
+        modifications = [*modifications, *self._claim_split_filters(cell, index)]
 
         # Create EnforcedSuperblock
         return EnforcedSuperblock(
@@ -1550,6 +1556,7 @@ class CityPartitioner:
             sectors.entry_points_by_sector if sectors else {},
         )
         turn_valid = turn_valid and constraint_validated
+        split_filters = self._claim_split_filters(cell, index)
 
         return EnforcedSuperblock(
             id=f"sb_{index}_{uuid.uuid4().hex[:8]}",
@@ -1558,7 +1565,7 @@ class CityPartitioner:
             num_sectors=self.num_sectors,
             boundary_roads=self._collect_boundary_osm_ids(cell.boundary_edges),
             entry_points=entry_points,
-            modifications=[],
+            modifications=split_filters,
             constraint_validated=turn_valid,
             all_addresses_reachable=None,
             unreachable_addresses=[],
@@ -1571,7 +1578,7 @@ class CityPartitioner:
             ),
             unreachable_access_targets=unreachable_targets,
             interior_roads_count=len(cell.interior_edges),
-            modal_filter_count=0,
+            modal_filter_count=len(split_filters),
             one_way_conversion_count=0,
             street_cut_count=0,
             two_way_conversion_count=0,

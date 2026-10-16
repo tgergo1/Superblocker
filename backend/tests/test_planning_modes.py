@@ -194,3 +194,14 @@ def test_main_road_splits_get_no_filter():
     assert len(pieces) == 2
     assert not partitioner._quiet_split_streets
     assert all(partitioner._split_street_filters(piece) == [] for piece in pieces)
+
+
+def test_simple_superblocks_claim_split_filters_once():
+    partitioner, cell = _residential_cell(0.006, minor_boundary_policy="avoid")
+    first, second = partitioner._split_cell(cell)
+    owner = partitioner._create_simple_superblock(first, 0)
+    neighbour = partitioner._create_simple_superblock(second, 1)
+    assert owner.modal_filter_count == 1
+    assert owner.modifications == partitioner._split_street_filters(first)
+    assert neighbour.modal_filter_count == 0
+    assert neighbour.modifications == []
