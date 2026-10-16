@@ -16,6 +16,15 @@ import math
 from dataclasses import dataclass
 
 import networkx as nx
+
+try:  # pragma: no cover - import guard
+    import numpy as np
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import breadth_first_order
+
+    _HAS_SCIPY = True
+except ImportError:  # pragma: no cover - SciPy is a runtime dependency
+    _HAS_SCIPY = False
 from shapely.geometry import Polygon
 
 from app.models.schemas import (
@@ -726,6 +735,15 @@ class ConstraintEnforcer:
             highway = highway[0]
         return HIERARCHY_MAP.get(highway, 6) <= 5
 
+    def _undirected_degree(self, node: int) -> int:
+        """Degree in the undirected view, without building a view per call."""
+        succ, pred = self.graph._succ[node], self.graph._pred[node]
+        degree = 0
+        for neighbor in set(succ) | set(pred):
+            keys = set(succ.get(neighbor, {})) | set(pred.get(neighbor, {}))
+            degree += len(keys) * (2 if neighbor == node else 1)
+        return degree
+
     def _should_use_street_cut(self, u: int, v: int, edge_data: dict) -> bool:
         """Choose full closure for minor connector streets that best serve as cuts."""
         highway = edge_data.get("highway", "residential")
@@ -737,8 +755,7 @@ class ConstraintEnforcer:
             return True
 
         length = float(edge_data.get("length", 0) or 0)
-        undirected = self.graph.to_undirected(as_view=True)
-        min_degree = min(undirected.degree(u), undirected.degree(v))
+        min_degree = min(self._undirected_degree(u), self._undirected_degree(v))
 
         return hierarchy >= 7 and length <= 80 and min_degree <= 3
 
@@ -764,12 +781,15 @@ class ConstraintEnforcer:
             # Hide the opposite direction in a view instead of copying the
             # whole graph per candidate, which dominated repairs in large cells.
             source, target = (v, u) if direction == "u_to_v" else (u, v)
-            hidden = (
-                [(source, target, key) for key in self.graph[source][target]]
-                if self.graph.has_edge(source, target)
-                else []
-            )
-            score = self._evaluate_direction_score(nx.restricted_view(self.graph, [], hidden))
+            if cacheable and _HAS_SCIPY:
+                score = self._compiled_direction_score((source, target))
+            else:
+                hidden = (
+                    [(source, target, key) for key in self.graph[source][target]]
+                    if self.graph.has_edge(source, target)
+                    else []
+                )
+                score = self._evaluate_direction_score(nx.restricted_view(self.graph, [], hidden))
 
             if score > best_score:
                 best_score = score
@@ -778,6 +798,82 @@ class ConstraintEnforcer:
         if cacheable:
             cache[(u, v)] = best_direction
         return best_direction
+
+    def _compiled_direction_score(self, hidden_pair: tuple[int, int]) -> float:
+        """The same score as _evaluate_direction_score, on a compiled graph.
+
+        Circulation sectors hold thousands of streets and dozens of entries;
+        breadth-first searches in SciPy keep scoring each one-way candidate
+        cheap. Only the unmodified interior graph is compiled.
+        """
+        compiled = getattr(self, "_compiled", None)
+        if compiled is None:
+            compiled = self._compiled = self._compile_direction_scoring()
+        index, rows, cols, positions, sector_of, entries, _matrix, baseline = compiled
+        source = index.get(hidden_pair[0], -1)
+        target = index.get(hidden_pair[1], -1)
+        hidden = positions.get((source, target))
+        if hidden is None:
+            return sum(entry_score for entry_score, _parents in baseline)
+
+        # Removing an arc changes what an entry reaches only when the arc is in
+        # that entry's breadth-first tree; every other entry keeps its score.
+        affected = [
+            position
+            for position, (_entry_score, parents) in enumerate(baseline)
+            if parents[target] == source
+        ]
+        affected_set = set(affected)
+        score = sum(
+            entry_score
+            for position, (entry_score, _parents) in enumerate(baseline)
+            if position not in affected_set
+        )
+        if not affected:
+            return score
+        mask = np.ones(len(rows), dtype=bool)
+        mask[hidden] = False
+        size = len(sector_of)
+        reduced = csr_matrix(
+            (np.ones(int(mask.sum()), dtype=np.int8), (rows[mask], cols[mask])),
+            shape=(size, size),
+        )
+        for position in affected:
+            entry_index, sector = entries[position]
+            score += self._entry_reach_score(reduced, entry_index, sector, sector_of)[0]
+        return score
+
+    @staticmethod
+    def _entry_reach_score(matrix, entry_index: int, sector: int, sector_of):
+        order, parents = breadth_first_order(
+            matrix, entry_index, directed=True, return_predecessors=True
+        )
+        reached = order[order != entry_index]
+        reached_sectors = sector_of[reached]
+        cross = int(np.count_nonzero((reached_sectors >= 0) & (reached_sectors != sector)))
+        return float(len(reached) - 1000 * cross), parents
+
+    def _compile_direction_scoring(self):
+        nodes = list(self.graph.nodes())
+        index = {node: position for position, node in enumerate(nodes)}
+        pairs = sorted({(index[a], index[b]) for a, b in self.graph.edges() if a != b})
+        rows = np.fromiter((a for a, _b in pairs), dtype=np.int32, count=len(pairs))
+        cols = np.fromiter((b for _a, b in pairs), dtype=np.int32, count=len(pairs))
+        positions = {pair: position for position, pair in enumerate(pairs)}
+        sector_of = np.full(len(nodes), -1, dtype=np.int32)
+        entries: list[tuple[int, int]] = []
+        for sector in range(self.num_sectors):
+            for entry in self.sectors.entry_points_by_sector.get(sector, []):
+                if entry in index:
+                    sector_of[index[entry]] = sector
+                    entries.append((index[entry], sector))
+        size = len(nodes)
+        matrix = csr_matrix((np.ones(len(pairs), dtype=np.int8), (rows, cols)), shape=(size, size))
+        baseline = [
+            self._entry_reach_score(matrix, entry_index, sector, sector_of)
+            for entry_index, sector in entries
+        ]
+        return index, rows, cols, positions, sector_of, entries, matrix, baseline
 
     def _evaluate_direction_score(self, graph: nx.MultiDiGraph) -> float:
         """

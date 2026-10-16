@@ -97,6 +97,9 @@ ARTERIAL_TYPES = {
     "tertiary_link",
 }
 
+# Split lines tried per oversized cell, nearest the cell centre first.
+MAX_SPLIT_CANDIDATES = 150
+
 # Road hierarchy for boundary suitability
 MINOR_ROAD_CLASSES = frozenset(
     {"residential", "living_street", "service", "pedestrian", "track", "road", "busway"}
@@ -1061,19 +1064,8 @@ class CityPartitioner:
         best_split = None
         best_balance = float("inf")
 
-        for u, v, key in cell.interior_edges:
-            if not self.graph.has_edge(u, v, key):
-                continue
-
+        for u, v, key in self._split_candidates(cell):
             data = self.graph[u][v][key]
-            highway = data.get("highway", "")
-            if isinstance(highway, list):
-                highway = highway[0]
-
-            # Prefer higher-hierarchy roads for splitting
-            hierarchy = HIERARCHY_MAP.get(highway, 6)
-            if hierarchy > 5:  # Don't split on residential or lower
-                continue
 
             geom = data.get("geometry")
             if geom is None:
@@ -1135,6 +1127,39 @@ class CityPartitioner:
             )
 
         return new_cells
+
+    def _split_candidates(self, cell: SuperblockCell) -> list[tuple[int, int, int]]:
+        """Interior main-road edges to try as split lines, nearest the centre first.
+
+        A line through the middle of a cell gives the most even split. Large
+        circulation-sector cells hold thousands of candidate edges, and
+        clipping each against the cell polygon dominated the run, so only the
+        nearest ``MAX_SPLIT_CANDIDATES`` are tried.
+        """
+        candidates: list[tuple[float, tuple[int, int, int]]] = []
+        centroid = cell.polygon.centroid
+        for u, v, key in cell.interior_edges:
+            if not self.graph.has_edge(u, v, key):
+                continue
+            highway = self.graph[u][v][key].get("highway", "")
+            if isinstance(highway, list):
+                highway = highway[0]
+            # Prefer higher-hierarchy roads for splitting
+            if HIERARCHY_MAP.get(highway, 6) > 5:  # Don't split on residential or lower
+                continue
+            u_data = self.graph.nodes.get(u, {})
+            v_data = self.graph.nodes.get(v, {})
+            if "x" in u_data and "x" in v_data:
+                mid_x = (u_data["x"] + v_data["x"]) / 2
+                mid_y = (u_data["y"] + v_data["y"]) / 2
+                distance = (mid_x - centroid.x) ** 2 + (mid_y - centroid.y) ** 2
+            else:
+                distance = float("inf")
+            candidates.append((distance, (u, v, key)))
+        if len(candidates) > MAX_SPLIT_CANDIDATES:
+            candidates.sort(key=lambda item: item[0])
+            candidates = candidates[:MAX_SPLIT_CANDIDATES]
+        return [edge for _distance, edge in candidates]
 
     def _extend_line_to_boundary(self, line: LineString, polygon: Polygon) -> LineString | None:
         """Extend a line to intersect the polygon boundary on both ends."""
