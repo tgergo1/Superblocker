@@ -139,7 +139,7 @@ class NetworkConflator:
             data["signal_controller_id"] = best.signal_controller_id
             data["width_m"] = best.width_m
             data["grade_percent"] = best.grade_percent
-            data["max_clearance_m"] = best.clearance_m
+            data["clearance_m"] = best.clearance_m
             data["permitted_vehicle_classes"] = [
                 item.value for item in best.permitted_vehicle_classes
             ]

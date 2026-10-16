@@ -52,9 +52,9 @@ export function TrafficImpactPanel({
   const roadsOverCapacity = impact.boundary_roads.filter(
     road => road.baseline_peak_vph + (road.added_peak_vph[scenario] ?? 0) > road.capacity_vph,
   ).length;
+  // Superblocks with no cut-through traffic count as a 0% cut, not missing data.
   const reductions = impact.superblocks
     .map(item => item.interior_traffic_reduction_percent)
-    .filter(value => value > 0)
     .sort((a, b) => a - b);
   const medianReduction = reductions.length ? reductions[Math.floor(reductions.length / 2)] : 0;
   const extraVehicleKm = impact.added_boundary_vehicle_km_peak[scenario] ?? 0;

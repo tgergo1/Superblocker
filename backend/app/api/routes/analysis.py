@@ -912,6 +912,16 @@ async def review_partition(
         {artifact.artifact_id: artifact for artifact in request.approval_artifacts}
     )
     partition.approval_artifacts = list(merged_artifacts.values())
+    # Persist each verified approval so registry lookups and the audit chain
+    # carry it, as the evidence endpoint does for evidence artifacts.
+    for artifact in request.approval_artifacts:
+        get_registry_store().register_artifact(
+            artifact_id=artifact.artifact_id,
+            artifact_type=f"approval:{artifact.approval_type.value}",
+            plan_id=partition.plan_id,
+            payload=artifact.model_dump(mode="json"),
+            actor_id="verified-review-api",
+        )
 
     validated_target_count = sum(
         superblock.access_target_count for superblock in partition.superblocks

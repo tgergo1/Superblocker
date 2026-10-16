@@ -211,7 +211,7 @@ class TurnGraphBuilder:
         modifications: Iterable[StreetModification] = (),
         active_time_window: str | None = None,
     ) -> TurnGraph:
-        graph = self._prepare_graph(vehicle_class, list(modifications))
+        graph = self._prepare_graph(vehicle_class, list(modifications), active_time_window)
         edge_data: dict[DirectedEdgeRef, dict[str, Any]] = {}
         turn_graph = nx.DiGraph()
         outgoing: dict[int, list[DirectedEdgeRef]] = defaultdict(list)
@@ -271,9 +271,19 @@ class TurnGraphBuilder:
         self,
         vehicle_class: VehicleClass,
         modifications: list[StreetModification],
+        active_time_window: str | None = None,
     ) -> nx.MultiDiGraph:
         graph = self.source_graph.copy()
         for modification in modifications:
+            # A timed measure (a school street, a peak-hour gate) applies only in
+            # its own windows; with no active window it is modelled as in force,
+            # matching how timed turn restrictions are treated.
+            if (
+                modification.time_windows
+                and active_time_window is not None
+                and active_time_window not in modification.time_windows
+            ):
+                continue
             if modification.modification_type == ModificationType.TWO_WAY:
                 self._add_reverse(graph, modification)
                 continue
@@ -286,6 +296,9 @@ class TurnGraphBuilder:
             elif modification.modification_type == ModificationType.FULL_CLOSURE:
                 self._remove_both_directions(graph, modification)
             elif modification.modification_type == ModificationType.ONE_WAY:
+                # Contraflow exemptions, such as a bus lane against the one-way.
+                if vehicle_class in modification.allowed_vehicle_classes:
+                    continue
                 if modification.direction == "u_to_v":
                     self._remove_direction(graph, modification.v, modification.u)
                 elif modification.direction == "v_to_u":

@@ -23,8 +23,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY --chown=superblocker:superblocker app/ ./app/
-RUN mkdir -p /app/cache /home/superblocker/.cache/osmnx \
-    && chown -R superblocker:superblocker /app/cache /home/superblocker/.cache
+# The plan registry writes to /app/state at startup; it must exist and be
+# owned by the runtime user or the app exits before becoming healthy.
+RUN mkdir -p /app/cache /app/state /home/superblocker/.cache/osmnx \
+    && chown -R superblocker:superblocker /app/cache /app/state /home/superblocker/.cache
 
 USER superblocker
 

@@ -1527,6 +1527,7 @@ class CityPartitioner:
                 snapped_node = graph_nodes[nearest_index][0]
 
             failed_vehicle_classes: list[VehicleClass] = []
+            constraint_reasons: list[str] = []
             for requested_class in target.permitted_vehicle_classes:
                 vehicle_class = (
                     VehicleClass.CAR
@@ -1544,6 +1545,13 @@ class CityPartitioner:
                 )
                 if not inbound or not outbound:
                     failed_vehicle_classes.append(requested_class)
+                    continue
+                reasons = self._access_constraint_failures(
+                    graph, modifications, entry_nodes, snapped_node, target, vehicle_class
+                )
+                if reasons:
+                    failed_vehicle_classes.append(requested_class)
+                    constraint_reasons.extend(reasons)
             if not failed_vehicle_classes:
                 continue
 
@@ -1570,6 +1578,8 @@ class CityPartitioner:
                     reason=(
                         "No entry point connects this cell to the boundary network"
                         if not entry_nodes
+                        else "; ".join(dict.fromkeys(constraint_reasons))
+                        if constraint_reasons
                         else "No legal inbound-and-return path for: "
                         + ", ".join(vehicle_class.value for vehicle_class in failed_vehicle_classes)
                     ),
@@ -1577,6 +1587,77 @@ class CityPartitioner:
             )
 
         return unreachable
+
+    def _access_constraint_failures(
+        self,
+        graph: nx.MultiDiGraph,
+        modifications: list[StreetModification],
+        entry_nodes: list[int],
+        target_node: int,
+        target: AccessTarget,
+        vehicle_class: VehicleClass,
+    ) -> list[str]:
+        """Check a target's declared service windows, clearance and detour limit.
+
+        Path existence alone is not access: a delivery bay needs a route during
+        its service window, under its vehicle's height, within its detour
+        allowance. Targets that declare none of these are skipped.
+        """
+        if (
+            not target.service_windows
+            and target.minimum_clearance_m is None
+            and target.maximum_detour_minutes is None
+        ):
+            return []
+
+        def best_round_trip(turn_graph) -> tuple[float, list] | None:
+            inbound = [
+                turn_graph.shortest_path_between_nodes(entry, target_node) for entry in entry_nodes
+            ]
+            outbound = [
+                turn_graph.shortest_path_between_nodes(target_node, entry) for entry in entry_nodes
+            ]
+            inbound = [item for item in inbound if item is not None]
+            outbound = [item for item in outbound if item is not None]
+            if not inbound or not outbound:
+                return None
+            best_in = min(inbound, key=lambda item: item[0])
+            best_out = min(outbound, key=lambda item: item[0])
+            return best_in[0] + best_out[0], best_in[1] + best_out[1]
+
+        builder = TurnGraphBuilder(graph, self.turn_restrictions)
+        reasons: list[str] = []
+        for window in target.service_windows or [None]:
+            label = f" during {window}" if window else ""
+            planned_graph = builder.build(vehicle_class, modifications, window)
+            planned = best_round_trip(planned_graph)
+            if planned is None:
+                reasons.append(f"No {vehicle_class.value} inbound-and-return path{label}")
+                continue
+            minutes, states = planned
+            if target.minimum_clearance_m is not None:
+                clearances: list[float | None] = []
+                for state in states:
+                    try:
+                        clearances.append(float(planned_graph.edge_data[state]["clearance_m"]))
+                    except (KeyError, TypeError, ValueError):
+                        clearances.append(None)
+                if any(value is None for value in clearances):
+                    reasons.append(f"Clearance is not surveyed on the {vehicle_class.value} route")
+                elif clearances and min(clearances) < target.minimum_clearance_m:
+                    reasons.append(
+                        f"Route clearance is below {target.minimum_clearance_m:.2f} m{label}"
+                    )
+            if target.maximum_detour_minutes is not None:
+                baseline = best_round_trip(builder.build(vehicle_class, [], window))
+                if baseline is not None and (
+                    minutes - baseline[0] > target.maximum_detour_minutes + 1e-9
+                ):
+                    reasons.append(
+                        f"Detour of {minutes - baseline[0]:.1f} min exceeds "
+                        f"{target.maximum_detour_minutes:.1f} min{label}"
+                    )
+        return reasons
 
     def _polygon_to_geojson(self, polygon: Polygon) -> dict:
         """Convert Shapely Polygon to GeoJSON dict."""

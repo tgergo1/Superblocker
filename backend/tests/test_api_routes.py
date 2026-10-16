@@ -258,6 +258,9 @@ def test_reviews_are_post_analysis_and_bound_to_plan_digest(client):
     assert response.json()["readiness"]["transport_engineering_reviewed"] is True
     assert response.json()["readiness"]["site_inspection_reviewed"] is False
     assert response.json()["readiness"]["implementation_ready"] is False
+    stored = analysis.get_registry_store().get_artifact("engineering-review-1")
+    assert stored is not None
+    assert stored["artifact_type"] == "approval:transport_engineering"
 
     partition.coverage_percent = 99
     response = client.post(
