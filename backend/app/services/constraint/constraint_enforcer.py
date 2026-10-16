@@ -309,11 +309,19 @@ class ConstraintEnforcer:
         return modifications
 
     def _preserves_entry_access(self, modifications: list[StreetModification]) -> bool:
-        """Return True when no node loses access from the set of entry points."""
-        original_reachable = self._nodes_reachable_from_entries(self.graph)
+        """Return True when no node loses access from, or a way back to, the entries.
+
+        A one-way change can leave a street that cars can enter but never
+        leave; that strands it just as surely as a filter that cuts it off.
+        """
         modified = self._apply_vehicle_modifications(modifications)
-        modified_reachable = self._nodes_reachable_from_entries(modified)
-        return original_reachable.issubset(modified_reachable)
+        if not self._nodes_reachable_from_entries(self.graph).issubset(
+            self._nodes_reachable_from_entries(modified)
+        ):
+            return False
+        return self._nodes_reachable_from_entries(self.graph.reverse(copy=False)).issubset(
+            self._nodes_reachable_from_entries(modified.reverse(copy=False))
+        )
 
     def _all_nodes_reachable(self, modifications: list[StreetModification]) -> bool:
         """Return True when every interior node can be entered from a boundary side."""
