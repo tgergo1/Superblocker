@@ -97,6 +97,9 @@ ARTERIAL_TYPES = {
     "tertiary_link",
 }
 
+# Split lines tried per oversized cell, nearest the cell centre first.
+MAX_SPLIT_CANDIDATES = 150
+
 # Road hierarchy for boundary suitability
 MINOR_ROAD_CLASSES = frozenset(
     {"residential", "living_street", "service", "pedestrian", "track", "road", "busway"}
@@ -118,6 +121,14 @@ HIERARCHY_MAP = {
     "unclassified": 8,
     "service": 9,
 }
+
+
+def _clearance(edge_data: dict | None) -> float | None:
+    """Surveyed clearance in metres, or None when it is unknown."""
+    try:
+        return float((edge_data or {})["clearance_m"])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 @dataclass
@@ -1061,19 +1072,8 @@ class CityPartitioner:
         best_split = None
         best_balance = float("inf")
 
-        for u, v, key in cell.interior_edges:
-            if not self.graph.has_edge(u, v, key):
-                continue
-
+        for u, v, key in self._split_candidates(cell):
             data = self.graph[u][v][key]
-            highway = data.get("highway", "")
-            if isinstance(highway, list):
-                highway = highway[0]
-
-            # Prefer higher-hierarchy roads for splitting
-            hierarchy = HIERARCHY_MAP.get(highway, 6)
-            if hierarchy > 5:  # Don't split on residential or lower
-                continue
 
             geom = data.get("geometry")
             if geom is None:
@@ -1135,6 +1135,39 @@ class CityPartitioner:
             )
 
         return new_cells
+
+    def _split_candidates(self, cell: SuperblockCell) -> list[tuple[int, int, int]]:
+        """Interior main-road edges to try as split lines, nearest the centre first.
+
+        A line through the middle of a cell gives the most even split. Large
+        circulation-sector cells hold thousands of candidate edges, and
+        clipping each against the cell polygon dominated the run, so only the
+        nearest ``MAX_SPLIT_CANDIDATES`` are tried.
+        """
+        candidates: list[tuple[float, tuple[int, int, int]]] = []
+        centroid = cell.polygon.centroid
+        for u, v, key in cell.interior_edges:
+            if not self.graph.has_edge(u, v, key):
+                continue
+            highway = self.graph[u][v][key].get("highway", "")
+            if isinstance(highway, list):
+                highway = highway[0]
+            # Prefer higher-hierarchy roads for splitting
+            if HIERARCHY_MAP.get(highway, 6) > 5:  # Don't split on residential or lower
+                continue
+            u_data = self.graph.nodes.get(u, {})
+            v_data = self.graph.nodes.get(v, {})
+            if "x" in u_data and "x" in v_data:
+                mid_x = (u_data["x"] + v_data["x"]) / 2
+                mid_y = (u_data["y"] + v_data["y"]) / 2
+                distance = (mid_x - centroid.x) ** 2 + (mid_y - centroid.y) ** 2
+            else:
+                distance = float("inf")
+            candidates.append((distance, (u, v, key)))
+        if len(candidates) > MAX_SPLIT_CANDIDATES:
+            candidates.sort(key=lambda item: item[0])
+            candidates = candidates[:MAX_SPLIT_CANDIDATES]
+        return [edge for _distance, edge in candidates]
 
     def _extend_line_to_boundary(self, line: LineString, polygon: Polygon) -> LineString | None:
         """Extend a line to intersect the polygon boundary on both ends."""
@@ -1527,12 +1560,23 @@ class CityPartitioner:
                 snapped_node = graph_nodes[nearest_index][0]
 
             failed_vehicle_classes: list[VehicleClass] = []
+            constraint_reasons: list[str] = []
             for requested_class in target.permitted_vehicle_classes:
                 vehicle_class = (
                     VehicleClass.CAR
                     if requested_class == VehicleClass.ALL_MOTOR
                     else requested_class
                 )
+                if snapped_node is not None and target.service_windows:
+                    # Reachability depends on which timed measures are in
+                    # force, so it is checked in each declared window.
+                    reasons = self._access_constraint_failures(
+                        graph, modifications, entry_nodes, snapped_node, target, vehicle_class
+                    )
+                    if reasons:
+                        failed_vehicle_classes.append(requested_class)
+                        constraint_reasons.extend(reasons)
+                    continue
                 turn_graph = turn_graphs[vehicle_class]
                 inbound = snapped_node is not None and any(
                     entry == snapped_node or turn_graph.has_path_between_nodes(entry, snapped_node)
@@ -1544,6 +1588,13 @@ class CityPartitioner:
                 )
                 if not inbound or not outbound:
                     failed_vehicle_classes.append(requested_class)
+                    continue
+                reasons = self._access_constraint_failures(
+                    graph, modifications, entry_nodes, snapped_node, target, vehicle_class
+                )
+                if reasons:
+                    failed_vehicle_classes.append(requested_class)
+                    constraint_reasons.extend(reasons)
             if not failed_vehicle_classes:
                 continue
 
@@ -1570,6 +1621,8 @@ class CityPartitioner:
                     reason=(
                         "No entry point connects this cell to the boundary network"
                         if not entry_nodes
+                        else "; ".join(dict.fromkeys(constraint_reasons))
+                        if constraint_reasons
                         else "No legal inbound-and-return path for: "
                         + ", ".join(vehicle_class.value for vehicle_class in failed_vehicle_classes)
                     ),
@@ -1577,6 +1630,81 @@ class CityPartitioner:
             )
 
         return unreachable
+
+    def _access_constraint_failures(
+        self,
+        graph: nx.MultiDiGraph,
+        modifications: list[StreetModification],
+        entry_nodes: list[int],
+        target_node: int,
+        target: AccessTarget,
+        vehicle_class: VehicleClass,
+    ) -> list[str]:
+        """Check a target's declared service windows, clearance and detour limit.
+
+        Path existence alone is not access: a delivery bay needs a route during
+        its service window, under its vehicle's height, within its detour
+        allowance. Targets that declare none of these are skipped.
+        """
+        if (
+            not target.service_windows
+            and target.minimum_clearance_m is None
+            and target.maximum_detour_minutes is None
+        ):
+            return []
+
+        def best_round_trip(turn_graph) -> tuple[float, list] | None:
+            inbound = [
+                turn_graph.shortest_path_between_nodes(entry, target_node) for entry in entry_nodes
+            ]
+            outbound = [
+                turn_graph.shortest_path_between_nodes(target_node, entry) for entry in entry_nodes
+            ]
+            inbound = [item for item in inbound if item is not None]
+            outbound = [item for item in outbound if item is not None]
+            if not inbound or not outbound:
+                return None
+            best_in = min(inbound, key=lambda item: item[0])
+            best_out = min(outbound, key=lambda item: item[0])
+            return best_in[0] + best_out[0], best_in[1] + best_out[1]
+
+        builder = TurnGraphBuilder(graph, self.turn_restrictions)
+        reasons: list[str] = []
+        for window in target.service_windows or [None]:
+            label = f" during {window}" if window else ""
+            planned_graph = builder.build(vehicle_class, modifications, window)
+            planned = best_round_trip(planned_graph)
+            if planned is None:
+                reasons.append(f"No {vehicle_class.value} inbound-and-return path{label}")
+                continue
+            if target.minimum_clearance_m is not None:
+                # Route only over streets surveyed tall enough, so a slower
+                # route under the height limit still counts.
+                clear_states = {
+                    state
+                    for state in planned_graph.graph.nodes
+                    if (clearance := _clearance(planned_graph.edge_data.get(state))) is not None
+                    and clearance >= target.minimum_clearance_m
+                }
+                cleared = best_round_trip(planned_graph.restricted_to(clear_states))
+                if cleared is None:
+                    reasons.append(
+                        f"No {vehicle_class.value} route with surveyed clearance of at least "
+                        f"{target.minimum_clearance_m:.2f} m{label}"
+                    )
+                    continue
+                planned = cleared
+            minutes, _states = planned
+            if target.maximum_detour_minutes is not None:
+                baseline = best_round_trip(builder.build(vehicle_class, [], window))
+                if baseline is not None and (
+                    minutes - baseline[0] > target.maximum_detour_minutes + 1e-9
+                ):
+                    reasons.append(
+                        f"Detour of {minutes - baseline[0]:.1f} min exceeds "
+                        f"{target.maximum_detour_minutes:.1f} min{label}"
+                    )
+        return reasons
 
     def _polygon_to_geojson(self, polygon: Polygon) -> dict:
         """Convert Shapely Polygon to GeoJSON dict."""

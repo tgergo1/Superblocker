@@ -25,10 +25,13 @@ def test_authoritative_conflation_applies_stable_rules_and_reports_coverage():
             capacity_vph=1_200,
             signal_controller_id="signal-1",
             permitted_vehicle_classes=[VehicleClass.CAR, VehicleClass.EMERGENCY],
+            clearance_m=3.8,
         )
     ]
 
     conflated, report = NetworkConflator().conflate(graph, inventory)
+    # The operational validator reads clearance under this exact key.
+    assert conflated[1][2][0]["clearance_m"] == 3.8
 
     assert conflated[1][2][0]["authoritative_stable_id"] == "authority-road-1"
     assert conflated[1][2][0]["traffic_rule_version"] == "2026-09-02"

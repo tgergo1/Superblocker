@@ -79,3 +79,72 @@ def test_sector_validation_uses_legal_turn_paths():
 
     assert (0, 1) in violations
     assert (0, 2) in violations
+
+
+def test_timed_closure_applies_only_in_its_own_window():
+    closure = StreetModification(
+        u=2,
+        v=3,
+        osm_id=20,
+        modification_type=ModificationType.FULL_CLOSURE,
+        time_windows=["Mo-Fr 07:30-08:30"],
+    )
+    builder = TurnGraphBuilder(junction_graph(), [])
+
+    in_window = builder.build(modifications=[closure], active_time_window="Mo-Fr 07:30-08:30")
+    other_window = builder.build(modifications=[closure], active_time_window="Sa 12:00-13:00")
+    no_window = builder.build(modifications=[closure])
+
+    assert (2, 3, 0) not in in_window.edge_data
+    assert (2, 3, 0) in other_window.edge_data
+    assert (2, 3, 0) not in no_window.edge_data
+
+
+def test_one_way_exemption_keeps_buses_in_both_directions():
+    graph = junction_graph()
+    graph.add_edge(3, 2, key=0, osmid=20, length=100)
+    one_way = StreetModification(
+        u=2,
+        v=3,
+        osm_id=20,
+        modification_type=ModificationType.ONE_WAY,
+        direction="u_to_v",
+        allowed_vehicle_classes=[VehicleClass.BUS, VehicleClass.EMERGENCY],
+    )
+    builder = TurnGraphBuilder(graph, [])
+
+    assert (3, 2, 0) not in builder.build(VehicleClass.CAR, [one_way]).edge_data
+    assert (3, 2, 0) in builder.build(VehicleClass.BUS, [one_way]).edge_data
+
+
+def test_timed_turn_restriction_applies_only_in_its_own_window():
+    ban = StreetModification(
+        u=2,
+        v=3,
+        osm_id=20,
+        modification_type=ModificationType.TURN_RESTRICTION,
+        via_node_id=2,
+        turn_from_osm_id=10,
+        turn_to_osm_id=20,
+        time_windows=["Mo-Fr 07:30-08:30"],
+    )
+    builder = TurnGraphBuilder(junction_graph(), [])
+
+    in_window = builder.build(modifications=[ban], active_time_window="Mo-Fr 07:30-08:30")
+    other_window = builder.build(modifications=[ban], active_time_window="Sa 12:00-13:00")
+
+    assert not in_window.graph.has_edge((1, 2, 0), (2, 3, 0))
+    assert other_window.graph.has_edge((1, 2, 0), (2, 3, 0))
+
+
+def test_two_way_repair_reverses_the_street_shape():
+    from shapely.geometry import LineString
+
+    graph = junction_graph()
+    graph[2][3][0]["geometry"] = LineString([(2.0, 0.0), (2.5, 0.5), (3.0, 0.0)])
+    repair = StreetModification(u=2, v=3, osm_id=20, modification_type=ModificationType.TWO_WAY)
+
+    turn_graph = TurnGraphBuilder(graph, []).build(modifications=[repair])
+
+    reverse = turn_graph.edge_data[(3, 2, 0)]["geometry"]
+    assert list(reverse.coords) == [(3.0, 0.0), (2.5, 0.5), (2.0, 0.0)]

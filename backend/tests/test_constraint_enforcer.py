@@ -214,3 +214,30 @@ def test_enforcement_on_tertiary_interior_completes():
     modifications, remaining = enforcer.enforce_constraints()
     assert modifications
     assert remaining == []
+
+
+def test_compiled_direction_score_matches_networkx_scoring():
+    """The SciPy scorer must rank one-way options exactly like the reference."""
+    grid = nx.grid_2d_graph(5, 5)
+    graph = nx.MultiDiGraph()
+    labels = {node: index + 1 for index, node in enumerate(sorted(grid.nodes()))}
+    for (x, y), node in labels.items():
+        graph.add_node(node, x=float(x), y=float(y))
+    for a, b in grid.edges():
+        for u, v in ((labels[a], labels[b]), (labels[b], labels[a])):
+            graph.add_edge(u, v, key=0, highway="tertiary", length=50.0)
+    entries = [labels[(0, 2)], labels[(4, 2)], labels[(2, 0)], labels[(2, 4)]]
+    enforcer = ConstraintEnforcer(
+        interior_graph=graph,
+        boundary_polygon=Polygon([(-1, -1), (5, -1), (5, 5), (-1, 5)]),
+        entry_node_ids=entries,
+        num_sectors=4,
+    )
+    enforcer.sectors = enforcer._assign_sectors()
+    for u, v in [(labels[(0, 2)], labels[(1, 2)]), (labels[(2, 2)], labels[(2, 3)])]:
+        for source, target in ((u, v), (v, u)):
+            hidden = [(source, target, 0)]
+            reference = enforcer._evaluate_direction_score(
+                nx.restricted_view(enforcer.graph, [], hidden)
+            )
+            assert enforcer._compiled_direction_score((source, target)) == reference

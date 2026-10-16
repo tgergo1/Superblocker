@@ -144,6 +144,12 @@ class FilterDesigner:
             return modification.model_copy(
                 update={
                     "transit_route_refs": refs,
+                    # Buses and emergency vehicles keep both directions; the
+                    # turn graph honours these exemptions for one-way changes.
+                    "allowed_vehicle_classes": _merge_classes(
+                        modification.allowed_vehicle_classes,
+                        [VehicleClass.BUS, VehicleClass.EMERGENCY],
+                    ),
                     "construction_treatment": (
                         "One-way for general traffic with a contraflow bus lane for "
                         + ", ".join(refs[:4])

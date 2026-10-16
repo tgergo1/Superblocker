@@ -27,3 +27,14 @@ def test_sumo_run_reports_missing_toolchain_without_fabricating_results(tmp_path
     assert result.return_code is None
     assert not (tmp_path / "summary.xml").exists()
     assert any("not all installed" in item for item in result.limitations)
+
+
+def test_sumo_export_includes_reverse_edges_from_two_way_repairs(tmp_path):
+    from app.models.schemas import ModificationType, StreetModification
+
+    repair = StreetModification(u=1, v=2, osm_id=10, modification_type=ModificationType.TWO_WAY)
+    SumoAdapter(assignment_graph()).export(demand_model(), [repair], tmp_path)
+
+    edges = ET.parse(tmp_path / "network.edg.xml").getroot()
+    pairs = {(edge.attrib["from"], edge.attrib["to"]) for edge in edges.findall("edge")}
+    assert ("2", "1") in pairs

@@ -94,14 +94,18 @@ class SumoAdapter:
         permitted: dict[EdgeRef, set[VehicleClass]] = defaultdict(set)
         connections: dict[tuple[EdgeRef, EdgeRef], set[VehicleClass]] = defaultdict(set)
         class_graphs = {}
+        edge_attributes: dict[EdgeRef, dict] = {}
         for vehicle_class in classes:
             turn_graph = TurnGraphBuilder(self.graph, self.restrictions).build(
                 vehicle_class,
                 modifications,
             )
             class_graphs[vehicle_class] = turn_graph
-            for ref in turn_graph.edge_data:
+            for ref, data in turn_graph.edge_data.items():
                 permitted[ref].add(vehicle_class)
+                # Planned two-way repairs add reverse edges that exist only in
+                # the turn graph, so export attributes from there.
+                edge_attributes.setdefault(ref, data)
             for incoming, outgoing in turn_graph.graph.edges:
                 connections[(incoming, outgoing)].add(vehicle_class)
 
@@ -130,7 +134,7 @@ class SumoAdapter:
 
         edges_root = ET.Element("edges")
         for ref, allowed_classes in sorted(permitted.items()):
-            data = self.graph[ref[0]][ref[1]][ref[2]]
+            data = edge_attributes[ref]
             attributes = {
                 "id": _edge_id(ref),
                 "from": str(ref[0]),
