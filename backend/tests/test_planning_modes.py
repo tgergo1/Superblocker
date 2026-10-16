@@ -205,3 +205,17 @@ def test_simple_superblocks_claim_split_filters_once():
     assert owner.modifications == partitioner._split_street_filters(first)
     assert neighbour.modal_filter_count == 0
     assert neighbour.modifications == []
+
+
+def test_large_cells_split_until_they_fit_in_one_pass():
+    partitioner, cell = _residential_cell(0.02, minor_boundary_policy="avoid")  # about 245 ha
+    partitioner.cells = [cell]
+    assert partitioner._split_large_cells()
+    # Streets every 0.002 degrees give pieces of about 24 ha at best; every
+    # piece that can still split has been split, without another round.
+    assert len(partitioner.cells) >= 8
+    assert all(
+        not partitioner._best_split(piece, partitioner._split_candidates(piece, frozenset({6, 8})))
+        for piece in partitioner.cells
+        if piece.area_hectares > 20
+    )

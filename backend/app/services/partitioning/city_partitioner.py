@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import uuid
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -1024,21 +1025,24 @@ class CityPartitioner:
         return merged
 
     def _split_large_cells(self) -> bool:
-        """Split cells larger than max_area_ha."""
+        """Split cells larger than max_area_ha until each piece fits or cannot split.
+
+        Each split halves a cell, so a 1,000 ha outer-district cell needs several
+        rounds; splitting the pieces again here, instead of once per round of
+        the merge/split loop, keeps the round limit from leaving them oversized.
+        """
         split = False
         new_cells = []
-
-        for cell in self.cells:
+        queue = deque(self.cells)
+        while queue:
+            cell = queue.popleft()
             if cell.area_hectares > self.max_area_ha:
-                # Try to split
-                split_cells = self._split_cell(cell)
-                if len(split_cells) > 1:
-                    new_cells.extend(split_cells)
+                pieces = self._split_cell(cell)
+                if len(pieces) > 1:
+                    queue.extendleft(reversed(pieces))
                     split = True
-                else:
-                    new_cells.append(cell)
-            else:
-                new_cells.append(cell)
+                    continue
+            new_cells.append(cell)
 
         self.cells = new_cells
         return split
