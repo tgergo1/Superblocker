@@ -142,6 +142,7 @@ STREET_REACH_M = 100.0
 MAX_ACCESS_REPAIR_ROUNDS = 10
 THROUGH_CORRIDOR_HIGHWAYS = frozenset({"motorway", "motorway_link", "trunk", "trunk_link"})
 MAX_REDESIGN_ROUNDS = 3
+MIN_SECTORS = 2
 # Access changes a repair pass may reopen when they strand streets.
 REPAIRABLE_CHANGES = frozenset(
     {ModificationType.MODAL_FILTER, ModificationType.FULL_CLOSURE, ModificationType.ONE_WAY}
@@ -647,6 +648,16 @@ class CityPartitioner:
         for _round in range(MAX_REDESIGN_ROUNDS):
             if not self._redesign_after_repair():
                 break
+        # Superblocks that still bounce between a cut and the street it strands
+        # get fewer, larger sectors: fewer cuts, each with more room to route.
+        sectors = self.num_sectors
+        try:
+            while self.num_sectors > MIN_SECTORS:
+                self.num_sectors -= 1
+                if not self._redesign_after_repair():
+                    break
+        finally:
+            self.num_sectors = sectors
         self._report_progress("constraints", 95, f"Created {len(self.superblocks)} superblocks")
 
         # Step 6: Compute statistics
