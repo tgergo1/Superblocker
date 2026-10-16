@@ -2227,12 +2227,9 @@ class CityPartitioner:
                     parent[nxt] = node
                     if nxt in main:
                         other = owner.get((node, nxt))
-                        if (
-                            other is not None
-                            and other.id != home
-                            and nxt not in entries[home]
-                            and nxt in entries[other.id]
-                        ):
+                        # Out onto a main road from another superblock's
+                        # street, even at a corner the two share.
+                        if other is not None and other.id != home and nxt != start:
                             path = [nxt]
                             while parent[path[-1]] is not None:
                                 path.append(parent[path[-1]])
