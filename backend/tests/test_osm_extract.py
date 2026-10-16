@@ -63,8 +63,9 @@ def test_drive_network_keeps_only_drivable_public_roads_in_the_area(extract):
     assert all("x" in data and "y" in data for _node, data in graph.nodes(data=True))
 
 
-def test_all_network_also_keeps_footways(extract):
-    assert 300 in osm_ids(graph_from_extract(extract, BBOX, "all"))
+def test_all_network_keeps_footways_and_private_ways_like_osmnx(extract):
+    ids = osm_ids(graph_from_extract(extract, BBOX, "all"))
+    assert {300, 400} <= ids
 
 
 def test_polygon_clips_the_graph(extract):
@@ -92,3 +93,29 @@ def test_download_uses_the_extract_when_configured(extract, monkeypatch):
     graph = osm_service._download_graph(bbox, "drive", None)
 
     assert osm_ids(graph) == {100, 200}
+
+
+def test_boundary_beyond_the_request_box_still_gets_its_roads(extract):
+    # The request box covers only the west end; the boundary covers the residential street.
+    small_box = (19.049, 47.499, 19.0505, 47.5005)
+    graph = graph_from_extract(extract, small_box, "drive", box(19.049, 47.499, 19.056, 47.503))
+    assert 200 in osm_ids(graph)
+
+
+def test_network_cache_key_names_the_source(extract, monkeypatch):
+    import os
+
+    from app.services import osm_service
+
+    monkeypatch.setattr(osm_service.settings, "osm_extract_path", None)
+    assert osm_service._network_source("drive") == "overpass"
+
+    monkeypatch.setattr(osm_service.settings, "osm_extract_path", str(extract))
+    first = osm_service._network_source("drive")
+    assert first.startswith("extract:")
+    assert osm_service._network_source("walk") == "overpass"
+
+    # Replacing the extract changes the key.
+    extract.write_text(OSM_XML + "\n", encoding="utf-8")
+    os.utime(extract, (1, 1))
+    assert osm_service._network_source("drive") != first

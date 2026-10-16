@@ -30,8 +30,9 @@ _DRIVE_EXCLUDED_HIGHWAYS = re.compile(
 _DRIVE_EXCLUDED_SERVICE = re.compile(
     r"alley|driveway|emergency_access|parking|parking_aisle|private"
 )
+# OSMnx's "all" filter keeps private ways; only "all_public" drops them.
 _ALL_EXCLUDED_HIGHWAYS = re.compile(
-    r"abandoned|construction|no|planned|platform|proposed|raceway|razed"
+    r"abandoned|construction|no|planned|platform|proposed|raceway|razed|rest_area|services"
 )
 _YES = re.compile("yes")
 _NO = re.compile("no")
@@ -59,7 +60,6 @@ def _keep_all(tags: Mapping[str, str]) -> bool:
     return (
         "highway" in tags
         and not _matches(_YES, tags.get("area"))
-        and not _matches(_PRIVATE, tags.get("access"))
         and not _matches(_ALL_EXCLUDED_HIGHWAYS, tags.get("highway"))
     )
 
@@ -120,6 +120,12 @@ class _RoadWriter(osmium.SimpleHandler):
             self.writer.add_way(way)
 
 
+def extract_identity(extract_path: str | Path) -> str:
+    """Path, size and modification time, so caches notice a replaced extract."""
+    stat = Path(extract_path).stat()
+    return f"{Path(extract_path).resolve()}:{stat.st_size}:{int(stat.st_mtime)}"
+
+
 def graph_from_extract(
     extract_path: str | Path,
     bbox: tuple[float, float, float, float],
@@ -135,6 +141,9 @@ def graph_from_extract(
     if not path.is_file():
         raise FileNotFoundError(f"OSM extract not found: {path}")
     keep = road_filter(network_type)
+    if polygon is not None:
+        # The boundary, not the request box, decides which roads are needed.
+        bbox = polygon.bounds
     west, south, east, north = bbox
 
     collector = _RoadCollector(keep, west, south, east, north)

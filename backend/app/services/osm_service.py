@@ -15,7 +15,11 @@ from shapely.geometry import mapping, shape
 from app.core.config import get_settings
 from app.models.schemas import AdministrativeBoundary, BoundingBox, StreetNetworkResponse
 from app.services.cache_service import get_cache_service
-from app.services.network.osm_extract import SUPPORTED_NETWORK_TYPES, graph_from_extract
+from app.services.network.osm_extract import (
+    SUPPORTED_NETWORK_TYPES,
+    extract_identity,
+    graph_from_extract,
+)
 from app.utils.geo import validate_bbox_size
 
 settings = get_settings()
@@ -220,6 +224,16 @@ def _boundary_cache_token(boundary: AdministrativeBoundary | None) -> str | None
     return hashlib.sha256(payload.encode()).hexdigest()[:20]
 
 
+def _network_source(network_type: str) -> str:
+    """Where a network comes from, so cached networks from another source are not reused."""
+    if settings.osm_extract_path and network_type in SUPPORTED_NETWORK_TYPES:
+        try:
+            return "extract:" + extract_identity(settings.osm_extract_path)
+        except OSError:
+            return "extract:missing"
+    return "overpass"
+
+
 def _download_graph(
     bbox: BoundingBox,
     network_type: str,
@@ -275,6 +289,7 @@ async def get_street_network(
         "west": round(bbox.west, 5),
         "network_type": network_type_value,
         "boundary": _boundary_cache_token(boundary),
+        "source": _network_source(network_type_value),
     }
 
     # Check cache first
