@@ -587,6 +587,8 @@ class CityPartitioner:
         # Residential streets a cell was split along. They bound two cells but
         # get a modal filter, so diverted traffic stays on the main roads.
         self._quiet_split_streets: set[tuple[int, int]] = set()
+        # Every section of each quiet split street, keyed by its filtered one.
+        self._split_chains: dict[tuple[int, int], list[tuple[int, int, int]]] = {}
         self._split_filters: dict[tuple[int, int], StreetModification] = {}
         self._split_filter_owner: dict[tuple[int, int], int] = {}
         self.filter_designer = FilterDesigner(
@@ -620,6 +622,7 @@ class CityPartitioner:
         self._superblock_index: dict[str, int] = {}
         self.stranded_junctions = 0
         self.destination_gates = 0
+        self.split_filters_moved = 0
         # Cells with no streets inside are not superblocks; they are only counted.
         self.non_street_cells = 0
 
@@ -1275,6 +1278,7 @@ class CityPartitioner:
                 # streets behind it.
                 a, b, _k = self._middle_section(chain)
                 self._quiet_split_streets.add((min(a, b), max(a, b)))
+                self._split_chains[(min(a, b), max(a, b))] = list(chain)
             return pieces
         cell.no_street_split = may_use_minor
         return [cell]
@@ -1867,15 +1871,32 @@ class CityPartitioner:
                 break
         self.stranded_junctions = len(stranded - core)
         # A split street with its filter reopened would carry through traffic
-        # between two main roads; it gets a destination-only gate instead.
-        gates = {
-            id(item): self._destination_gate(item)
-            for item in changes
-            if id(item) in reopened and id(item) in quiet
-        }
+        # between two main roads. Its filter moves to another section of the
+        # same street that strands nothing, or else becomes a destination-only
+        # gate.
+        gates = {}
+        street_of = {id(item): street for street, item in self._split_filters.items()}
+        for item in changes:
+            if id(item) not in reopened or id(item) not in quiet:
+                continue
+            street = street_of.get(id(item))
+            moved = self._move_split_filter(item, street, planned)
+            if moved is not None:
+                self.split_filters_moved += 1
+                gates[id(item)] = moved
+                # The street is now quiet at its new section.
+                section = (min(moved.u, moved.v), max(moved.u, moved.v))
+                self._quiet_split_streets.discard(street)
+                self._quiet_split_streets.add(section)
+                self._split_chains[section] = self._split_chains.pop(street)
+                self._split_filters[section] = self._split_filters.pop(street)
+                if street in self._split_filter_owner:
+                    self._split_filter_owner[section] = self._split_filter_owner.pop(street)
+            else:
+                self.destination_gates += 1
+                gates[id(item)] = self._destination_gate(item)
         reopened -= gates.keys()
         if gates:
-            self.destination_gates += len(gates)
             self._split_filters = {
                 street: gates.get(id(item), item) for street, item in self._split_filters.items()
             }
@@ -1907,6 +1928,46 @@ class CityPartitioner:
             impact_input.modifications = [
                 item for item in impact_input.modifications if id(item) not in reopened
             ]
+
+    def _move_split_filter(
+        self, item: StreetModification, street: tuple[int, int] | None, planned
+    ) -> StreetModification | None:
+        """A filter on another section of ``item``'s split street, if one strands nothing.
+
+        Sections nearest the middle come first. ``planned`` is the residents'
+        road graph with ``item`` open; the chosen section is closed in it.
+        """
+        chain = self._split_chains.get(street) if street else None
+        if not chain:
+            return None
+        here = (min(item.u, item.v), max(item.u, item.v))
+        sections = list(dict.fromkeys((min(a, b), max(a, b)) for a, b, _key in chain))
+        middle = sections.index(here) if here in sections else len(sections) // 2
+        for a, b in sorted(
+            (section for section in sections if section != here),
+            key=lambda section: abs(sections.index(section) - middle),
+        ):
+            closed = [
+                (x, y, key, data)
+                for x, y in ((a, b), (b, a))
+                if planned.has_edge(x, y)
+                for key, data in list(planned[x][y].items())
+            ]
+            if not closed:
+                continue
+            for x, y, key, _data in closed:
+                planned.remove_edge(x, y, key)
+            if nx.has_path(planned, a, b) and nx.has_path(planned, b, a):
+                u, v = (a, b) if self.graph.has_edge(a, b) else (b, a)
+                return self._street_filter(
+                    u,
+                    v,
+                    "Modal filter on a residential street that separates two superblocks, "
+                    "moved along it so every junction keeps car access",
+                )
+            for x, y, key, data in closed:
+                planned.add_edge(x, y, key=key, **data)
+        return None
 
     @staticmethod
     def _reopen_one(
@@ -2307,6 +2368,14 @@ class CityPartitioner:
                 )
 
     def _crossing_filter(self, u: int, v: int) -> StreetModification:
+        return self._street_filter(
+            u,
+            v,
+            "Modal filter where this superblock meets its neighbour across a "
+            "residential street, so traffic cannot cross from one into the other",
+        )
+
+    def _street_filter(self, u: int, v: int, rationale: str) -> StreetModification:
         key, data = min(
             self.graph[u][v].items(), key=lambda item: float(item[1].get("length", 0) or 0)
         )
@@ -2330,10 +2399,7 @@ class CityPartitioner:
                     construction_treatment=(
                         "Accessible pass-through modal filter; exact geometry requires survey"
                     ),
-                    rationale=(
-                        "Modal filter where this superblock meets its neighbour across a "
-                        "residential street, so traffic cannot cross from one into the other"
-                    ),
+                    rationale=rationale,
                 )
             ]
         )[0]

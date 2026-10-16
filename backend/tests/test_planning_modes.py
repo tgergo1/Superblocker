@@ -911,6 +911,71 @@ def test_repair_gates_a_split_street_filter_instead_of_reopening_it():
     assert partitioner.stranded_junctions == 0
 
 
+def test_repair_moves_a_split_street_filter_to_a_section_that_strands_nothing():
+    import networkx as nx
+    from shapely.geometry import box
+
+    from app.models.schemas import EnforcedSuperblock, ModificationType, StreetModification
+    from app.services.partitioning.city_partitioner import SuperblockCell
+
+    graph = nx.MultiDiGraph()
+    for node, x, y in (
+        (1, 0.0, 0.0),
+        (2, 0.002, 0.0),
+        (3, 0.004, 0.0),
+        (4, 0.006, 0.0),
+        (5, 0.003, 0.004),
+    ):
+        graph.add_node(node, x=x, y=y)
+    for u, v, highway in (
+        (1, 5, "primary"),
+        (5, 4, "primary"),
+        (1, 2, "residential"),
+        (2, 3, "residential"),
+    ):
+        graph.add_edge(u, v, 0, highway=highway, length=200.0)
+        graph.add_edge(v, u, 0, highway=highway, length=200.0)
+    # The last section is one-way into the street.
+    graph.add_edge(4, 3, 0, highway="residential", length=200.0, oneway=True)
+    partitioner = CityPartitioner(
+        graph, BoundingBox(north=0.011, south=-0.001, east=0.021, west=-0.001)
+    )
+    middle = StreetModification(u=2, v=3, osm_id=1, modification_type=ModificationType.MODAL_FILTER)
+    # With the filter in the middle, junction 3 can be entered but not left.
+    partitioner._split_filters[(2, 3)] = middle
+    partitioner._split_chains[(2, 3)] = [(1, 2, 0), (2, 3, 0), (4, 3, 0)]
+    superblock = EnforcedSuperblock(
+        id="sb",
+        geometry={},
+        area_hectares=10.0,
+        num_sectors=4,
+        boundary_roads=[],
+        entry_points=[],
+        modifications=[middle],
+        constraint_validated=True,
+        interior_roads_count=0,
+        modal_filter_count=1,
+        one_way_conversion_count=0,
+        street_cut_count=0,
+    )
+    partitioner.superblocks = [superblock]
+    partitioner._superblock_cells["sb"] = SuperblockCell(
+        polygon=box(0, 0, 0.01, 0.01),
+        area_hectares=10.0,
+        boundary_edges=[],
+        interior_edges=[],
+        entry_nodes=[],
+    )
+    partitioner._repair_access()
+    (moved,) = superblock.modifications
+    assert (moved.u, moved.v) == (4, 3)
+    assert moved.filter_type != "camera_gate"
+    assert partitioner.split_filters_moved == 1
+    assert partitioner.destination_gates == 0
+    assert partitioner.stranded_junctions == 0
+    assert partitioner._split_filters[(3, 4)] is moved
+
+
 def test_split_follows_a_street_that_changes_tag_along_its_length():
     partitioner, cell = _dogleg_cell()
     # Dob utca turns into a living street halfway along.
