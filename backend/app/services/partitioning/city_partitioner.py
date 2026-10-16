@@ -144,7 +144,7 @@ STREET_REACH_M = 100.0
 MAX_ACCESS_REPAIR_ROUNDS = 10
 THROUGH_CORRIDOR_HIGHWAYS = frozenset({"motorway", "motorway_link", "trunk", "trunk_link"})
 MAX_REDESIGN_ROUNDS = 3
-MAX_CROSSING_SEALS_PER_ENTRY = 8
+MAX_CROSSING_SEALS_PER_ENTRY = 30
 MIN_SECTORS = 2
 # Access changes a repair pass may reopen when they strand streets.
 REPAIRABLE_CHANGES = frozenset(
