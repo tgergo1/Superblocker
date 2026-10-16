@@ -15,6 +15,7 @@ from shapely.geometry import mapping, shape
 from app.core.config import get_settings
 from app.models.schemas import AdministrativeBoundary, BoundingBox, StreetNetworkResponse
 from app.services.cache_service import get_cache_service
+from app.services.network.osm_extract import SUPPORTED_NETWORK_TYPES, graph_from_extract
 from app.utils.geo import validate_bbox_size
 
 settings = get_settings()
@@ -225,6 +226,13 @@ def _download_graph(
     boundary: AdministrativeBoundary | None,
 ) -> nx.MultiDiGraph:
     """Download a road graph clipped by an exact polygon when available."""
+    if settings.osm_extract_path and network_type in SUPPORTED_NETWORK_TYPES:
+        return graph_from_extract(
+            settings.osm_extract_path,
+            (bbox.west, bbox.south, bbox.east, bbox.north),
+            network_type,
+            shape(boundary.model_dump()) if boundary is not None else None,
+        )
     common = {
         "network_type": network_type,
         "simplify": True,
