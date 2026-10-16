@@ -4,9 +4,13 @@ import type {
   AccessTarget,
   CityPartition,
   Coordinates,
+  DemandModel,
+  EngineeringPackage,
   PartitionProgress,
   RouteResult,
   SearchResponse,
+  ScenarioPortfolio,
+  SimulationRun,
   SizeRecommendation,
   StreetNetworkResponse,
   TrafficObservation,
@@ -255,6 +259,17 @@ export interface PartitionRequest {
   max_area_hectares?: number;
   num_sectors?: number;
   arterial_road_types?: string[];
+  study_area_mode?: 'bounding_box' | 'administrative_polygon' | 'functional_urban_area';
+  network_authority_mode?: 'osm_bootstrap' | 'authoritative_conflated';
+  dataset_manifests?: unknown[];
+  data_quality?: Record<string, unknown>;
+  authoritative_road_segments?: unknown[];
+  turn_restrictions?: unknown[];
+  area_exclusions?: unknown[];
+  operational_requirements?: unknown[];
+  active_mode_requirements?: unknown[];
+  demand_model?: DemandModel | null;
+  assignment_settings?: Record<string, unknown>;
 }
 
 export interface PartitionResponse {
@@ -277,6 +292,17 @@ function partitionBody(request: PartitionRequest): Record<string, unknown> {
     enforce_constraints: true,
     num_sectors: request.num_sectors ?? 4,
     arterial_road_types: request.arterial_road_types ?? ['primary', 'secondary', 'tertiary'],
+    study_area_mode: request.study_area_mode ?? (request.boundary ? 'administrative_polygon' : 'bounding_box'),
+    network_authority_mode: request.network_authority_mode ?? 'osm_bootstrap',
+    dataset_manifests: request.dataset_manifests ?? [],
+    data_quality: request.data_quality ?? {},
+    authoritative_road_segments: request.authoritative_road_segments ?? [],
+    turn_restrictions: request.turn_restrictions ?? [],
+    area_exclusions: request.area_exclusions ?? [],
+    operational_requirements: request.operational_requirements ?? [],
+    active_mode_requirements: request.active_mode_requirements ?? [],
+    demand_model: request.demand_model ?? null,
+    assignment_settings: request.assignment_settings ?? {},
   };
 }
 
@@ -345,6 +371,63 @@ export async function getOptimalSize(
       population_density: populationDensity,
     },
   });
+  return response.data;
+}
+
+function adminHeaders(adminKey: string): Record<string, string> {
+  return { 'X-Admin-Key': adminKey };
+}
+
+export async function optimizePlanScenarios(
+  partition: CityPartition,
+  demandModel: DemandModel,
+  adminKey: string,
+  operationalRequirements: unknown[] = [],
+  activeModeRequirements: unknown[] = [],
+): Promise<ScenarioPortfolio> {
+  const response = await api.post<ScenarioPortfolio>(
+    '/planning/scenarios',
+    {
+      partition,
+      demand_model: demandModel,
+      operational_requirements: operationalRequirements,
+      active_mode_requirements: activeModeRequirements,
+    },
+    { headers: adminHeaders(adminKey) },
+  );
+  return response.data;
+}
+
+export async function compileEngineeringPackage(
+  partition: CityPartition,
+  jurisdiction: string,
+  adminKey: string,
+): Promise<EngineeringPackage> {
+  const response = await api.post<EngineeringPackage>(
+    '/planning/engineering-package',
+    { partition, jurisdiction, currency: 'EUR' },
+    { headers: adminHeaders(adminKey) },
+  );
+  return response.data;
+}
+
+export async function exportSimulation(
+  partition: CityPartition,
+  demandModel: DemandModel,
+  adminKey: string,
+  execute = false,
+): Promise<SimulationRun> {
+  const response = await api.post<SimulationRun>(
+    '/planning/simulation',
+    {
+      partition,
+      demand_model: demandModel,
+      network_state: 'planned',
+      execute,
+      random_seed: 42,
+    },
+    { headers: adminHeaders(adminKey) },
+  );
   return response.data;
 }
 

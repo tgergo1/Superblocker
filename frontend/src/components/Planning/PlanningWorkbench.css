@@ -1,0 +1,244 @@
+.planning-workbench {
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.14);
+}
+
+.workbench-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 15px;
+  border: 0;
+  background: linear-gradient(145deg, #111827, #1e293b);
+  color: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.workbench-toggle strong,
+.workbench-toggle small {
+  display: block;
+}
+
+.workbench-toggle strong {
+  font-size: 12px;
+}
+
+.workbench-toggle small {
+  margin-top: 3px;
+  color: #94a3b8;
+  font-size: 9px;
+  line-height: 1.3;
+}
+
+.workbench-body {
+  max-height: min(66vh, 690px);
+  overflow-y: auto;
+}
+
+.workbench-section {
+  padding: 13px 14px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.workbench-section:last-child {
+  border-bottom: 0;
+}
+
+.workbench-section h3 {
+  margin: 0 0 10px;
+  color: #0f172a;
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.metric-grid > div {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  background: #f8fafc;
+}
+
+.metric-grid span,
+.metric-grid strong {
+  display: block;
+}
+
+.metric-grid span {
+  overflow: hidden;
+  color: #64748b;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metric-grid strong {
+  margin-top: 3px;
+  color: #0f172a;
+  font-size: 12px;
+}
+
+.workbench-notes {
+  margin: 9px 0 0;
+  padding-left: 15px;
+  color: #64748b;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.validation-lines {
+  display: grid;
+  gap: 6px;
+}
+
+.validation-lines > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  font-size: 9px;
+}
+
+.validation-lines .pass {
+  background: #ecfdf5;
+  color: #166534;
+}
+
+.validation-lines .pending {
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.missing-evidence,
+.failed-requirement,
+.workflow-error {
+  margin: 8px 0 0;
+  color: #9a3412;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.failed-requirement,
+.workflow-error {
+  padding: 7px;
+  border-radius: 6px;
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.workflow-section label {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+  color: #475569;
+  font-size: 9px;
+}
+
+.workflow-section input[type="password"],
+.workflow-section input:not([type]) {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.workflow-buttons {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.workflow-buttons button,
+.result-heading button {
+  padding: 7px 9px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  color: #1e293b;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.workflow-buttons button:first-child {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+
+.workflow-buttons button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.workflow-section .sumo-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.result-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.result-heading h3 {
+  margin: 0;
+}
+
+.candidate {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 8px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-left-width: 3px;
+  border-radius: 7px;
+  font-size: 9px;
+}
+
+.candidate.feasible { border-left-color: #16a34a; }
+.candidate.blocked { border-left-color: #dc2626; }
+.candidate small { grid-column: 1 / -1; color: #b91c1c; }
+
+.package-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 9px;
+  color: #475569;
+  font-size: 9px;
+}
+
+.package-total strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.package-blocker {
+  display: block;
+  margin-top: 6px;
+  color: #9a3412;
+  font-size: 8px;
+  line-height: 1.35;
+}

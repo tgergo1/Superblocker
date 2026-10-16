@@ -4,27 +4,16 @@ Cache management endpoints.
 Provides API endpoints for viewing cache statistics and managing cache entries.
 """
 
-import hmac
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.core.auth import require_admin_key
 from app.core.config import get_settings
 from app.services.cache_service import get_cache_service
 
 router = APIRouter()
 settings = get_settings()
-
-
-async def require_admin_key(x_admin_key: str | None = Header(default=None)) -> None:
-    """Protect destructive maintenance operations."""
-    if not settings.admin_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="Cache maintenance is disabled until ADMIN_API_KEY is configured.",
-        )
-    if x_admin_key is None or not hmac.compare_digest(x_admin_key, settings.admin_api_key):
-        raise HTTPException(status_code=403, detail="Invalid administrator credentials")
 
 
 @router.get("/cache/stats")
@@ -51,7 +40,7 @@ async def clear_cache(
         description="Type of cache to clear ('network', 'analysis', 'search'). "
         "If not provided, clears all cache.",
     ),
-    _admin: None = Depends(require_admin_key),
+    _admin: str = Depends(require_admin_key),
 ):
     """
     Clear cache entries.
@@ -76,7 +65,7 @@ async def clear_cache(
 
 
 @router.post("/cache/cleanup")
-async def cleanup_expired(_admin: None = Depends(require_admin_key)):
+async def cleanup_expired(_admin: str = Depends(require_admin_key)):
     """
     Remove expired cache entries.
 

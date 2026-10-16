@@ -73,7 +73,7 @@ def test_schema_rejects_inverted_bounds_and_ranges():
         AdministrativeBoundary(type="Polygon", coordinates=[])
     with pytest.raises(ValidationError):
         PartitionRequest(bbox=bbox, access_dataset_complete=True)
-    with pytest.raises(ValidationError, match="unique OSM way IDs"):
+    with pytest.raises(ValidationError, match="unique by way, time, direction"):
         PartitionRequest(
             bbox=bbox,
             traffic_observations=[

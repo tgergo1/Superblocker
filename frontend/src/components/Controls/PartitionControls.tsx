@@ -6,6 +6,7 @@ import type {
   ModificationType,
   StreetModification,
   TrafficObservation,
+  PlanningEvidencePackage,
 } from '../../types';
 import './PartitionControls.css';
 
@@ -17,7 +18,7 @@ const ACTION_PRESENTATION: Record<ModificationType, {
   modal_filter: {
     symbol: 'X',
     label: 'Modal filter',
-    purpose: 'Stops motor through-traffic; walking, cycling, and emergency access remain.',
+    purpose: 'Stops modeled motor traffic. Other modes require separate physical and operational validation.',
   },
   one_way: {
     symbol: '>',
@@ -39,6 +40,17 @@ const ACTION_PRESENTATION: Record<ModificationType, {
     label: 'Street cut',
     purpose: 'Closes this point to motor traffic and separates directional territories.',
   },
+};
+
+const PLAN_STAGE_LABELS: Record<CityPartition['readiness']['status'], string> = {
+  model_only: 'Model draft',
+  topology_candidate: 'Topology candidate',
+  data_qualified: 'Data qualified',
+  baseline_calibrated: 'Baseline calibrated',
+  impact_validated: 'Ready for engineering review',
+  engineering_reviewed: 'Engineering reviewed',
+  approved_for_pilot: 'Approved for pilot',
+  approved_for_permanent_works: 'Approved for permanent works',
 };
 
 function streetName(modification: StreetModification): string {
@@ -111,6 +123,8 @@ interface PartitionControlsProps {
   onAccessDatasetSourceChange: (source: string | null) => void;
   accessDatasetComplete: boolean;
   onAccessDatasetCompleteChange: (complete: boolean) => void;
+  planningEvidence: PlanningEvidencePackage;
+  onPlanningEvidenceChange: (evidence: PlanningEvidencePackage) => void;
 }
 
 export function PartitionControls({
@@ -136,6 +150,8 @@ export function PartitionControls({
   onAccessDatasetSourceChange,
   accessDatasetComplete,
   onAccessDatasetCompleteChange,
+  planningEvidence,
+  onPlanningEvidenceChange,
 }: PartitionControlsProps) {
   const [settingsExpanded, setSettingsExpanded] = useState(false);
   const [evidenceExpanded, setEvidenceExpanded] = useState(false);
@@ -206,11 +222,25 @@ export function PartitionControls({
         if (!Number.isInteger(osmId) || osmId <= 0 || !Number.isFinite(volume) || volume < 0 || !source) {
           throw new Error(`Invalid traffic row ${index + 1}`);
         }
+        const vehicleClass = String(row.vehicle_class ?? 'all_motor') as TrafficObservation['vehicle_class'];
         return {
           osm_id: osmId,
           volume_vph: Math.round(volume),
           source,
           observed_at: row.observed_at ? String(row.observed_at) : null,
+          observation_id: row.observation_id ? String(row.observation_id) : null,
+          interval_start: row.interval_start ? String(row.interval_start) : null,
+          interval_end: row.interval_end ? String(row.interval_end) : null,
+          direction: (row.direction ? String(row.direction) : 'both') as TrafficObservation['direction'],
+          lane: row.lane ? Number(row.lane) : null,
+          vehicle_class: vehicleClass,
+          turn_from_osm_id: row.turn_from_osm_id ? Number(row.turn_from_osm_id) : null,
+          turn_to_osm_id: row.turn_to_osm_id ? Number(row.turn_to_osm_id) : null,
+          speed_kph: row.speed_kph ? Number(row.speed_kph) : null,
+          occupancy_percent: row.occupancy_percent ? Number(row.occupancy_percent) : null,
+          queue_length_m: row.queue_length_m ? Number(row.queue_length_m) : null,
+          confidence: row.confidence === undefined ? 1 : Number(row.confidence),
+          dataset_id: row.dataset_id ? String(row.dataset_id) : null,
         } satisfies TrafficObservation;
       });
       if (!observations.length) throw new Error('The traffic file contains no observations');
@@ -218,6 +248,26 @@ export function PartitionControls({
       setEvidenceError(null);
     } catch (fileError) {
       setEvidenceError(fileError instanceof Error ? fileError.message : 'Invalid traffic file');
+    }
+  };
+
+  const loadPlanningEvidence = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const value = JSON.parse(await file.text()) as PlanningEvidencePackage;
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('The evidence package must be a JSON object');
+      }
+      if (value.demand_model) {
+        if (!value.demand_model.model_id || !value.demand_model.version
+          || value.demand_model.zones.length < 2 || !value.demand_model.matrix.length) {
+          throw new Error('The demand model is incomplete');
+        }
+      }
+      onPlanningEvidenceChange(value);
+      setEvidenceError(null);
+    } catch (fileError) {
+      setEvidenceError(fileError instanceof Error ? fileError.message : 'Invalid evidence package');
     }
   };
 
@@ -310,6 +360,22 @@ export function PartitionControls({
           </div>
           <div className="evidence-row">
             <div>
+              <strong>Planning evidence package</strong>
+              <small>JSON: authoritative roads, OD demand, turns, exclusions, services, modes, manifests, and quality metrics</small>
+            </div>
+            <label className="file-button">
+              {planningEvidence.demand_model
+                ? `${planningEvidence.demand_model.zones.length} zones`
+                : 'Load package'}
+              <input
+                type="file"
+                accept=".json,application/json"
+                onChange={(event) => void loadPlanningEvidence(event.target.files?.[0])}
+              />
+            </label>
+          </div>
+          <div className="evidence-row">
+            <div>
               <strong>Access targets</strong>
               <small>GeoJSON Point features for addresses, parcels, and services</small>
             </div>
@@ -339,7 +405,7 @@ export function PartitionControls({
               disabled={!accessTargets.length}
               onChange={(event) => onAccessDatasetCompleteChange(event.target.checked)}
             />
-            <span>I attest this is the complete authoritative access dataset for the area</span>
+            <span>Declare this snapshot complete; a verified registry manifest is still required for the data gate</span>
           </label>
           {evidenceError && <div className="control-error" role="alert">{evidenceError}</div>}
         </div>
@@ -416,27 +482,31 @@ export function PartitionControls({
               </small>
             </span>
           </div>
-          <div className={`readiness-banner ${partition.readiness.implementation_ready ? 'ready' : 'blocked'}`}>
+          <div className={`readiness-banner ${partition.readiness.approved_for_pilot ? 'ready' : 'blocked'}`}>
             <strong>
-              {partition.readiness.implementation_ready
-                ? 'Implementation gate passed'
-                : partition.readiness.status === 'review_pending'
-                  ? 'Professional reviews pending'
-                  : 'Model-only proposal'}
+              {PLAN_STAGE_LABELS[partition.readiness.status]}
             </strong>
             <small>
-              {partition.readiness.implementation_ready
-                ? 'Evidence and both required reviews are recorded.'
-                : `${partition.readiness.blockers.length} release gate${partition.readiness.blockers.length === 1 ? '' : 's'} remain.`}
+              {partition.readiness.approved_for_permanent_works
+                ? 'All modeled, professional, pilot, and statutory gates are recorded.'
+                : `${partition.readiness.blockers.length} requirement${partition.readiness.blockers.length === 1 ? '' : 's'} block the next assurance stage.`}
             </small>
             {partition.plan_id && (
               <code className="plan-id">Plan {partition.plan_id.slice(0, 16)}</code>
             )}
-            {!partition.readiness.implementation_ready && (
+            {!partition.readiness.approved_for_permanent_works && (
               <ul className="readiness-blockers">
                 {partition.readiness.blockers.map(blocker => <li key={blocker}>{blocker}</li>)}
               </ul>
             )}
+            <ol className="readiness-gates" aria-label="Plan assurance gates">
+              {partition.readiness.gates.map(gate => (
+                <li key={gate.stage} className={gate.passed ? 'passed' : 'pending'}>
+                  <span aria-hidden="true">{gate.passed ? '✓' : '○'}</span>
+                  {PLAN_STAGE_LABELS[gate.stage]}
+                </li>
+              ))}
+            </ol>
           </div>
           <div className="summary-title">City plan</div>
           <div className="summary-grid">
@@ -445,8 +515,8 @@ export function PartitionControls({
               <span className="summary-label">Superblocks</span>
             </div>
             <div className="summary-item">
-              <span className="summary-value">{partition.coverage_percent.toFixed(0)}%</span>
-              <span className="summary-label">Generated-cell coverage</span>
+              <span className="summary-value">{partition.eligible_road_coverage_percent.toFixed(0)}%</span>
+              <span className="summary-label">Eligible roads accounted</span>
             </div>
             <div className="summary-item">
               <span className="summary-value">{partition.arterial_network.length}</span>

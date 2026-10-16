@@ -4,8 +4,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import analysis, cache, search
+from app.api.routes import analysis, cache, evidence, jobs, planning, registry, search
 from app.core.config import get_settings
+from app.services.jobs.partition_runner import get_partition_job_runner
 from app.services.nominatim_service import close_nominatim_client
 
 settings = get_settings()
@@ -18,8 +19,13 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    yield
-    await close_nominatim_client()
+    runner = get_partition_job_runner()
+    runner.start()
+    try:
+        yield
+    finally:
+        runner.stop()
+        await close_nominatim_client()
 
 
 app = FastAPI(
@@ -42,6 +48,10 @@ app.add_middleware(
 app.include_router(search.router, prefix=settings.api_v1_prefix, tags=["search"])
 app.include_router(analysis.router, prefix=settings.api_v1_prefix, tags=["analysis"])
 app.include_router(cache.router, prefix=settings.api_v1_prefix, tags=["cache"])
+app.include_router(registry.router, prefix=settings.api_v1_prefix, tags=["registry"])
+app.include_router(jobs.router, prefix=settings.api_v1_prefix, tags=["jobs"])
+app.include_router(planning.router, prefix=settings.api_v1_prefix, tags=["planning"])
+app.include_router(evidence.router, prefix=settings.api_v1_prefix, tags=["evidence"])
 
 
 @app.get("/")

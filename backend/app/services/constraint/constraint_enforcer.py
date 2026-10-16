@@ -24,6 +24,7 @@ from app.models.schemas import (
     EntryPoint,
     ModificationType,
     StreetModification,
+    TransportMode,
 )
 
 logger = logging.getLogger(__name__)
@@ -817,6 +818,14 @@ class ConstraintEnforcer:
                     name=name,
                     modification_type=ModificationType.MODAL_FILTER,
                     filter_location=filter_coords,
+                    allowed_modes=[
+                        TransportMode.WALK,
+                        TransportMode.WHEEL,
+                        TransportMode.BICYCLE,
+                    ],
+                    construction_treatment=(
+                        "Accessible pass-through modal filter; exact geometry requires survey"
+                    ),
                     rationale="Modal filter to prevent cross-sector through traffic",
                 )
             )
@@ -1027,6 +1036,14 @@ class ConstraintEnforcer:
                 name=name,
                 modification_type=ModificationType.MODAL_FILTER,
                 filter_location=midpoint,
+                allowed_modes=[
+                    TransportMode.WALK,
+                    TransportMode.WHEEL,
+                    TransportMode.BICYCLE,
+                ],
+                construction_treatment=(
+                    "Accessible pass-through modal filter; exact geometry requires survey"
+                ),
                 rationale="Additional modal filter to remove remaining cross-sector through traffic",
             )
 

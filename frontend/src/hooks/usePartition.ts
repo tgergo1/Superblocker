@@ -11,6 +11,7 @@ import type {
   BoundingBox,
   PartitionProgress,
   CityPartition,
+  PlanningEvidencePackage,
   TrafficObservation,
 } from '../types';
 
@@ -73,6 +74,7 @@ export function usePartition(
   const [accessTargets, setAccessTargets] = useState<AccessTarget[]>([]);
   const [accessDatasetSource, setAccessDatasetSource] = useState<string | null>(null);
   const [accessDatasetComplete, setAccessDatasetComplete] = useState(false);
+  const [planningEvidence, setPlanningEvidence] = useState<PlanningEvidencePackage>({});
 
   const calculateTimes = useCallback((percent: number): { elapsed: number; remaining: number } => {
     const startTime = startTimeRef.current;
@@ -115,6 +117,17 @@ export function usePartition(
         access_targets: accessTargets,
         access_dataset_source: accessDatasetSource,
         access_dataset_complete: accessDatasetComplete,
+        study_area_mode: planningEvidence.study_area_mode,
+        network_authority_mode: planningEvidence.network_authority_mode,
+        dataset_manifests: planningEvidence.dataset_manifests,
+        data_quality: planningEvidence.data_quality,
+        authoritative_road_segments: planningEvidence.authoritative_road_segments,
+        turn_restrictions: planningEvidence.turn_restrictions,
+        area_exclusions: planningEvidence.area_exclusions,
+        operational_requirements: planningEvidence.operational_requirements,
+        active_mode_requirements: planningEvidence.active_mode_requirements,
+        demand_model: planningEvidence.demand_model,
+        assignment_settings: planningEvidence.assignment_settings,
         target_size_hectares: parameters.targetSizeHectares,
         min_area_hectares: parameters.minAreaHectares,
         max_area_hectares: parameters.maxAreaHectares,
@@ -196,6 +209,7 @@ export function usePartition(
     setAccessTargets([]);
     setAccessDatasetSource(null);
     setAccessDatasetComplete(false);
+    setPlanningEvidence({});
     setProgress({
       stage: 'network',
       percent: 0,
@@ -223,6 +237,8 @@ export function usePartition(
     setAccessDatasetSource,
     accessDatasetComplete,
     setAccessDatasetComplete,
+    planningEvidence,
+    setPlanningEvidence,
     runPartition,
     cancel,
     reset,
