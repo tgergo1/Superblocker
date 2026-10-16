@@ -125,6 +125,7 @@ export interface PartitionParameters {
   targetSizeHectares: number;
   minAreaHectares: number;
   maxAreaHectares: number;
+  keepResidentialInside?: boolean;
 }
 
 interface PartitionControlsProps {
@@ -755,6 +756,19 @@ export function PartitionControls({
               className="param-slider"
             />
           </div>
+
+          <label className="checkbox-label" htmlFor="partition-keep-residential">
+            <input
+              type="checkbox"
+              id="partition-keep-residential"
+              checked={parameters.keepResidentialInside ?? false}
+              onChange={(e) => onParametersChange({ ...parameters, keepResidentialInside: e.target.checked })}
+            />
+            <span>Keep busy residential streets inside superblocks</span>
+          </label>
+          <span className="param-hint">
+            Larger cells, but no diverted traffic on residential streets.
+          </span>
 
           <span className="settings-note">
             Directional sectors and cross-traffic blocking are always enforced.

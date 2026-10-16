@@ -270,6 +270,7 @@ export interface PartitionRequest {
   active_mode_requirements?: unknown[];
   demand_model?: DemandModel | null;
   assignment_settings?: Record<string, unknown>;
+  minor_road_boundaries?: 'allow' | 'avoid';
 }
 
 export interface PartitionResponse {
@@ -303,6 +304,7 @@ function partitionBody(request: PartitionRequest): Record<string, unknown> {
     active_mode_requirements: request.active_mode_requirements ?? [],
     demand_model: request.demand_model ?? null,
     assignment_settings: request.assignment_settings ?? {},
+    minor_road_boundaries: request.minor_road_boundaries ?? 'allow',
   };
 }
 

@@ -97,6 +97,10 @@ ARTERIAL_TYPES = {
 }
 
 # Road hierarchy for boundary suitability
+MINOR_ROAD_CLASSES = frozenset(
+    {"residential", "living_street", "service", "pedestrian", "track", "road", "busway"}
+)
+
 HIERARCHY_MAP = {
     "motorway": 1,
     "motorway_link": 1,
@@ -444,6 +448,7 @@ class CityPartitioner:
         filter_design_settings: FilterDesignSettings | None = None,
         public_space_settings: PublicSpaceSettings | None = None,
         school_street_settings: SchoolStreetSettings | None = None,
+        minor_boundary_policy: str = "allow",
         progress_callback: Callable[[PartitionProgress], None] | None = None,
     ):
         """
@@ -504,6 +509,7 @@ class CityPartitioner:
         self.osm_context = osm_context
         self.public_space_settings = public_space_settings or PublicSpaceSettings()
         self.school_street_settings = school_street_settings or SchoolStreetSettings()
+        self.minor_boundary_policy = minor_boundary_policy
         self.filter_designer = FilterDesigner(
             graph, osm_context, filter_design_settings or FilterDesignSettings()
         )
@@ -676,7 +682,11 @@ class CityPartitioner:
                         if cent_value >= threshold:
                             simple_key = (min(edge[0], edge[1]), max(edge[0], edge[1]))
                             if simple_key in edge_mapping:
-                                centrality_arterials.update(edge_mapping[simple_key])
+                                centrality_arterials.update(
+                                    original
+                                    for original in edge_mapping[simple_key]
+                                    if self._may_bound_by_centrality(original)
+                                )
 
             except Exception as e:
                 logger.warning(f"Centrality computation failed: {e}")
@@ -690,6 +700,21 @@ class CityPartitioner:
             f"{len(centrality_arterials)} by centrality, "
             f"{len(self.arterial_edges)} total"
         )
+
+    def _may_bound_by_centrality(self, edge: tuple[int, int, int]) -> bool:
+        """Whether a busy street may become a boundary road on centrality alone.
+
+        Residential and living streets that carry many shortest paths are the
+        rat runs a superblock is meant to calm. Making them boundary roads
+        routes diverted traffic onto them, so the "avoid" policy keeps them
+        inside cells.
+        """
+        if self.minor_boundary_policy != "avoid":
+            return True
+        highway = self.graph.edges[edge].get("highway", "")
+        if isinstance(highway, list):
+            highway = highway[0]
+        return highway not in MINOR_ROAD_CLASSES
 
     def _create_cells(self):
         """

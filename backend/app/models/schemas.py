@@ -1519,6 +1519,9 @@ class PartitionRequest(BaseModel):
     filter_design_settings: FilterDesignSettings = Field(default_factory=FilterDesignSettings)
     public_space_settings: PublicSpaceSettings = Field(default_factory=PublicSpaceSettings)
     school_street_settings: SchoolStreetSettings = Field(default_factory=SchoolStreetSettings)
+    # "avoid" keeps busy residential and living streets inside cells instead of
+    # promoting them to boundary roads on centrality alone.
+    minor_road_boundaries: Literal["allow", "avoid"] = "allow"
     osm_context: OsmContext | None = None
     fetch_osm_context: bool = True
     target_size_hectares: float = Field(default=12.0, ge=4.0, le=50.0)
