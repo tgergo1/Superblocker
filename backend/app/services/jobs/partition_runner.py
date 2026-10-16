@@ -101,6 +101,7 @@ class PartitionJobRunner:
                 request.authoritative_road_segments,
                 _ProgressSink(job_id),
                 cancel_event,
+                request.traffic_impact_settings,
             )
             if cancel_event.is_set():
                 self.store.mark_job_cancelled(job_id, actor_id="partition-worker")

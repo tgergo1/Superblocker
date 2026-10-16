@@ -52,6 +52,7 @@ from app.models.schemas import (
     ReadinessGate,
     StreetModification,
     StudyAreaMode,
+    TrafficImpactSettings,
     TrafficObservation,
     TurnModelMode,
     TurnRestriction,
@@ -65,6 +66,10 @@ from app.services.assignment.network_assignment import (
 from app.services.constraint.active_mode_validator import ActiveModeValidator
 from app.services.constraint.constraint_enforcer import ConstraintEnforcer
 from app.services.constraint.operational_validator import OperationalValidator
+from app.services.impact.boundary_impact import (
+    BoundaryImpactEstimator,
+    SuperblockImpactInput,
+)
 from app.services.network.turn_graph import TurnGraphBuilder
 
 logger = logging.getLogger(__name__)
@@ -423,6 +428,7 @@ class CityPartitioner:
         traffic_observations: list[TrafficObservation] | None = None,
         demand_model: DemandModel | None = None,
         assignment_settings: AssignmentSettings | None = None,
+        traffic_impact_settings: TrafficImpactSettings | None = None,
         progress_callback: Callable[[PartitionProgress], None] | None = None,
     ):
         """
@@ -478,6 +484,8 @@ class CityPartitioner:
         self.traffic_observations = traffic_observations or []
         self.demand_model = demand_model
         self.assignment_settings = assignment_settings or AssignmentSettings()
+        self.traffic_impact_settings = traffic_impact_settings or TrafficImpactSettings()
+        self._impact_inputs: list[SuperblockImpactInput] = []
         self.progress_callback = progress_callback
 
         # Convert graph to GeoDataFrames for spatial operations
@@ -1141,6 +1149,17 @@ class CityPartitioner:
             superblock = self._enforce_cell_constraints(cell, i)
             if superblock is not None:
                 self.superblocks.append(superblock)
+                self._impact_inputs.append(
+                    SuperblockImpactInput(
+                        superblock_id=superblock.id,
+                        interior_edges=list(cell.interior_edges),
+                        boundary_edges=list(cell.boundary_edges),
+                        entry_sectors={
+                            entry.node_id: entry.sector for entry in superblock.entry_points
+                        },
+                        modifications=list(superblock.modifications),
+                    )
+                )
 
     def _enforce_cell_constraints(
         self, cell: SuperblockCell, index: int
@@ -1664,6 +1683,16 @@ class CityPartitioner:
                 self.assignment_settings,
             )
 
+        traffic_impact = None
+        if self._impact_inputs:
+            self._report_progress("impact", 97, "Estimating boundary-road traffic impact...")
+            try:
+                traffic_impact = BoundaryImpactEstimator(
+                    self.graph, self.traffic_impact_settings
+                ).estimate(self._impact_inputs)
+            except Exception as error:  # Screening output must not block the plan.
+                logger.warning("Traffic impact estimate failed: %s", error)
+
         modeled_directional_validation_passed = bool(self.superblocks) and all(
             sb.modeled_directional_validation_passed for sb in self.superblocks
         )
@@ -1805,6 +1834,7 @@ class CityPartitioner:
             operational_validation=operational_validation,
             active_mode_validation=active_mode_validation,
             assignment_comparison=assignment_comparison,
+            traffic_impact=traffic_impact,
             evidence=evidence,
             readiness=readiness,
             total_area_hectares=total_area,

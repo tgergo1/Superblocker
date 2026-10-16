@@ -519,6 +519,7 @@ def run_partition_sync(
     authoritative_road_segments,
     progress_queue: queue.Queue,
     cancel_event: threading.Event | None = None,
+    traffic_impact_settings=None,
 ):
     """
     Run city partitioning synchronously in a thread.
@@ -618,6 +619,7 @@ def run_partition_sync(
             traffic_observations=traffic_observations,
             demand_model=demand_model,
             assignment_settings=assignment_settings,
+            traffic_impact_settings=traffic_impact_settings,
             progress_callback=progress_callback,
         )
 
@@ -704,6 +706,7 @@ async def partition_city(
             request.authoritative_road_segments,
             progress_queue,
             None,
+            request.traffic_impact_settings,
         )
 
         partition = result["partition"]
@@ -775,6 +778,7 @@ async def partition_city_stream(
             request.authoritative_road_segments,
             progress_queue,
             cancel_event,
+            request.traffic_impact_settings,
         )
         logger.info("Partition streaming started")
 

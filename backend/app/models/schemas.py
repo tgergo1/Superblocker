@@ -723,6 +723,92 @@ class AssignmentComparison(BaseModel):
     limitations: list[str] = Field(default_factory=list)
 
 
+class EvaporationScenario(BaseModel):
+    """Share of displaced through traffic assumed to disappear rather than reroute."""
+
+    name: str = Field(..., min_length=1, max_length=50)
+    evaporation_rate: float = Field(..., ge=0, le=1)
+    description: str = Field(default="", max_length=300)
+
+
+class TrafficImpactSettings(BaseModel):
+    """Assumptions for the zero-data boundary-road impact screening."""
+
+    through_traffic_share: float = Field(default=0.5, ge=0, le=1)
+    peak_hour_share_of_daily: float = Field(default=0.1, gt=0, le=1)
+    max_entry_pairs_per_superblock: int = Field(default=200, ge=1, le=5_000)
+    scenarios: list[EvaporationScenario] = Field(
+        default_factory=lambda: [
+            EvaporationScenario(
+                name="pessimistic",
+                evaporation_rate=0.0,
+                description="Every displaced through trip reroutes onto the boundary roads.",
+            ),
+            EvaporationScenario(
+                name="central",
+                evaporation_rate=0.15,
+                description="Some trips change time, mode or destination.",
+            ),
+            EvaporationScenario(
+                name="optimistic",
+                evaporation_rate=0.4,
+                description="Close to the traffic evaporation seen in London LTN studies.",
+            ),
+        ],
+        min_length=1,
+        max_length=10,
+    )
+    central_scenario: str = "central"
+    high_increase_percent: float = Field(default=10.0, ge=0, le=1_000)
+
+
+class BoundaryRoadImpact(BaseModel):
+    """Predicted extra peak-hour load on one boundary road (OSM way)."""
+
+    osm_id: int
+    name: str | None = None
+    highway: str = "unclassified"
+    baseline_peak_vph: float = Field(ge=0)
+    capacity_vph: float = Field(gt=0)
+    added_peak_vph: dict[str, float] = Field(default_factory=dict)
+    percent_increase_central: float = Field(ge=0)
+    baseline_volume_capacity_ratio: float = Field(ge=0)
+    planned_volume_capacity_ratio_central: float = Field(ge=0)
+    measured: bool = False
+    arterial: bool = True
+    superblock_ids: list[str] = Field(default_factory=list)
+
+
+class SuperblockTrafficImpact(BaseModel):
+    """Through traffic removed from one superblock interior."""
+
+    superblock_id: str
+    entry_pairs_checked: int = Field(ge=0)
+    cut_through_pairs: int = Field(ge=0)
+    unresolved_pairs: int = Field(ge=0)
+    displaced_peak_vph: float = Field(ge=0)
+    interior_traffic_reduction_percent: float = Field(ge=0, le=100)
+    mean_detour_seconds: float = Field(ge=0)
+
+
+class TrafficImpactEstimate(BaseModel):
+    """Screening prediction of where displaced through traffic goes."""
+
+    method: str = "local_entry_pair_rerouting"
+    settings: TrafficImpactSettings = Field(default_factory=TrafficImpactSettings)
+    traffic_basis: Literal["modeled_topology", "measured_volume", "mixed"] = "modeled_topology"
+    total_displaced_peak_vph: float = Field(default=0.0, ge=0)
+    added_boundary_vehicle_km_peak: dict[str, float] = Field(default_factory=dict)
+    interior_vehicle_km_removed_peak: float = Field(default=0.0, ge=0)
+    maximum_percent_increase_central: float = Field(default=0.0, ge=0)
+    roads_over_threshold: int = Field(default=0, ge=0)
+    roads_over_capacity_central: int = Field(default=0, ge=0)
+    minor_roads_loaded: int = Field(default=0, ge=0)
+    boundary_roads: list[BoundaryRoadImpact] = Field(default_factory=list)
+    superblocks: list[SuperblockTrafficImpact] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
 class SimulationStatus(StrEnum):
     """Lifecycle states for an external microscopic simulation."""
 
@@ -1199,6 +1285,7 @@ class CityPartition(BaseModel):
         default_factory=ActiveModeValidationSummary
     )
     assignment_comparison: AssignmentComparison = Field(default_factory=AssignmentComparison)
+    traffic_impact: TrafficImpactEstimate | None = None
     evidence: AnalysisEvidence = Field(
         default_factory=lambda: AnalysisEvidence(
             boundary_mode="bounding_box_fallback",
@@ -1264,6 +1351,7 @@ class PartitionRequest(BaseModel):
     )
     demand_model: DemandModel | None = None
     assignment_settings: AssignmentSettings = Field(default_factory=AssignmentSettings)
+    traffic_impact_settings: TrafficImpactSettings = Field(default_factory=TrafficImpactSettings)
     target_size_hectares: float = Field(default=12.0, ge=4.0, le=50.0)
     min_area_hectares: float = Field(default=6.0, ge=1.0)
     max_area_hectares: float = Field(default=20.0, le=100.0)
