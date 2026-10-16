@@ -667,6 +667,7 @@ class CityPartitioner:
             self.num_sectors = sectors
         self._gate_unresolved()
         self._seal_crossings()
+        self._gate_stranded()
         self._report_progress("constraints", 95, f"Created {len(self.superblocks)} superblocks")
 
         # Step 6: Compute statistics
@@ -1985,6 +1986,97 @@ class CityPartitioner:
                 self.destination_gates += 1
             redesigned.modifications = gated
             self._install_redesign(position, redesigned)
+
+    def _gate_stranded(self) -> None:
+        """Let residents through the changes around pockets still cut off.
+
+        The access repair reopens one change per stranded pocket; a pocket
+        ringed by several filters stays cut off. Here the changes on and in it
+        become destination-only gates, one at a time, until residents can
+        drive in and out again; through traffic stays out.
+        """
+        owner: dict[int, EnforcedSuperblock] = {}
+        for superblock in self.superblocks:
+            for item in superblock.modifications:
+                owner.setdefault(id(item), superblock)
+        changes = [item for sb in self.superblocks for item in sb.modifications]
+        access = TurnGraphBuilder(self.graph)._prepare_graph(VehicleClass.PERMIT, changes)
+        baseline_core = max(nx.strongly_connected_components(self.graph), key=len)
+        core = max(nx.strongly_connected_components(access), key=len)
+        stranded = baseline_core - core
+        if not stranded:
+            self.stranded_junctions = 0
+            return
+        by_node: dict[int, list[StreetModification]] = defaultdict(list)
+        for item in changes:
+            if self._closed_edges(item, self.graph, present=True):
+                by_node[item.u].append(item)
+                by_node[item.v].append(item)
+        replaced: dict[int, StreetModification] = {}
+        pockets = sorted(
+            nx.weakly_connected_components(access.subgraph(stranded)), key=lambda p: min(p)
+        )
+        anchor = next(iter(core))
+
+        def connected(pocket: set[int]) -> bool:
+            return all(
+                nx.has_path(access, node, anchor) and nx.has_path(access, anchor, node)
+                for node in pocket
+            )
+
+        # A pocket behind another pocket reconnects only once the nearer one has.
+        for _round in range(MAX_ACCESS_REPAIR_ROUNDS):
+            progress = False
+            for pocket in pockets:
+                node = min(pocket)
+                if node in core:
+                    continue
+                if connected(pocket):
+                    core |= pocket
+                    progress = True
+                    continue
+                border = [
+                    item
+                    for item in {
+                        id(item): item
+                        for member in pocket
+                        for item in by_node.get(member, [])
+                        # One-way streets can strand part of a pocket from inside.
+                        if id(item) not in replaced
+                    }.values()
+                ]
+                opened = []
+                for item in border:
+                    added = self._closed_edges(item, access, present=False)
+                    for a, b, key, data in added:
+                        access.add_edge(a, b, key=key, **data)
+                    opened.append((item, added))
+                    if connected(pocket):
+                        break
+                else:
+                    # Not enough on its own; maybe once a neighbour reconnects.
+                    for _item, added in opened:
+                        for a, b, key, _data in added:
+                            access.remove_edge(a, b, key)
+                    continue
+                for item, _added in opened:
+                    replaced[id(item)] = self._destination_gate(item)
+                core |= pocket
+                progress = True
+            if not progress:
+                break
+        self.stranded_junctions = len(stranded - core)
+        if not replaced:
+            return
+        self.destination_gates += len(replaced)
+        for superblock in self.superblocks:
+            superblock.modifications = [
+                replaced.get(id(item), item) for item in superblock.modifications
+            ]
+        for impact_input in self._impact_inputs:
+            impact_input.modifications = [
+                replaced.get(id(item), item) for item in impact_input.modifications
+            ]
 
     def _closed_edges(
         self, item: StreetModification, graph, *, present: bool
