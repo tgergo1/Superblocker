@@ -1,5 +1,6 @@
 import zipfile
 
+import httpx
 import pytest
 
 from app.models.schemas import BoundingBox, Coordinates, OsmContext, TransitStop
@@ -92,6 +93,32 @@ def test_overpass_stops_get_a_mode():
                 "tags": {"amenity": "ferry_terminal"},
             },
             {"type": "node", "id": 7, "lat": 47.5, "lon": 19.0, "tags": {"amenity": "cafe"}},
+            {
+                "type": "way",
+                "id": 8,
+                "center": {"lat": 47.5, "lon": 19.0},
+                "tags": {"public_transport": "platform", "tram": "yes"},
+            },
+            {
+                "type": "way",
+                "id": 9,
+                "center": {"lat": 47.5, "lon": 19.0},
+                "tags": {"railway": "platform"},
+            },
+            {
+                "type": "node",
+                "id": 10,
+                "lat": 47.5,
+                "lon": 19.0,
+                "tags": {"public_transport": "platform", "bus": "yes"},
+            },
+            {
+                "type": "node",
+                "id": 11,
+                "lat": 47.5,
+                "lon": 19.0,
+                "tags": {"public_transport": "platform"},
+            },
         ]
     }
     context = parse_overpass_context(payload)
@@ -102,6 +129,10 @@ def test_overpass_stops_get_a_mode():
         "subway",
         "rail",
         "ferry",
+        "tram",
+        "rail",
+        "bus",
+        "other",
     ]
     assert context.transit_stops[0].stop_id == "node/1"
     assert context.transit_stops[0].name == "Astoria"
@@ -185,3 +216,28 @@ def test_partition_reports_transit_access():
     assert result.transit_access.checked is True
     assert result.transit_access.source == "test"
     assert result.transit_access.superblocks
+
+
+def test_gtfs_stops_survive_an_overpass_failure(monkeypatch, tmp_path):
+    feed = tmp_path / "stops.txt"
+    feed.write_text(STOPS_TXT, encoding="utf-8")
+
+    class NoCache:
+        def get(self, *_args):
+            return None
+
+        def set(self, *_args, **_kwargs):
+            return True
+
+    def refuse(*_args, **_kwargs):
+        raise httpx.ConnectError("offline")
+
+    monkeypatch.setattr(osm_context, "get_cache_service", lambda: NoCache())
+    monkeypatch.setattr(osm_context.httpx, "post", refuse)
+    monkeypatch.setattr(osm_context.settings, "gtfs_path", str(feed))
+    context = osm_context.fetch_osm_context(
+        BoundingBox(north=47.51, south=47.49, east=19.07, west=19.04)
+    )
+    assert len(context.transit_stops) == 5
+    assert context.stop_source.startswith("GTFS")
+    assert "could not be loaded" in context.limitations[0]

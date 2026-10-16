@@ -47,6 +47,8 @@ def build_overpass_query(bbox: BoundingBox, timeout: int = 120) -> str:
         f'node["highway"="bus_stop"]({box});'
         f'node["railway"~"^(tram_stop|halt|station|subway_entrance)$"]({box});'
         f'nwr["amenity"="ferry_terminal"]({box});'
+        f'nwr["public_transport"="platform"]({box});'
+        f'nwr["railway"="platform"]({box});'
         ");"
         "out center tags;"
     )
@@ -61,10 +63,27 @@ def _facility_kind(tags: dict[str, Any]) -> str | None:
     return None
 
 
+# Mode keys on public_transport=platform objects, most specific first.
+_PLATFORM_MODES = (
+    ("subway", "subway"),
+    ("light_rail", "tram"),
+    ("tram", "tram"),
+    ("train", "rail"),
+    ("ferry", "ferry"),
+    ("trolleybus", "bus"),
+    ("bus", "bus"),
+)
+
+
 def _stop_mode(tags: dict[str, Any]) -> str | None:
     if tags.get("highway") == "bus_stop":
         return "bus"
     railway = tags.get("railway")
+    if tags.get("public_transport") == "platform" or railway == "platform":
+        for key, mode in _PLATFORM_MODES:
+            if tags.get(key) == "yes":
+                return mode
+        return "rail" if railway == "platform" else "other"
     if railway == "tram_stop":
         return "tram"
     if railway == "subway_entrance" or (railway == "station" and tags.get("station") == "subway"):
@@ -177,12 +196,13 @@ def fetch_osm_context(bbox: BoundingBox) -> OsmContext:
         context = parse_overpass_context(response.json())
     except (httpx.HTTPError, ValueError) as error:
         logger.warning("OSM context layers unavailable: %s", error)
-        return OsmContext(
+        unavailable = OsmContext(
             limitations=[
                 "Transit routes, emergency stations and schools could not be loaded from "
                 "OpenStreetMap; bus gates and facility checks were skipped."
             ]
         )
-        return _with_gtfs_stops(context, bbox)
+        # A local GTFS feed still supplies stops when Overpass is down.
+        return _with_gtfs_stops(unavailable, bbox)
     cache.set("osm_context", params, context.model_dump(mode="json"))
     return _with_gtfs_stops(context, bbox)
