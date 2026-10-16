@@ -140,6 +140,7 @@ LIVING_STREET_SPLIT_HIERARCHIES = frozenset({7})
 # an oversized superblock: splitting it would only divide fields and forest.
 STREET_REACH_M = 100.0
 MAX_ACCESS_REPAIR_ROUNDS = 10
+THROUGH_CORRIDOR_HIGHWAYS = frozenset({"motorway", "motorway_link", "trunk", "trunk_link"})
 MAX_REDESIGN_ROUNDS = 3
 # Access changes a repair pass may reopen when they strand streets.
 REPAIRABLE_CHANGES = frozenset(
@@ -2498,8 +2499,14 @@ class CityPartitioner:
                     continue
                 geometry = LineString([(u_data["x"], u_data["y"]), (v_data["x"], v_data["y"])])
             midpoint = geometry.interpolate(0.5, normalized=True)
+            highway = data.get("highway")
+            highway = highway[0] if isinstance(highway, list) else highway
             accounted = (
                 physical_key in arterial_physical
+                # A motorway or trunk road is a through corridor wherever it
+                # runs, even where it crosses a cell on a bridge or ends at the
+                # city edge without bounding one.
+                or highway in THROUGH_CORRIDOR_HIGHWAYS
                 or covered_geometry.covers(midpoint)
                 or excluded_geometry.covers(midpoint)
             )
