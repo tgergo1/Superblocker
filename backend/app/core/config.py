@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     # Optional GTFS feed (zip or stops.txt), e.g. BKK's public Budapest feed. When
     # set, its stops replace OpenStreetMap stops in the transit access check.
     gtfs_path: str | None = None
+    # Optional population grid: a GHS-POP GeoTIFF (any projection) or a
+    # lon,lat,population CSV. When set, plans count residents per superblock.
+    population_path: str | None = None
 
 
 @lru_cache

@@ -603,8 +603,19 @@ export function PartitionControls({
               {Math.round(partition.transit_access.mean_covered_share * 100)}% of superblock streets are
               within {partition.transit_access.walk_threshold_m.toFixed(0)} m walk of a stop
               {partition.transit_access.superblocks_poorly_served > 0
-                ? `; ${partition.transit_access.superblocks_poorly_served} superblocks are poorly served and need a stop or crossing first.`
+                ? `; ${partition.transit_access.superblocks_poorly_served} superblocks${
+                    partition.transit_access.residents_poorly_served
+                      ? ` (${Math.round(partition.transit_access.residents_poorly_served).toLocaleString('en')} residents)`
+                      : ''
+                  } are poorly served and need a stop or crossing first.`
                 : '; every superblock is well served.'}
+            </div>
+          )}
+          {partition.population && partition.population.residents_in_area > 0 && (
+            <div className="transit-summary" title={partition.population.limitations.join(' ')}>
+              {Math.round(partition.population.residents_in_superblocks).toLocaleString('en')} residents
+              ({Math.round(partition.population.share_in_superblocks * 100)}% of the area) live inside
+              superblocks. Source: {partition.population.source}.
             </div>
           )}
           {partition.school_streets && partition.school_streets.facilities_loaded > 0 && (
