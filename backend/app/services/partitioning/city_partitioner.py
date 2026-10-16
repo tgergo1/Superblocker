@@ -76,7 +76,7 @@ from app.services.assignment.network_assignment import (
     calibrate_assignment,
 )
 from app.services.constraint.active_mode_validator import ActiveModeValidator
-from app.services.constraint.constraint_enforcer import ConstraintEnforcer
+from app.services.constraint.constraint_enforcer import KEEP_OPEN_ATTRIBUTE, ConstraintEnforcer
 from app.services.constraint.operational_validator import OperationalValidator
 from app.services.design.filter_design import FilterDesigner
 from app.services.design.pilot_plan import PilotPlanner
@@ -140,6 +140,7 @@ LIVING_STREET_SPLIT_HIERARCHIES = frozenset({7})
 # an oversized superblock: splitting it would only divide fields and forest.
 STREET_REACH_M = 100.0
 MAX_ACCESS_REPAIR_ROUNDS = 10
+MAX_REDESIGN_ROUNDS = 3
 # Access changes a repair pass may reopen when they strand streets.
 REPAIRABLE_CHANGES = frozenset(
     {ModificationType.MODAL_FILTER, ModificationType.FULL_CLOSURE, ModificationType.ONE_WAY}
@@ -602,6 +603,9 @@ class CityPartitioner:
         self._main_road_nodes: set[int] = set()
         self._live_nodes: set[int] | None = None
         self.reopened_for_access = 0
+        # Interior streets reopened for access; a redesign must not cut them.
+        self._keep_open: set[tuple[int, int]] = set()
+        self._superblock_index: dict[str, int] = {}
         self.stranded_junctions = 0
         # Cells with no streets inside are not superblocks; they are only counted.
         self.non_street_cells = 0
@@ -639,6 +643,9 @@ class CityPartitioner:
         self._report_progress("constraints", 75, "Enforcing superblock constraints...")
         self._enforce_all_constraints()
         self._repair_access()
+        for _round in range(MAX_REDESIGN_ROUNDS):
+            if not self._redesign_after_repair():
+                break
         self._report_progress("constraints", 95, f"Created {len(self.superblocks)} superblocks")
 
         # Step 6: Compute statistics
@@ -1676,6 +1683,7 @@ class CityPartitioner:
                 )
                 self.superblocks.append(superblock)
                 self._superblock_cells[superblock.id] = cell
+                self._superblock_index[superblock.id] = i
                 # Both neighbours see the filter on a shared split street; one owns it.
                 shared = [
                     item
@@ -1805,11 +1813,16 @@ class CityPartitioner:
         self.stranded_junctions = len(stranded - core)
         if not reopened:
             return
-        self.reopened_for_access = len(reopened)
+        self.reopened_for_access += len(reopened)
         for item_id in reopened:
             self._split_filters = {
                 street: item for street, item in self._split_filters.items() if id(item) != item_id
             }
+        self._keep_open |= {
+            (min(owner_item.u, owner_item.v), max(owner_item.u, owner_item.v))
+            for owner_item in changes
+            if id(owner_item) in reopened and id(owner_item) not in quiet
+        }
         touched = {owner[item_id].id for item_id in reopened}
         for superblock in self.superblocks:
             if superblock.id not in touched:
@@ -1847,6 +1860,48 @@ class CityPartitioner:
                 return
             for a, b, key, _data in added:
                 planned.remove_edge(a, b, key)
+
+    def _redesign_after_repair(self) -> bool:
+        """Design again the superblocks a reopened street left with a through route.
+
+        The reopened streets are kept open, so the solver looks for another
+        cut; the whole plan is then checked for stranded streets once more.
+        """
+        if not self._keep_open:
+            return False
+        redesigned_any = False
+        for position, superblock in enumerate(self.superblocks):
+            if superblock.constraint_validated:
+                continue
+            cell = self._superblock_cells[superblock.id]
+            if not any(
+                (min(u, v), max(u, v)) in self._keep_open for u, v, _key in cell.interior_edges
+            ):
+                continue
+            index = self._superblock_index[superblock.id]
+            redesigned = self._enforce_cell_constraints(cell, index)
+            if redesigned is None or not redesigned.constraint_validated:
+                continue
+            for field_name in ("cell_kind", "size_status", "street_area_hectares"):
+                setattr(redesigned, field_name, getattr(superblock, field_name))
+            redesigned.id = superblock.id
+            self.superblocks[position] = redesigned
+            redesigned_any = True
+            for impact_input in self._impact_inputs:
+                if impact_input.superblock_id == superblock.id:
+                    shared = [
+                        item
+                        for item in impact_input.modifications
+                        if item in self._split_filters.values()
+                        and item not in superblock.modifications
+                    ]
+                    impact_input.modifications = list(redesigned.modifications) + shared
+                    impact_input.entry_sectors = {
+                        entry.node_id: entry.sector for entry in redesigned.entry_points
+                    }
+        if redesigned_any:
+            self._repair_access()
+        return redesigned_any
 
     def _revalidate(self, superblock: EnforcedSuperblock) -> None:
         """Validate a superblock again after access changes were reopened."""
@@ -2186,6 +2241,8 @@ class CityPartitioner:
 
             # Add edge
             subgraph.add_edge(u, v, key=key, **self.graph[u][v][key])
+            if (min(u, v), max(u, v)) in self._keep_open:
+                subgraph[u][v][key][KEEP_OPEN_ATTRIBUTE] = True
 
         return subgraph
 

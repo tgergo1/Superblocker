@@ -241,3 +241,26 @@ def test_compiled_direction_score_matches_networkx_scoring():
                 nx.restricted_view(enforcer.graph, [], hidden)
             )
             assert enforcer._compiled_direction_score((source, target)) == reference
+
+
+def test_cuts_avoid_streets_kept_open_for_access():
+    from app.services.constraint.constraint_enforcer import KEEP_OPEN_ATTRIBUTE
+
+    graph = nx.MultiDiGraph()
+    points = {1: (0.0, 0.005), 2: (0.003, 0.005), 3: (0.007, 0.005), 4: (0.01, 0.005)}
+    for node, (x, y) in points.items():
+        graph.add_node(node, x=x, y=y)
+    for u, v in ((1, 2), (2, 3), (3, 4)):
+        for a, b in ((u, v), (v, u)):
+            graph.add_edge(a, b, 0, highway="residential", length=300.0, osmid=u * 10 + v)
+    for a, b in ((1, 2), (2, 1), (2, 3), (3, 2)):
+        graph[a][b][0][KEEP_OPEN_ATTRIBUTE] = True
+    enforcer = ConstraintEnforcer(
+        interior_graph=graph,
+        boundary_polygon=Polygon([(0, 0), (0.01, 0), (0.01, 0.01), (0, 0.01)]),
+        entry_node_ids=[1, 4],
+    )
+    modifications, violations = enforcer.enforce_constraints()
+    assert not violations
+    assert modifications
+    assert {(min(m.u, m.v), max(m.u, m.v)) for m in modifications} == {(3, 4)}
