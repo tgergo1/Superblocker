@@ -214,6 +214,12 @@ Copy [`backend/.env.example`](backend/.env.example) and [`frontend/.env.example`
 | `PARTITION_CACHE_MAX_ENTRIES` | `8` | In-process partition cache size |
 | `PARTITION_CACHE_TTL_SECONDS` | `3600` | Partition cache lifetime |
 | `ADMIN_API_KEY` | unset | Enables authenticated cache maintenance |
+| `OSM_EXTRACT_PATH` | unset | Local `.osm.pbf`, `.osm` or `.osm.bz2` extract; drive networks load from it instead of Overpass |
+
+
+### Offline street data
+
+City-scale runs against the public Overpass API are slow and rate-limited. Point `OSM_EXTRACT_PATH` at a free OpenStreetMap extract and street networks load from that file instead. Good sources are Geofabrik's [Hungary extract](https://download.geofabrik.de/europe/hungary.html) or a smaller [BBBike Budapest](https://download.bbbike.org/osm/bbbike/Budapest/) cut. The loader keeps the same roads as OSMnx's `drive` filter inside the requested area, so plans match an Overpass download. Context layers (schools, stations, transit routes) still come from Overpass. With Docker Compose, mount the file into the backend container and set the variable to its path there.
 
 ## API
 

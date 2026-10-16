@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     cache_analysis_ttl_seconds: int = 86400  # 24 hours for analysis results
     cache_search_ttl_seconds: int = 3600  # 1 hour for search results
 
+    # Optional local OpenStreetMap extract (.osm.pbf, .osm or .osm.bz2). When set,
+    # drive and all-road networks load from it instead of the Overpass API.
+    osm_extract_path: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:
