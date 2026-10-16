@@ -285,6 +285,15 @@ class TurnGraphBuilder:
 
         return TurnGraph(turn_graph, edge_data)
 
+    def road_graph(
+        self,
+        vehicle_class: VehicleClass = VehicleClass.CAR,
+        modifications: Iterable[StreetModification] = (),
+        active_time_window: str | None = None,
+    ) -> nx.MultiDiGraph:
+        """The directed road graph with plan changes applied, before turn expansion."""
+        return self._prepare_graph(vehicle_class, list(modifications), active_time_window)
+
     def _prepare_graph(
         self,
         vehicle_class: VehicleClass,

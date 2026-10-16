@@ -9,6 +9,8 @@ import type { Feature, Geometry, LineString, MultiPolygon, Polygon } from 'geojs
 import type { ViewState, StreetNetworkResponse, RoadProperties, EnforcedSuperblock, CityPartition, RouteResult, BoundaryRoadImpact, SchoolStreet } from '../../types';
 import type { SuperblockCandidate } from '../../services/api';
 import { IMPACT_BANDS, impactColor, impactPercent } from '../../utils/impact';
+import type { SimulatedLink, SimulationMapView } from '../../types/simulation';
+import { CHANGE_BANDS, LOAD_BANDS, simulationLinkColor, simulationLinkWidth } from '../../utils/simulation';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './StreetMap.css';
 
@@ -222,6 +224,9 @@ interface StreetMapProps {
   emptyStateMessage?: string;
   hideLegends?: boolean;
   showPilotRanking?: boolean;
+  // Capacity simulator links, drawn over the plan when set.
+  simulationLinks?: SimulatedLink[] | null;
+  simulationView?: SimulationMapView;
 }
 
 export function StreetMap({
@@ -246,6 +251,8 @@ export function StreetMap({
   emptyStateMessage,
   hideLegends = false,
   showPilotRanking = false,
+  simulationLinks = null,
+  simulationView = 'change',
 }: StreetMapProps) {
   const mapRef = useRef<MapRef>(null);
   const [mapReady, setMapReady] = useState(false);
@@ -261,6 +268,7 @@ export function StreetMap({
   );
 
   const [hoveredFeature, setHoveredFeature] = useState<Feature<LineString, RoadProperties> | null>(null);
+  const [hoveredSimulationLink, setHoveredSimulationLink] = useState<SimulatedLink | null>(null);
   const [hoveredSuperblock, setHoveredSuperblock] = useState<SuperblockCandidate | null>(null);
   const [hoveredPlanMarker, setHoveredPlanMarker] = useState<PlanMarkerDatum | null>(null);
   const [selectedSuperblock, setSelectedSuperblock] = useState<SuperblockCandidate | null>(null);
@@ -938,8 +946,29 @@ export function StreetMap({
       );
     }
 
+    if (simulationLinks?.length) {
+      result.push(
+        new PathLayer<SimulatedLink>({
+          id: 'capacity-simulation',
+          data: simulationLinks,
+          pickable: true,
+          widthUnits: 'pixels',
+          capRounded: true,
+          jointRounded: true,
+          getPath: (d: SimulatedLink) => d.coordinates,
+          getColor: (d: SimulatedLink) => simulationLinkColor(d, simulationView),
+          getWidth: (d: SimulatedLink) => simulationLinkWidth(d, simulationView),
+          onHover: (info: { object?: SimulatedLink }) => setHoveredSimulationLink(info.object ?? null),
+          updateTriggers: {
+            getColor: [simulationView],
+            getWidth: [simulationView],
+          },
+        })
+      );
+    }
+
     return result;
-  }, [analysisBoundary, streetNetwork, superblocks, showSuperblocks, colorBy, impactScenario, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute, modifiedStreets, getStreetModification, showDetailedPlanSigns, boundaryRoadWidth, showPilotRanking, poorTransitIds]);
+  }, [analysisBoundary, streetNetwork, superblocks, showSuperblocks, colorBy, impactScenario, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute, modifiedStreets, getStreetModification, showDetailedPlanSigns, boundaryRoadWidth, showPilotRanking, poorTransitIds, simulationLinks, simulationView]);
 
   // Store overlay reference
   const overlayRef = useRef<MapboxOverlay | null>(null);
@@ -1045,8 +1074,30 @@ export function StreetMap({
         </div>
       )}
 
+      {hoveredSimulationLink && simulationLinks?.length ? (
+        <div className="tooltip road-tooltip">
+          <div className="tooltip-title">{hoveredSimulationLink.name ?? 'Unnamed road'}</div>
+          <div className="tooltip-row">
+            <span>Today:</span>
+            <span>{Math.round(hoveredSimulationLink.baseline_vph)} veh/h ({Math.round(hoveredSimulationLink.baseline_vc * 100)}% full)</span>
+          </div>
+          <div className="tooltip-row">
+            <span>With plan:</span>
+            <span>
+              {hoveredSimulationLink.closed_in_plan
+                ? 'closed to through traffic'
+                : `${Math.round(hoveredSimulationLink.planned_vph)} veh/h (${Math.round(hoveredSimulationLink.planned_vc * 100)}% full)`}
+            </span>
+          </div>
+          <div className="tooltip-row">
+            <span>Capacity:</span>
+            <span>{Math.round(hoveredSimulationLink.capacity_vph)} veh/h per direction</span>
+          </div>
+        </div>
+      ) : null}
+
       {/* Road tooltip */}
-      {hoveredFeature && !hoveredSuperblock && !hoveredPlanMarker && (
+      {hoveredFeature && !hoveredSuperblock && !hoveredPlanMarker && !(hoveredSimulationLink && simulationLinks?.length) && (
         <div className="tooltip road-tooltip">
           <div className="tooltip-title">
             {hoveredFeature.properties?.name ?? 'Unnamed road'}
@@ -1347,6 +1398,25 @@ export function StreetMap({
             <div className="legend-note">Line width grows with diverted vehicles per hour.</div>
           </div>
         )}
+
+        {simulationLinks?.length ? (
+          <div className="map-legend impact-legend">
+            <div className="legend-title">
+              {simulationView === 'change'
+                ? 'Simulated peak-hour change'
+                : simulationView === 'with'
+                  ? 'Simulated load with the plan'
+                  : 'Simulated load today'}
+            </div>
+            {(simulationView === 'change' ? CHANGE_BANDS : LOAD_BANDS).map(band => (
+              <div key={band.label} className="legend-item">
+                <span className="legend-color" style={{ background: `rgb(${band.color[0]}, ${band.color[1]}, ${band.color[2]})` }} />
+                <span className="legend-label">{band.label}</span>
+              </div>
+            ))}
+            <div className="legend-note">Line width grows with vehicles per hour.</div>
+          </div>
+        ) : null}
 
         {streetNetwork && colorBy === 'traffic' && (
           <div className="map-legend traffic-legend">
