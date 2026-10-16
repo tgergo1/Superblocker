@@ -700,6 +700,16 @@ def test_crossing_from_one_superblock_into_the_next_is_sealed():
     assert east.modal_filter_count == 1
 
 
+def test_crossing_out_at_a_shared_corner_is_sealed():
+    partitioner = _two_superblocks_meeting_at_a_junction()
+    # Junction 5 on the main road is a corner of both superblocks.
+    partitioner._superblock_cells["west"].interior_edges.append((5, 9, 0))
+    partitioner._seal_crossings()
+    _west, east = partitioner.superblocks
+    assert partitioner.crossings_sealed == 1
+    assert [(m.u, m.v) for m in east.modifications] == [(3, 4)]
+
+
 def test_crossing_that_is_the_only_way_in_gets_a_destination_gate():
     from app.models.schemas import VehicleClass
 
