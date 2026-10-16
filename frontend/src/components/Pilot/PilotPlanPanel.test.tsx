@@ -30,7 +30,10 @@ const plan: PilotPlanSummary = {
   top_trial_cost_eur: 381_500,
   mean_injury_reduction_low_percent: 25.4,
   mean_injury_reduction_high_percent: 43.8,
-  candidates: [candidate(1, { school_streets: 2 }), candidate(2)],
+  candidates: [
+    candidate(1, { school_streets: 2, transit_covered_share: 0.9 }),
+    candidate(2, { transit_covered_share: 0.3 }),
+  ],
   limitations: ['Costs are indicative central European unit rates, not quotes.'],
 };
 
@@ -46,6 +49,8 @@ describe('PilotPlanPanel', () => {
     expect(screen.getByText('€7.6M')).toBeTruthy();
     expect(screen.getByText('−25 to −44%')).toBeTruthy();
     expect(screen.getByText(/2 school streets/)).toBeTruthy();
+    expect(screen.getAllByText(/of streets near a stop/)).toHaveLength(1);
+    expect(screen.getByText(/only 30% of streets near a stop/)).toBeTruthy();
 
     fireEvent.click(screen.getAllByRole('button', { name: /veh\/h out/ })[0]);
     expect(onSelect).toHaveBeenCalledWith(plan.candidates[0]);

@@ -2057,6 +2057,7 @@ class CityPartitioner:
                     centroids,
                     areas,
                     residents,
+                    transit_access,
                 )
             except Exception as error:  # Screening output must not block the plan.
                 logger.warning("Pilot planning failed: %s", error)

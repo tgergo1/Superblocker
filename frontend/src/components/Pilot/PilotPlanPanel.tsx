@@ -91,6 +91,9 @@ export function PilotPlanPanel({ plan, showOnMap, onShowOnMapChange, onSelect }:
                       {item.residents ? ` · ${Math.round(item.residents).toLocaleString('en')} residents` : ''}
                       {item.school_streets > 0 ? ` · ${item.school_streets} school street${item.school_streets > 1 ? 's' : ''}` : ''}
                       {item.reclaimable_m2 >= 1000 ? ` · ${(item.reclaimable_m2 / 10_000).toFixed(1)} ha for people` : ''}
+                      {item.transit_covered_share != null && item.transit_covered_share < 0.5
+                        ? ` · only ${Math.round(item.transit_covered_share * 100)}% of streets near a stop`
+                        : ''}
                     </small>
                   </span>
                 </button>

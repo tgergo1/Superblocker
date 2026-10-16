@@ -910,6 +910,8 @@ class PilotCandidate(BaseModel):
     mean_detour_seconds: float = Field(default=0.0, ge=0)
     emergency_delay_seconds: float | None = Field(default=None, ge=0)
     residents: float | None = Field(default=None, ge=0)
+    # Share of interior street length within walking distance of a stop.
+    transit_covered_share: float | None = Field(default=None, ge=0, le=1)
     centroid_lat: float | None = None
     centroid_lon: float | None = None
 

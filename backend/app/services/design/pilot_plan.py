@@ -24,8 +24,10 @@ from app.models.schemas import (
     SchoolStreetSummary,
     StreetModification,
     TrafficImpactEstimate,
+    TransitAccessSummary,
 )
 from app.services.impact.boundary_impact import SuperblockImpactInput
+from app.services.impact.transit_access import POORLY_SERVED_SHARE
 
 # Indicative 2026 EUR unit costs for central European cities. Trial measures
 # are removable; build measures are kerbed and landscaped.
@@ -59,6 +61,9 @@ BUILD_COST_EUR = {
 # roughly 8-20%, so the speed factor on injury risk is 0.64-0.85.
 SPEED_FACTOR_STRONG = 0.64
 SPEED_FACTOR_WEAK = 0.85
+# A trial where few residents can walk to a stop leaves them with the car as
+# the only option, so it is more likely to be reversed; rank it a little lower.
+POOR_TRANSIT_FACTOR = 0.85
 
 
 def _cost_key(modification: StreetModification):
@@ -110,11 +115,14 @@ class PilotPlanner:
         centroids: dict[str, tuple[float, float]] | None = None,
         areas_ha: dict[str, float] | None = None,
         residents: dict[str, float] | None = None,
+        transit_access: TransitAccessSummary | None = None,
     ) -> PilotPlanSummary:
         """Rank superblocks for a trial.
 
         With ``residents`` from a population grid, residents per hectare
         replaces calmed street length per hectare as the density measure.
+        With ``transit_access``, superblocks where less than half the streets
+        are within walking distance of a stop are ranked lower.
         """
         blocks = list(superblocks)
         centroids = centroids or {}
@@ -137,6 +145,13 @@ class PilotPlanner:
                 emergency_delay[result.superblock_id] = max(
                     0.0, result.planned_seconds - result.baseline_seconds
                 )
+
+        transit_share = {
+            item.superblock_id: item.covered_share
+            for item in (
+                transit_access.superblocks if transit_access and transit_access.checked else []
+            )
+        }
 
         displaced = {
             b.superblock_id: (
@@ -208,6 +223,9 @@ class PilotPlanner:
             )
             delay = emergency_delay.get(sid, 0.0)
             score = benefit * (1.0 - 0.15 * n_detour[sid]) * (0.5 if delay > threshold else 1.0)
+            share = transit_share.get(sid)
+            if share is not None and share < POORLY_SERVED_SHARE:
+                score *= POOR_TRANSIT_FACTOR
             trial = sum(trial_cost(item) for item in block.modifications)
             build = sum(build_cost(item) for item in block.modifications)
             lat, lon = centroids.get(sid, (None, None))
@@ -226,6 +244,7 @@ class PilotPlanner:
                     mean_detour_seconds=round(detour[sid], 1),
                     emergency_delay_seconds=round(delay, 1) if sid in emergency_delay else None,
                     residents=round(residents[sid]) if residents and sid in residents else None,
+                    transit_covered_share=share,
                     centroid_lat=lat,
                     centroid_lon=lon,
                 )
@@ -258,6 +277,12 @@ class PilotPlanner:
                 "reclaimable space, "
                 + ("residents per hectare" if residents else "street density")
                 + ", school streets and safety (15% each) by percentile, and is lowered "
-                "for long detours or slower emergency response.",
+                "for long detours or slower emergency response"
+                + (
+                    ", and where less than half the streets are within walking "
+                    "distance of a public transport stop."
+                    if transit_share
+                    else "."
+                ),
             ],
         )

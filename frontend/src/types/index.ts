@@ -245,6 +245,7 @@ export interface PilotCandidate {
   mean_detour_seconds: number;
   emergency_delay_seconds?: number | null;
   residents?: number | null;
+  transit_covered_share?: number | null;
   centroid_lat?: number | null;
   centroid_lon?: number | null;
 }
