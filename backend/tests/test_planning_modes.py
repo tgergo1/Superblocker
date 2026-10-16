@@ -523,3 +523,36 @@ def test_residential_streets_split_before_living_streets():
     assert len(pieces) == 2
     assert (8, 9, 0) in partitioner.arterial_edges
     assert (10, 11, 0) not in partitioner.arterial_edges
+
+
+def test_big_cell_with_one_road_through_is_open_land():
+    import networkx as nx
+    from shapely.geometry import box
+
+    from app.models.schemas import SizeStatus
+    from app.services.partitioning.city_partitioner import SuperblockCell
+
+    graph = nx.MultiDiGraph()
+    graph.add_node(1, x=0.0, y=0.005)
+    graph.add_node(2, x=0.02, y=0.005)
+    graph.add_edge(1, 2, 0, highway="unclassified", length=2200.0)
+    partitioner = CityPartitioner(
+        graph,
+        BoundingBox(north=0.011, south=-0.001, east=0.021, west=-0.001),
+        min_area_ha=6,
+        max_area_ha=20,
+    )
+    polygon = box(0.0, 0.0, 0.02, 0.01)  # about 245 ha
+    cell = SuperblockCell(
+        polygon=polygon,
+        area_hectares=partitioner._calculate_area_hectares(polygon),
+        boundary_edges=[],
+        interior_edges=[(1, 2, 0)],
+        entry_nodes=[1, 2],
+    )
+    # One 2.2 km road reaches a 200 m band: about 44 ha of 245.
+    street_area = partitioner._street_area_hectares(cell)
+    assert street_area == pytest.approx(44.5, rel=0.05)
+    assert partitioner._size_status(cell.area_hectares, street_area) == SizeStatus.MOSTLY_OPEN_LAND
+    # Streets reaching most of the land make it an oversized superblock.
+    assert partitioner._size_status(cell.area_hectares, 200.0) == SizeStatus.OVER_MAXIMUM

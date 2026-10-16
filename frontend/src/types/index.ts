@@ -581,7 +581,7 @@ export interface PlanReadiness {
 }
 
 export type CellKind = 'superblock' | 'naturally_calm' | 'non_street_land';
-export type SizeStatus = 'within' | 'under_minimum' | 'over_maximum';
+export type SizeStatus = 'within' | 'under_minimum' | 'over_maximum' | 'mostly_open_land';
 
 export interface EnforcedSuperblock {
   id: string;
@@ -590,6 +590,7 @@ export interface EnforcedSuperblock {
   num_sectors: number;
   cell_kind?: CellKind;
   size_status?: SizeStatus;
+  street_area_hectares?: number | null;
   boundary_roads: number[];
   entry_points: EntryPoint[];
   modifications: StreetModification[];

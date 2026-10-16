@@ -307,6 +307,9 @@ class SizeStatus(StrEnum):
     WITHIN = "within"
     UNDER_MINIMUM = "under_minimum"
     OVER_MAXIMUM = "over_maximum"
+    # Over the maximum, but most of its land is out of reach of any street:
+    # forest, rail land or an airfield with a road through it.
+    MOSTLY_OPEN_LAND = "mostly_open_land"
 
 
 class EntryPoint(BaseModel):
@@ -1556,6 +1559,8 @@ class EnforcedSuperblock(BaseModel):
     num_sectors: int  # Number of angular sectors (typically 4-8)
     cell_kind: CellKind = CellKind.SUPERBLOCK
     size_status: SizeStatus = SizeStatus.WITHIN
+    # Land within reach of any street in or around it (set for cells over the maximum).
+    street_area_hectares: float | None = None
 
     # Boundary information
     boundary_roads: list[int]  # OSM IDs of arterial boundary roads
