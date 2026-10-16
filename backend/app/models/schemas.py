@@ -1632,7 +1632,9 @@ class CityPartition(BaseModel):
     total_area_hectares: float
     coverage_percent: float  # % of bbox area covered by superblocks
     total_superblocks: int
-    # Superblocks proper are cells with through routes; the other kinds need no filters.
+    # Every cell between boundary roads by kind. Superblocks proper have through
+    # routes; calm cells need no filters; street-free cells are counted but are
+    # not in ``superblocks``, so ``total_superblocks`` is calm cells plus these.
     cell_kind_counts: dict[str, int] = Field(default_factory=dict)
     # Superblocks proper (not calm or street-free cells) outside the size range.
     oversized_superblocks: int = 0

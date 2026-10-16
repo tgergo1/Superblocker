@@ -585,6 +585,8 @@ class CityPartitioner:
         self.arterial_edges: set[tuple[int, int, int]] = set()
         self.cells: list[SuperblockCell] = []
         self.superblocks: list[EnforcedSuperblock] = []
+        # Cells with no streets inside are not superblocks; they are only counted.
+        self.non_street_cells = 0
 
     def partition(self) -> CityPartition:
         """
@@ -1623,6 +1625,8 @@ class CityPartitioner:
             )
 
             superblock = self._enforce_cell_constraints(cell, i)
+            if superblock is None and not cell.interior_edges:
+                self.non_street_cells += 1
             if superblock is not None:
                 superblock.cell_kind = self._cell_kind(cell)
                 superblock.size_status = self._size_status(cell.area_hectares)
@@ -2587,6 +2591,7 @@ class CityPartitioner:
             total_superblocks=len(self.superblocks),
             cell_kind_counts={
                 kind.value: sum(1 for sb in self.superblocks if sb.cell_kind == kind)
+                + (self.non_street_cells if kind == CellKind.NON_STREET_LAND else 0)
                 for kind in CellKind
             },
             oversized_superblocks=sum(

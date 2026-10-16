@@ -494,3 +494,9 @@ def test_cells_report_whether_they_have_through_routes():
     assert partitioner._size_status(45.0) == SizeStatus.OVER_MAXIMUM
     assert partitioner._size_status(3.0) == SizeStatus.UNDER_MINIMUM
     assert partitioner._size_status(12.0) == SizeStatus.WITHIN
+
+    # A cell with no streets and no entries is no superblock, but is counted.
+    partitioner.cells = [cell([], [])]
+    partitioner._enforce_all_constraints()
+    assert partitioner.superblocks == []
+    assert partitioner.non_street_cells == 1

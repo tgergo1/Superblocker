@@ -1510,7 +1510,7 @@ export function StreetMap({
                 <div className="info-section-title">City plan</div>
                 <div className="info-row">
                   <span>Superblocks:</span>
-                  <span>{partition.total_superblocks}</span>
+                  <span>{partition.cell_kind_counts?.superblock ?? partition.total_superblocks}</span>
                 </div>
                 {!!partition.cell_kind_counts?.naturally_calm && (
                   <div className="info-row">
