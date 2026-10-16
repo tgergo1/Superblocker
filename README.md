@@ -82,10 +82,10 @@ On the offline Budapest graph, the top ten trials cost about €160k. The whole-
 
 Each plan carries a screening estimate of what it does to noise and NO2, on both sides of the change:
 
-- **Inside superblocks**, noise falls with the through traffic removed: half the traffic is about 3 dB quieter. A 30 km/h limit takes off another 1–3 dB. NO2 falls by the traffic cut times an assumed local-traffic share of street-level NO2 (30–60%).
+- **Inside superblocks**, noise falls with the through traffic removed: half the traffic is about 3 dB quieter. A 30 km/h limit takes off another 1–3 dB on streets whose limit is above 30 km/h today. NO2 falls by the traffic cut times an assumed local-traffic share of street-level NO2 (30–60%).
 - **On main roads**, the diverted traffic makes them louder. Roads that get 3 dB louder or more, roughly a doubling of traffic, are counted as noticeably louder.
 
-On the offline Budapest graph, superblock interiors get about 2–4 dB quieter on average, with 4–7% less NO2. 172 main roads get noticeably louder; the "Keep busy residential streets inside superblocks" option and traffic evaporation both reduce that. These are relative changes, not a noise map or dispersion model; check the NO2 share against the OKIR monitoring stations before quoting a figure.
+On the offline Budapest graph, superblock interiors get about 1–2 dB quieter on average, with 4–7% less NO2; many inner streets are already signed 30 km/h, so the speed change adds little there. No main road gets 3 dB louder (the largest increase is 2.7 dB), but residential streets used as boundaries do take extra traffic; the traffic estimate lists them, and the "Keep busy residential streets inside superblocks" option removes it. These are relative changes, not a noise map or dispersion model; check the NO2 share against the OKIR monitoring stations before quoting a figure.
 
 ## Budapest verification run
 

@@ -1925,7 +1925,7 @@ class CityPartitioner:
         health = None
         if traffic_impact is not None:
             try:
-                health = HealthEstimator().estimate(traffic_impact)
+                health = HealthEstimator(self.graph).estimate(traffic_impact, self._impact_inputs)
             except Exception as error:  # Screening output must not block the plan.
                 logger.warning("Health estimate failed: %s", error)
 
