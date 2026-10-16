@@ -171,6 +171,7 @@ def test_partition_regular_stream_and_route_with_supplied_partition(client, monk
         _public_space_settings=None,
         _school_street_settings=None,
         _minor_road_boundaries="allow",
+        _planning_mode="superblocks",
     ):
         progress_queue.put(
             {

@@ -108,6 +108,7 @@ class PartitionJobRunner:
                 request.public_space_settings,
                 request.school_street_settings,
                 request.minor_road_boundaries,
+                request.planning_mode,
             )
             if cancel_event.is_set():
                 self.store.mark_job_cancelled(job_id, actor_id="partition-worker")

@@ -450,6 +450,7 @@ class CityPartitioner:
         public_space_settings: PublicSpaceSettings | None = None,
         school_street_settings: SchoolStreetSettings | None = None,
         minor_boundary_policy: str = "allow",
+        use_centrality_boundaries: bool = True,
         progress_callback: Callable[[PartitionProgress], None] | None = None,
     ):
         """
@@ -511,6 +512,7 @@ class CityPartitioner:
         self.public_space_settings = public_space_settings or PublicSpaceSettings()
         self.school_street_settings = school_street_settings or SchoolStreetSettings()
         self.minor_boundary_policy = minor_boundary_policy
+        self.use_centrality_boundaries = use_centrality_boundaries
         self.filter_designer = FilterDesigner(
             graph, osm_context, filter_design_settings or FilterDesignSettings()
         )
@@ -655,7 +657,8 @@ class CityPartitioner:
         centrality_arterials = set()
         num_nodes = self.graph.number_of_nodes()
 
-        if num_nodes > 100:  # Only compute centrality for reasonably sized networks
+        # Circulation-sector plans bound cells by the main road grid alone.
+        if self.use_centrality_boundaries and num_nodes > 100:
             try:
                 # Convert to undirected simple graph for centrality
                 G_simple = nx.Graph()

@@ -271,6 +271,7 @@ export interface PartitionRequest {
   demand_model?: DemandModel | null;
   assignment_settings?: Record<string, unknown>;
   minor_road_boundaries?: 'allow' | 'avoid';
+  planning_mode?: 'superblocks' | 'circulation_sectors';
 }
 
 export interface PartitionResponse {
@@ -305,6 +306,7 @@ function partitionBody(request: PartitionRequest): Record<string, unknown> {
     demand_model: request.demand_model ?? null,
     assignment_settings: request.assignment_settings ?? {},
     minor_road_boundaries: request.minor_road_boundaries ?? 'allow',
+    planning_mode: request.planning_mode ?? 'superblocks',
   };
 }
 

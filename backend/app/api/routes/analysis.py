@@ -497,6 +497,17 @@ def _validate_registered_dataset_manifests(request: PartitionRequest) -> None:
         )
 
 
+# Ghent bounds its circulation sectors by the ring and radial main roads only.
+CIRCULATION_SECTOR_ROAD_TYPES = {
+    "motorway",
+    "motorway_link",
+    "trunk",
+    "trunk_link",
+    "primary",
+    "primary_link",
+}
+
+
 def run_partition_sync(
     bbox: BoundingBox,
     boundary,
@@ -527,6 +538,7 @@ def run_partition_sync(
     public_space_settings=None,
     school_street_settings=None,
     minor_road_boundaries="allow",
+    planning_mode="superblocks",
 ):
     """
     Run city partitioning synchronously in a thread.
@@ -613,7 +625,12 @@ def run_partition_sync(
             min_area_ha=min_area,
             max_area_ha=max_area,
             num_sectors=num_sectors,
-            arterial_road_types=arterial_road_types,
+            arterial_road_types=(
+                CIRCULATION_SECTOR_ROAD_TYPES
+                if planning_mode == "circulation_sectors"
+                else arterial_road_types
+            ),
+            use_centrality_boundaries=planning_mode != "circulation_sectors",
             enforce_constraints=enforce_constraints,
             traffic_evidence=traffic_evidence,
             access_targets=access_targets,
@@ -727,6 +744,7 @@ async def partition_city(
             request.public_space_settings,
             request.school_street_settings,
             request.minor_road_boundaries,
+            request.planning_mode,
         )
 
         partition = result["partition"]
@@ -805,6 +823,7 @@ async def partition_city_stream(
             request.public_space_settings,
             request.school_street_settings,
             request.minor_road_boundaries,
+            request.planning_mode,
         )
         logger.info("Partition streaming started")
 
