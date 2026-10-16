@@ -23,6 +23,7 @@ from dataclasses import dataclass
 import networkx as nx
 import osmnx as ox
 import pyproj
+import shapely
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box, shape
 from shapely.ops import polygonize, transform, unary_union
 from shapely.strtree import STRtree
@@ -78,6 +79,7 @@ from app.services.impact.boundary_impact import (
 )
 from app.services.impact.emergency_access import EmergencyAccessChecker
 from app.services.network.turn_graph import TurnGraphBuilder
+from app.services.partitioning.fast_centrality import sampled_edge_betweenness
 
 logger = logging.getLogger(__name__)
 
@@ -509,6 +511,7 @@ class CityPartitioner:
         self._edge_records: list[tuple[int, int, int, LineString]] = []
         self._edge_tree: STRtree | None = None
         self._arterial_nodes: set[int] = set()
+        self._arterial_edges_by_node: dict[int, list[tuple[int, int, int]]] | None = None
         self._area_transformer = None
 
         # Results
@@ -616,6 +619,7 @@ class CityPartitioner:
                 edge for edge, volume in measured_edges.items() if volume >= threshold
             }
             self._arterial_nodes = {node for u, v, _key in self.arterial_edges for node in (u, v)}
+            self._arterial_edges_by_node = None
             logger.info(
                 "Arterial network: %s measured-volume edges at >= %.0f vehicles/hour",
                 len(self.arterial_edges),
@@ -657,7 +661,7 @@ class CityPartitioner:
 
                 # Compute centrality (approximate for large networks)
                 k = min(128, num_nodes) if num_nodes > 1000 else None
-                centrality = nx.edge_betweenness_centrality(G_simple, k=k, weight="weight", seed=42)
+                centrality = sampled_edge_betweenness(G_simple, k=k, weight="weight", seed=42)
 
                 # Find threshold
                 values = list(centrality.values())
@@ -676,6 +680,7 @@ class CityPartitioner:
         # Combine both criteria
         self.arterial_edges = type_arterials.union(centrality_arterials)
         self._arterial_nodes = {node for u, v, _key in self.arterial_edges for node in (u, v)}
+        self._arterial_edges_by_node = None
         logger.info(
             f"Arterial network: {len(type_arterials)} by type, "
             f"{len(centrality_arterials)} by centrality, "
@@ -817,6 +822,12 @@ class CityPartitioner:
                 for u, v, key, data in self.graph.edges(keys=True, data=True)
             )
 
+        # Prepared geometry makes the repeated containment tests much cheaper,
+        # and the ring is computed once instead of once per candidate edge.
+        shapely.prepare(polygon)
+        ring = polygon.boundary
+        shapely.prepare(ring)
+
         for u, v, key, geom in candidates:
             if geom is None:
                 u_data = self.graph.nodes.get(u, {})
@@ -826,7 +837,7 @@ class CityPartitioner:
                 geom = LineString([(u_data["x"], u_data["y"]), (v_data["x"], v_data["y"])])
 
             # Check if edge is inside or on boundary of polygon
-            if polygon.contains(geom) or polygon.boundary.intersects(geom):
+            if polygon.contains(geom) or ring.intersects(geom):
                 edge_tuple = (u, v, key)
 
                 if edge_tuple in self.arterial_edges:
@@ -1400,8 +1411,14 @@ class CityPartitioner:
 
         # Use the global arterial grid as a topology fallback when geometric
         # classification put a touching edge just outside this cell.
-        for u, v, key in self.arterial_edges:
-            if node_id not in (u, v) or not self.graph.has_edge(u, v, key):
+        if self._arterial_edges_by_node is None:
+            index: dict[int, list[tuple[int, int, int]]] = {}
+            for edge in sorted(self.arterial_edges, key=repr):
+                index.setdefault(edge[0], []).append(edge)
+                index.setdefault(edge[1], []).append(edge)
+            self._arterial_edges_by_node = index
+        for u, v, key in self._arterial_edges_by_node.get(node_id, ()):
+            if not self.graph.has_edge(u, v, key):
                 continue
             osm_ids = self._normalize_osm_ids(self.graph[u][v][key].get("osmid"))
             if osm_ids:
