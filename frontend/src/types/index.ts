@@ -170,6 +170,61 @@ export interface StreetModification {
   turn_from_osm_id: number | null;
   turn_to_osm_id: number | null;
   via_node_id: number | null;
+  filter_type?: 'planter' | 'emergency_bollard' | 'camera_gate' | 'bus_gate' | 'school_street' | null;
+  transit_route_refs?: string[];
+}
+
+export interface EmergencyAccessResult {
+  superblock_id: string;
+  nearest_station: string | null;
+  baseline_seconds: number;
+  planned_seconds: number | null;
+  planned_without_exemption_seconds: number | null;
+}
+
+export interface EmergencyAccessSummary {
+  checked: boolean;
+  stations_used: number;
+  superblocks_checked: number;
+  median_added_seconds: number;
+  maximum_added_seconds: number;
+  threshold_seconds: number;
+  superblocks_over_threshold: number;
+  superblocks_over_threshold_without_exemption: number;
+  unreachable_superblocks: number;
+  results: EmergencyAccessResult[];
+  limitations: string[];
+}
+
+export interface SuperblockPublicSpace {
+  superblock_id: string;
+  calmed_street_km: number;
+  calmed_carriageway_m2: number;
+  reclaimable_m2: number;
+  plaza_candidates: Coordinates[];
+}
+
+export interface PublicSpaceSummary {
+  settings: { reallocation_share: number; max_plazas_per_superblock: number };
+  calmed_street_km: number;
+  calmed_carriageway_m2: number;
+  reclaimable_m2: number;
+  plaza_candidates: number;
+  superblocks: SuperblockPublicSpace[];
+  limitations: string[];
+}
+
+export interface FilterDesignSummary {
+  transit_routes_loaded: number;
+  transit_ways_loaded: number;
+  facilities_loaded: number;
+  bus_gates: number;
+  emergency_bollards: number;
+  planters: number;
+  closures_converted_to_gates: number;
+  one_way_changes_on_transit: number;
+  protected_route_refs: string[];
+  limitations: string[];
 }
 
 export interface UnreachableAddress {
@@ -309,6 +364,62 @@ export interface AssignmentComparison {
   limitations: string[];
 }
 
+export interface EvaporationScenario {
+  name: string;
+  evaporation_rate: number;
+  description: string;
+}
+
+export interface TrafficImpactSettings {
+  through_traffic_share: number;
+  peak_hour_share_of_daily: number;
+  max_entry_pairs_per_superblock: number;
+  scenarios: EvaporationScenario[];
+  central_scenario: string;
+  high_increase_percent: number;
+}
+
+export interface BoundaryRoadImpact {
+  osm_id: number;
+  name: string | null;
+  highway: string;
+  baseline_peak_vph: number;
+  capacity_vph: number;
+  added_peak_vph: Record<string, number>;
+  percent_increase_central: number;
+  baseline_volume_capacity_ratio: number;
+  planned_volume_capacity_ratio_central: number;
+  measured: boolean;
+  arterial: boolean;
+  superblock_ids: string[];
+}
+
+export interface SuperblockTrafficImpact {
+  superblock_id: string;
+  entry_pairs_checked: number;
+  cut_through_pairs: number;
+  unresolved_pairs: number;
+  displaced_peak_vph: number;
+  interior_traffic_reduction_percent: number;
+  mean_detour_seconds: number;
+}
+
+export interface TrafficImpactEstimate {
+  method: string;
+  settings: TrafficImpactSettings;
+  traffic_basis: 'modeled_topology' | 'measured_volume' | 'mixed';
+  total_displaced_peak_vph: number;
+  added_boundary_vehicle_km_peak: Record<string, number>;
+  interior_vehicle_km_removed_peak: number;
+  maximum_percent_increase_central: number;
+  roads_over_threshold: number;
+  roads_over_capacity_central: number;
+  minor_roads_loaded: number;
+  boundary_roads: BoundaryRoadImpact[];
+  superblocks: SuperblockTrafficImpact[];
+  limitations: string[];
+}
+
 export interface OperationalValidationSummary {
   validated: boolean;
   all_hard_constraints_passed: boolean;
@@ -394,6 +505,10 @@ export interface CityPartition {
   operational_validation: OperationalValidationSummary;
   active_mode_validation: ActiveModeValidationSummary;
   assignment_comparison: AssignmentComparison;
+  traffic_impact?: TrafficImpactEstimate | null;
+  filter_design?: FilterDesignSummary;
+  emergency_access?: EmergencyAccessSummary;
+  public_space?: PublicSpaceSummary | null;
   evidence: AnalysisEvidence;
   readiness: PlanReadiness;
   total_area_hectares: number;
@@ -412,7 +527,7 @@ export interface CityPartition {
 }
 
 export interface PartitionProgress {
-  stage: 'network' | 'arterials' | 'cells' | 'constraints' | 'validation' | 'complete';
+  stage: 'network' | 'arterials' | 'cells' | 'constraints' | 'impact' | 'validation' | 'complete';
   percent: number;
   message: string;
   current_superblock?: number;

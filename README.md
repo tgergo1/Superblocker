@@ -35,6 +35,19 @@ Point signs are hidden at city scale and appear from street-level zoom to avoid 
 
 ![Budapest street-level actions](docs/screenshots/budapest-street-actions.png)
 
+## Where does the traffic go?
+
+Every plan now comes with a traffic impact screening that needs no OD matrix. For each superblock, Superblocker routes every pair of entry points on different sides twice on the local network (interior plus boundary ring): once on today's streets and once with the plan's filters, one-way changes and cuts. A baseline route that cuts through the interior is a through trip, and its planned route shows where that trip goes instead.
+
+- Interior volumes come from imported counts when present, otherwise from per-class peak-hour defaults for European urban streets.
+- Half of the interior traffic on cut-through streets is treated as through traffic by default (`traffic_impact_settings.through_traffic_share`).
+- Three evaporation scenarios bracket the evidence: none (every trip reroutes), central (15%), and London-like (40%), after the London low-traffic-neighbourhood studies that saw interior traffic fall 47% with boundary roads rising under 1%.
+- The result lists added peak-hour vehicles, percent increase and volume/capacity per boundary road, the interior traffic cut and mean detour per superblock, and warns when minor streets end up carrying diverted traffic.
+
+In the app, the **Where does the traffic go?** panel switches scenarios, ranks the most affected main roads, and colors the map by predicted increase.
+
+![Budapest traffic impact](docs/screenshots/budapest-traffic-impact.png)
+
 ## Budapest verification run
 
 Observed in the local app on 2026-08-31 with the default 12 ha target, 6 ha minimum, 20 ha maximum, four entry sectors, the exact Nominatim administrative polygon, and no external traffic/access evidence:

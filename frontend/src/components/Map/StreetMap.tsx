@@ -6,8 +6,9 @@ import { GeoJsonLayer, PolygonLayer, ScatterplotLayer, PathLayer, TextLayer } fr
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import type { LayersList } from '@deck.gl/core';
 import type { Feature, Geometry, LineString, MultiPolygon, Polygon } from 'geojson';
-import type { ViewState, StreetNetworkResponse, RoadProperties, EnforcedSuperblock, CityPartition, RouteResult } from '../../types';
+import type { ViewState, StreetNetworkResponse, RoadProperties, EnforcedSuperblock, CityPartition, RouteResult, BoundaryRoadImpact } from '../../types';
 import type { SuperblockCandidate } from '../../services/api';
+import { IMPACT_BANDS, impactColor, impactPercent } from '../../utils/impact';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './StreetMap.css';
 
@@ -65,7 +66,7 @@ const ROAD_COLORS: Record<number, [number, number, number, number]> = {
 
 const DEFAULT_ROAD_COLOR: [number, number, number, number] = [128, 128, 128, 200];
 
-type PlanActionType = 'modal_filter' | 'one_way' | 'two_way' | 'turn_restriction' | 'full_closure';
+type PlanActionType = 'modal_filter' | 'bus_gate' | 'one_way' | 'two_way' | 'turn_restriction' | 'full_closure';
 
 interface PlanMarkerDatum {
   position: [number, number];
@@ -94,6 +95,14 @@ const PLAN_ACTION_STYLES: Record<PlanActionType, {
     text: [255, 255, 255, 255],
     symbol: 'X',
     title: 'Modal filter',
+  },
+  bus_gate: {
+    line: [4, 120, 87, 255],
+    markerFill: [4, 120, 87, 255],
+    markerLine: [255, 255, 255, 255],
+    text: [255, 255, 255, 255],
+    symbol: 'B',
+    title: 'Bus gate',
   },
   one_way: {
     line: [37, 99, 235, 255],
@@ -173,6 +182,8 @@ const SUPERBLOCK_COLORS: [number, number, number, number][] = [
   [59, 130, 246, 255],   // Blue
 ];
 
+const MUTED_ROAD_COLOR: [number, number, number, number] = [148, 163, 184, 120];
+
 // Route colors
 const ROUTE_ARTERIAL_COLOR: [number, number, number, number] = [59, 130, 246, 255]; // Blue
 const ROUTE_INTERIOR_COLOR: [number, number, number, number] = [34, 197, 94, 255]; // Green
@@ -190,7 +201,8 @@ interface StreetMapProps {
   showSuperblocks?: boolean;
   initialViewState?: ViewState;
   onViewStateChange?: (viewState: ViewState) => void;
-  colorBy?: 'hierarchy' | 'traffic' | 'interventions';
+  colorBy?: 'hierarchy' | 'traffic' | 'interventions' | 'impact';
+  impactScenario?: string;
   onSuperblockClick?: (superblock: SuperblockCandidate) => void;
   // New partitioning system props
   partition?: CityPartition | null;
@@ -215,6 +227,7 @@ export function StreetMap({
   initialViewState,
   onViewStateChange,
   colorBy = 'hierarchy',
+  impactScenario = 'central',
   onSuperblockClick,
   partition,
   showPartition = false,
@@ -271,7 +284,7 @@ export function StreetMap({
     partition.superblocks.forEach(sb => {
       sb.modifications.forEach(mod => {
         const display = {
-          type: mod.modification_type,
+          type: mod.filter_type === 'bus_gate' ? 'bus_gate' : mod.modification_type,
           direction: mod.direction
         };
         if (mod.modification_type !== 'one_way' || mod.direction === 'u_to_v') {
@@ -284,6 +297,23 @@ export function StreetMap({
     });
     return map;
   }, [showModalFilters, showPartition, partition]);
+
+  const impactByOsmId = useMemo(() => {
+    const map = new Map<number, BoundaryRoadImpact>();
+    if (colorBy !== 'impact' || !partition?.traffic_impact) return map;
+    partition.traffic_impact.boundary_roads.forEach(road => map.set(road.osm_id, road));
+    return map;
+  }, [colorBy, partition]);
+
+  const getRoadImpact = useCallback((props: RoadProperties | null | undefined) => {
+    if (!props || impactByOsmId.size === 0) return undefined;
+    const osmids = Array.isArray(props.osmid) ? props.osmid : [props.osmid];
+    for (const osmid of osmids) {
+      const road = impactByOsmId.get(osmid);
+      if (road) return road;
+    }
+    return undefined;
+  }, [impactByOsmId]);
 
   const getStreetModification = useCallback((props: RoadProperties | null | undefined) => {
     if (!props) return undefined;
@@ -301,6 +331,11 @@ export function StreetMap({
     (d: Feature<Geometry, RoadProperties>): [number, number, number, number] => {
       const props = d.properties;
       if (!props) return DEFAULT_ROAD_COLOR;
+
+      if (colorBy === 'impact') {
+        const road = getRoadImpact(props);
+        return road ? impactColor(impactPercent(road, impactScenario)) : MUTED_ROAD_COLOR;
+      }
 
       if (colorBy === 'traffic') {
         const intensity = props.traffic_intensity ?? 0;
@@ -344,13 +379,20 @@ export function StreetMap({
       const hierarchy = props.hierarchy ?? 99;
       return ROAD_COLORS[hierarchy] ?? DEFAULT_ROAD_COLOR;
     },
-    [colorBy, selectedSuperblock, showPartition, modifiedStreets, getStreetModification]
+    [colorBy, selectedSuperblock, showPartition, modifiedStreets, getStreetModification, getRoadImpact, impactScenario]
   );
 
   const getLineWidth = useCallback((d: Feature<Geometry, RoadProperties>): number => {
     const hierarchy = d.properties?.hierarchy ?? 8;
-    return ROAD_WIDTHS[hierarchy] ?? 1.5;
-  }, []);
+    const base = ROAD_WIDTHS[hierarchy] ?? 1.5;
+    if (colorBy === 'impact') {
+      const road = getRoadImpact(d.properties);
+      if (!road) return Math.min(base, 1.5);
+      const added = road.added_peak_vph[impactScenario] ?? 0;
+      return base + Math.min(6, Math.sqrt(added) / 4);
+    }
+    return base;
+  }, [colorBy, getRoadImpact, impactScenario]);
 
   const layers = useMemo(() => {
     const result: LayersList = [];
@@ -480,12 +522,13 @@ export function StreetMap({
             setHoveredFeature(info.object as Feature<LineString, RoadProperties> | null);
           },
           updateTriggers: {
-            getLineColor: [colorBy, selectedSuperblock?.id, showPartition, partition?.total_superblocks],
+            getLineColor: [colorBy, impactScenario, selectedSuperblock?.id, showPartition, partition?.total_superblocks],
+            getLineWidth: [colorBy, impactScenario, partition?.total_superblocks],
           },
         })
       );
 
-      if (showPartition && partition?.arterial_network.length) {
+      if (showPartition && colorBy !== 'impact' && partition?.arterial_network.length) {
         const boundaryRoadIds = new Set(partition.arterial_network);
         const boundaryFeatures = streetNetwork.features.filter((feature) => {
           const osmids = Array.isArray(feature.properties.osmid)
@@ -610,6 +653,31 @@ export function StreetMap({
       }
     }
 
+    // Candidate plazas: junctions whose every leg is a calmed interior street.
+    if (showPartition && partition?.public_space && showDetailedPlanSigns && colorBy !== 'impact') {
+      const plazas = partition.public_space.superblocks.flatMap(item =>
+        item.plaza_candidates.map(point => ({ position: [point.lon, point.lat] as [number, number] })),
+      );
+      if (plazas.length > 0) {
+        result.push(
+          new ScatterplotLayer<{ position: [number, number] }>({
+            id: 'plaza-candidates',
+            data: plazas,
+            pickable: false,
+            stroked: true,
+            filled: true,
+            radiusUnits: 'meters',
+            getRadius: 14,
+            radiusMinPixels: 5,
+            getPosition: d => d.position,
+            getFillColor: [34, 197, 94, 120],
+            getLineColor: [21, 128, 61, 230],
+            lineWidthMinPixels: 1.5,
+          }),
+        );
+      }
+    }
+
     // Entry points layer - simple markers at superblock entries
     if (showPartition && showEntryPoints && partition && showDetailedPlanSigns) {
       const entryPointData = partition.superblocks.flatMap((sb, sbIndex) =>
@@ -731,7 +799,7 @@ export function StreetMap({
     }
 
     return result;
-  }, [analysisBoundary, streetNetwork, superblocks, showSuperblocks, colorBy, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute, modifiedStreets, getStreetModification, showDetailedPlanSigns, boundaryRoadWidth]);
+  }, [analysisBoundary, streetNetwork, superblocks, showSuperblocks, colorBy, impactScenario, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute, modifiedStreets, getStreetModification, showDetailedPlanSigns, boundaryRoadWidth]);
 
   // Store overlay reference
   const overlayRef = useRef<MapboxOverlay | null>(null);
@@ -865,6 +933,27 @@ export function StreetMap({
             <span>{hoveredFeature.properties?.is_real_data ? 'Measured volume:' : 'Modeled volume:'}</span>
             <span>{hoveredFeature.properties?.estimated_volume} veh/h</span>
           </div>
+          {(() => {
+            const road = getRoadImpact(hoveredFeature.properties);
+            if (!road) return null;
+            const added = road.added_peak_vph[impactScenario] ?? 0;
+            return (
+              <>
+                <div className="tooltip-row">
+                  <span>Peak hour today:</span>
+                  <span>{Math.round(road.baseline_peak_vph)} veh/h</span>
+                </div>
+                <div className="tooltip-row">
+                  <span>Diverted traffic:</span>
+                  <span>+{Math.round(added)} veh/h ({impactPercent(road, impactScenario).toFixed(0)}%)</span>
+                </div>
+                <div className="tooltip-row">
+                  <span>Load after plan:</span>
+                  <span>{Math.round(((road.baseline_peak_vph + added) / road.capacity_vph) * 100)}% of capacity</span>
+                </div>
+              </>
+            );
+          })()}
         </div>
       )}
 
@@ -1106,6 +1195,19 @@ export function StreetMap({
           </div>
         )}
 
+        {streetNetwork && colorBy === 'impact' && partition?.traffic_impact && (
+          <div className="map-legend impact-legend">
+            <div className="legend-title">Predicted peak-hour increase</div>
+            {IMPACT_BANDS.map(band => (
+              <div key={band.label} className="legend-item">
+                <span className="legend-color" style={{ background: `rgb(${band.color[0]}, ${band.color[1]}, ${band.color[2]})` }} />
+                <span className="legend-label">{band.label}</span>
+              </div>
+            ))}
+            <div className="legend-note">Line width grows with diverted vehicles per hour.</div>
+          </div>
+        )}
+
         {streetNetwork && colorBy === 'traffic' && (
           <div className="map-legend traffic-legend">
             <div className="legend-title">Traffic Intensity</div>
@@ -1119,7 +1221,7 @@ export function StreetMap({
           </div>
         )}
 
-        {showPartition && partition && (
+        {showPartition && partition && colorBy !== 'impact' && (
           <div className="map-legend partition-legend">
             <button
               type="button"
@@ -1163,6 +1265,14 @@ export function StreetMap({
                   <div className="legend-item">
                     <span className="plan-sign modal-filter">X</span>
                     <span className="legend-label">Modal filter · cars blocked</span>
+                  </div>
+                  <div className="legend-item">
+                    <span className="plan-area-status valid" />
+                    <span className="legend-label">Candidate plaza · all legs calmed</span>
+                  </div>
+                  <div className="legend-item">
+                    <span className="plan-sign bus-gate">B</span>
+                    <span className="legend-label">Bus gate · buses and emergency pass</span>
                   </div>
                   <div className="legend-item">
                     <span className="plan-sign one-way">&gt;</span>

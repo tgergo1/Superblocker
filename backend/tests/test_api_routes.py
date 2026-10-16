@@ -165,6 +165,10 @@ def test_partition_regular_stream_and_route_with_supplied_partition(client, monk
         progress_queue,
         _cancel_event,
         _traffic_impact_settings=None,
+        _osm_context=None,
+        _fetch_context=False,
+        _filter_design_settings=None,
+        _public_space_settings=None,
     ):
         progress_queue.put(
             {

@@ -4,6 +4,7 @@ import { SearchBox } from './components/Search';
 import { PartitionControls } from './components/Controls/PartitionControls';
 import { RouteValidator } from './components/Routing/RouteValidator';
 import { PlanningWorkbench } from './components/Planning/PlanningWorkbench';
+import { TrafficImpactPanel } from './components/Impact/TrafficImpactPanel';
 import { useSearch } from './hooks/useSearch';
 import { usePartition } from './hooks/usePartition';
 import type {
@@ -28,6 +29,11 @@ function viewStateForBounds(bounds: BoundingBox): ViewState {
   };
 }
 
+function formatSeconds(seconds: number): string {
+  const total = Math.round(seconds);
+  return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`;
+}
+
 function App() {
   const {
     searchResults,
@@ -49,6 +55,8 @@ function App() {
   const [showEntryPoints, setShowEntryPoints] = useState(true);
   const [showModalFilters, setShowModalFilters] = useState(true);
   const [selectedEnforcedSuperblock, setSelectedEnforcedSuperblock] = useState<EnforcedSuperblock | null>(null);
+  const [showImpact, setShowImpact] = useState(false);
+  const [impactScenario, setImpactScenario] = useState('central');
 
   // Route state
   const [route, setRoute] = useState<RouteResult | null>(null);
@@ -79,6 +87,16 @@ function App() {
   } = usePartition(bbox, selectedPlace?.boundary ?? null);
 
   const activeStreetNetwork = partitionData?.street_network ?? null;
+  const trafficImpact = partition?.traffic_impact ?? null;
+  const selectedEmergency = selectedEnforcedSuperblock
+    ? partition?.emergency_access?.results.find(item => item.superblock_id === selectedEnforcedSuperblock.id) ?? null
+    : null;
+  const selectedSpace = selectedEnforcedSuperblock
+    ? partition?.public_space?.superblocks.find(item => item.superblock_id === selectedEnforcedSuperblock.id) ?? null
+    : null;
+  const selectedImpact = selectedEnforcedSuperblock && trafficImpact
+    ? trafficImpact.superblocks.find(item => item.superblock_id === selectedEnforcedSuperblock.id) ?? null
+    : null;
 
   const handlePlaceSelect = useCallback((place: SearchResult) => {
     resetPartition();
@@ -132,11 +150,12 @@ function App() {
           streetNetwork={activeStreetNetwork}
           initialViewState={viewState}
           onViewStateChange={setViewState}
-          colorBy="hierarchy"
+          colorBy={showImpact && trafficImpact ? 'impact' : 'hierarchy'}
+          impactScenario={impactScenario}
           partition={partition}
           showPartition={!!partition}
-          showEntryPoints={showEntryPoints}
-          showModalFilters={showModalFilters}
+          showEntryPoints={showEntryPoints && !showImpact}
+          showModalFilters={showModalFilters && !showImpact}
           selectedEnforcedSuperblock={selectedEnforcedSuperblock}
           onEnforcedSuperblockClick={handleEnforcedSuperblockClick}
           // Route props
@@ -197,6 +216,15 @@ function App() {
               planningEvidence={planningEvidence}
               onPlanningEvidenceChange={setPlanningEvidence}
             />
+            {trafficImpact && (
+              <TrafficImpactPanel
+                impact={trafficImpact}
+                showOnMap={showImpact}
+                onShowOnMapChange={setShowImpact}
+                scenario={impactScenario}
+                onScenarioChange={setImpactScenario}
+              />
+            )}
             {partition && (
               <PlanningWorkbench
                 partition={partition}
@@ -250,6 +278,38 @@ function App() {
               <span>Street Cuts:</span>
               <span>{selectedEnforcedSuperblock.street_cut_count}</span>
             </div>
+            {selectedSpace && (
+              <div className="detail-row">
+                <span>Street space to reclaim:</span>
+                <span>{Math.round(selectedSpace.reclaimable_m2).toLocaleString()} m²</span>
+              </div>
+            )}
+            {selectedEmergency && (
+              <div className="detail-row">
+                <span>Emergency response:</span>
+                <span>
+                  {formatSeconds(selectedEmergency.baseline_seconds)} → {selectedEmergency.planned_seconds === null
+                    ? 'no route'
+                    : formatSeconds(selectedEmergency.planned_seconds)}
+                </span>
+              </div>
+            )}
+            {selectedImpact && (
+              <>
+                <div className="detail-row">
+                  <span>Interior traffic cut:</span>
+                  <span>{selectedImpact.interior_traffic_reduction_percent.toFixed(0)}%</span>
+                </div>
+                <div className="detail-row">
+                  <span>Through traffic moved:</span>
+                  <span>{Math.round(selectedImpact.displaced_peak_vph)} veh/h</span>
+                </div>
+                <div className="detail-row">
+                  <span>Average detour:</span>
+                  <span>{Math.round(selectedImpact.mean_detour_seconds)} s</span>
+                </div>
+              </>
+            )}
 
             {/* Entry Points by direction */}
             <div className="details-section-title">Entry and return directions ({selectedEnforcedSuperblock.entry_points.length})</div>

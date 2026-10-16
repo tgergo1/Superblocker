@@ -41,14 +41,18 @@ from app.models.schemas import (
     Coordinates,
     DataQualityMetrics,
     DemandModel,
+    EmergencyAccessSummary,
     EnforcedSuperblock,
     EntryPoint,
+    FilterDesignSettings,
     ImpactValidationSummary,
     NetworkAuthorityMode,
     OperationalRequirement,
+    OsmContext,
     PartitionProgress,
     PlanReadiness,
     PlanStage,
+    PublicSpaceSettings,
     ReadinessGate,
     StreetModification,
     StudyAreaMode,
@@ -66,10 +70,13 @@ from app.services.assignment.network_assignment import (
 from app.services.constraint.active_mode_validator import ActiveModeValidator
 from app.services.constraint.constraint_enforcer import ConstraintEnforcer
 from app.services.constraint.operational_validator import OperationalValidator
+from app.services.design.filter_design import FilterDesigner
+from app.services.design.public_space import PublicSpaceEstimator
 from app.services.impact.boundary_impact import (
     BoundaryImpactEstimator,
     SuperblockImpactInput,
 )
+from app.services.impact.emergency_access import EmergencyAccessChecker
 from app.services.network.turn_graph import TurnGraphBuilder
 
 logger = logging.getLogger(__name__)
@@ -429,6 +436,9 @@ class CityPartitioner:
         demand_model: DemandModel | None = None,
         assignment_settings: AssignmentSettings | None = None,
         traffic_impact_settings: TrafficImpactSettings | None = None,
+        osm_context: OsmContext | None = None,
+        filter_design_settings: FilterDesignSettings | None = None,
+        public_space_settings: PublicSpaceSettings | None = None,
         progress_callback: Callable[[PartitionProgress], None] | None = None,
     ):
         """
@@ -486,6 +496,11 @@ class CityPartitioner:
         self.assignment_settings = assignment_settings or AssignmentSettings()
         self.traffic_impact_settings = traffic_impact_settings or TrafficImpactSettings()
         self._impact_inputs: list[SuperblockImpactInput] = []
+        self.osm_context = osm_context
+        self.public_space_settings = public_space_settings or PublicSpaceSettings()
+        self.filter_designer = FilterDesigner(
+            graph, osm_context, filter_design_settings or FilterDesignSettings()
+        )
         self.progress_callback = progress_callback
 
         # Convert graph to GeoDataFrames for spatial operations
@@ -1201,6 +1216,9 @@ class CityPartitioner:
         except Exception as e:
             logger.warning(f"Constraint enforcement failed for cell {index}: {e}")
             return self._create_simple_superblock(cell, index, constraint_validated=False)
+        # Design each action for buses and emergency vehicles. Car topology is
+        # unchanged, so the validations below still test the solver's result.
+        modifications = self.filter_designer.design(modifications)
 
         # Build entry points with sector info
         entry_points = []
@@ -1693,6 +1711,25 @@ class CityPartitioner:
             except Exception as error:  # Screening output must not block the plan.
                 logger.warning("Traffic impact estimate failed: %s", error)
 
+        public_space = (
+            PublicSpaceEstimator(self.graph, self.public_space_settings).estimate(
+                self._impact_inputs
+            )
+            if self._impact_inputs
+            else None
+        )
+        emergency_access = EmergencyAccessSummary(
+            limitations=["No OpenStreetMap context layers were loaded."]
+        )
+        if self.osm_context is not None:
+            self._report_progress("impact", 98, "Checking emergency response times...")
+            try:
+                emergency_access = EmergencyAccessChecker(
+                    self.graph, self.osm_context.facilities
+                ).check(self._impact_inputs, all_modifications)
+            except Exception as error:  # Screening output must not block the plan.
+                logger.warning("Emergency access check failed: %s", error)
+
         modeled_directional_validation_passed = bool(self.superblocks) and all(
             sb.modeled_directional_validation_passed for sb in self.superblocks
         )
@@ -1835,6 +1872,10 @@ class CityPartitioner:
             active_mode_validation=active_mode_validation,
             assignment_comparison=assignment_comparison,
             traffic_impact=traffic_impact,
+            filter_design=self.filter_designer.finish(),
+            emergency_access=emergency_access,
+            public_space=public_space,
+            osm_context=self.osm_context,
             evidence=evidence,
             readiness=readiness,
             total_area_hectares=total_area,

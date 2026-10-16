@@ -761,6 +761,10 @@
   background: #dc2626;
 }
 
+.plan-sign.bus-gate {
+  background: #047857;
+}
+
 .plan-sign.one-way {
   border-color: #2563eb;
   background: white;
@@ -979,4 +983,19 @@
   .partition-legend .legend-label {
     font-size: 9px;
   }
+}
+
+.legend-note {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.impact-legend {
+  padding: 10px 12px;
+}
+
+.impact-legend .legend-title {
+  margin-bottom: 6px;
 }

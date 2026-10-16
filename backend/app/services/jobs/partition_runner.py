@@ -102,6 +102,10 @@ class PartitionJobRunner:
                 _ProgressSink(job_id),
                 cancel_event,
                 request.traffic_impact_settings,
+                request.osm_context,
+                request.fetch_osm_context,
+                request.filter_design_settings,
+                request.public_space_settings,
             )
             if cancel_event.is_set():
                 self.store.mark_job_cancelled(job_id, actor_id="partition-worker")

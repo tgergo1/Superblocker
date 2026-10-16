@@ -39,6 +39,7 @@ from app.models.schemas import (
     StreetNetworkResponse,
 )
 from app.services.assurance.approvals import verify_approval_artifact, verify_evidence_artifact
+from app.services.context.osm_context import fetch_osm_context
 from app.services.detection.superblock_analyzer import SuperblockAnalyzer
 from app.services.network.conflation import NetworkConflator
 from app.services.osm_service import (
@@ -520,6 +521,10 @@ def run_partition_sync(
     progress_queue: queue.Queue,
     cancel_event: threading.Event | None = None,
     traffic_impact_settings=None,
+    osm_context=None,
+    fetch_context: bool = False,
+    filter_design_settings=None,
+    public_space_settings=None,
 ):
     """
     Run city partitioning synchronously in a thread.
@@ -594,6 +599,8 @@ def run_partition_sync(
             else:
                 active_mode_graphs["bicycle"] = mode_graph
         traffic_evidence = apply_traffic_observations_to_graph(graph, traffic_observations)
+        if osm_context is None and fetch_context:
+            osm_context = fetch_osm_context(bbox)
 
         # Create partitioner
         partitioner = CityPartitioner(
@@ -620,6 +627,9 @@ def run_partition_sync(
             demand_model=demand_model,
             assignment_settings=assignment_settings,
             traffic_impact_settings=traffic_impact_settings,
+            osm_context=osm_context,
+            filter_design_settings=filter_design_settings,
+            public_space_settings=public_space_settings,
             progress_callback=progress_callback,
         )
 
@@ -707,6 +717,10 @@ async def partition_city(
             progress_queue,
             None,
             request.traffic_impact_settings,
+            request.osm_context,
+            request.fetch_osm_context,
+            request.filter_design_settings,
+            request.public_space_settings,
         )
 
         partition = result["partition"]
@@ -779,6 +793,10 @@ async def partition_city_stream(
             progress_queue,
             cancel_event,
             request.traffic_impact_settings,
+            request.osm_context,
+            request.fetch_osm_context,
+            request.filter_design_settings,
+            request.public_space_settings,
         )
         logger.info("Partition streaming started")
 
