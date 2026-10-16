@@ -620,3 +620,14 @@ def test_repair_reopens_a_filter_that_strands_a_street():
     assert superblock.modal_filter_count == 0
     assert partitioner.reopened_for_access == 1
     assert partitioner.stranded_junctions == 0
+
+
+def test_split_follows_a_street_that_changes_tag_along_its_length():
+    partitioner, cell = _dogleg_cell()
+    # Dob utca turns into a living street halfway along.
+    for u, v in ((2, 3), (3, 4)):
+        partitioner.graph.edges[u, v, 0]["highway"] = "living_street"
+    pieces = partitioner._split_cell(cell)
+    assert len(pieces) == 2
+    for edge in [(0, 1, 0), (1, 2, 0), (2, 3, 0), (3, 4, 0)]:
+        assert edge in partitioner.arterial_edges

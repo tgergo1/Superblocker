@@ -1174,7 +1174,11 @@ class CityPartitioner:
                             for c in self._split_candidates(cell, hierarchies)
                             if (min(c[:2]), max(c[:2]), c[2]) not in rejected
                         ],
-                        self._split_edges(cell, hierarchies),
+                        # A street can change tag along its length (residential
+                        # then living street); its whole length is followed.
+                        self._split_edges(
+                            cell, MINOR_SPLIT_HIERARCHIES | LIVING_STREET_SPLIT_HIERARCHIES
+                        ),
                         min_piece_ha,
                     )
                     quiet_street = best is not None
