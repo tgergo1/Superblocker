@@ -622,6 +622,74 @@ def test_repair_reopens_a_filter_that_strands_a_street():
     assert partitioner.stranded_junctions == 0
 
 
+def test_crossing_from_one_superblock_into_the_next_is_sealed():
+    import networkx as nx
+    from shapely.geometry import box
+
+    from app.models.schemas import EnforcedSuperblock, ModificationType
+    from app.services.partitioning.city_partitioner import SuperblockCell
+
+    graph = nx.MultiDiGraph()
+    for node, x, y in (
+        (1, 0.0, 0.0),
+        (2, 0.002, 0.0),
+        (3, 0.004, 0.0),
+        (4, 0.006, 0.0),
+        (5, 0.008, 0.0),
+        (6, 0.004, 0.004),
+    ):
+        graph.add_node(node, x=x, y=y)
+    streets = (
+        (1, 6, "primary"),
+        (6, 5, "primary"),
+        (1, 2, "residential"),
+        (2, 3, "residential"),
+        (3, 4, "residential"),
+        (4, 5, "residential"),
+    )
+    for u, v, highway in streets:
+        graph.add_edge(u, v, 0, highway=highway, length=200.0)
+        graph.add_edge(v, u, 0, highway=highway, length=200.0)
+    partitioner = CityPartitioner(
+        graph, BoundingBox(north=0.011, south=-0.001, east=0.021, west=-0.001)
+    )
+    partitioner._main_road_edges = {(1, 6, 0), (6, 1, 0), (6, 5, 0), (5, 6, 0)}
+    partitioner._main_road_nodes = {1, 5, 6}
+    # Two superblocks meet at junction 3 on the residential street between them:
+    # a car can enter at 1, cross at 3 and leave at 5.
+    for name, interior in (("west", [(1, 2), (2, 3)]), ("east", [(3, 4), (4, 5)])):
+        partitioner.superblocks.append(
+            EnforcedSuperblock(
+                id=name,
+                geometry={},
+                area_hectares=10.0,
+                num_sectors=4,
+                boundary_roads=[],
+                entry_points=[],
+                modifications=[],
+                constraint_validated=True,
+                interior_roads_count=2,
+                modal_filter_count=0,
+                one_way_conversion_count=0,
+                street_cut_count=0,
+            )
+        )
+        partitioner._superblock_cells[name] = SuperblockCell(
+            polygon=box(0, 0, 0.01, 0.01),
+            area_hectares=10.0,
+            boundary_edges=[],
+            interior_edges=[e for u, v in interior for e in ((u, v, 0), (v, u, 0))],
+            entry_nodes=[],
+        )
+    partitioner._seal_crossings()
+    west, east = partitioner.superblocks
+    assert partitioner.crossings_sealed == 1
+    assert west.modifications == []
+    assert [(m.u, m.v) for m in east.modifications] == [(3, 4)]
+    assert east.modifications[0].modification_type == ModificationType.MODAL_FILTER
+    assert east.modal_filter_count == 1
+
+
 def test_split_follows_a_street_that_changes_tag_along_its_length():
     partitioner, cell = _dogleg_cell()
     # Dob utca turns into a living street halfway along.

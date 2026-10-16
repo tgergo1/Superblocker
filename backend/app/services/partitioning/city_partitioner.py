@@ -13,6 +13,7 @@ The algorithm:
 """
 
 import hashlib
+import itertools
 import json
 import logging
 import math
@@ -143,6 +144,7 @@ STREET_REACH_M = 100.0
 MAX_ACCESS_REPAIR_ROUNDS = 10
 THROUGH_CORRIDOR_HIGHWAYS = frozenset({"motorway", "motorway_link", "trunk", "trunk_link"})
 MAX_REDESIGN_ROUNDS = 3
+MAX_CROSSING_SEALS_PER_ENTRY = 8
 MIN_SECTORS = 2
 # Access changes a repair pass may reopen when they strand streets.
 REPAIRABLE_CHANGES = frozenset(
@@ -604,6 +606,8 @@ class CityPartitioner:
         self.superblocks: list[EnforcedSuperblock] = []
         self._superblock_cells: dict[str, SuperblockCell] = {}
         self._main_road_nodes: set[int] = set()
+        self._main_road_edges: set[tuple[int, int, int]] = set()
+        self.crossings_sealed = 0
         self._live_nodes: set[int] | None = None
         self.reopened_for_access = 0
         # Interior streets reopened for access; a redesign must not cut them.
@@ -629,6 +633,7 @@ class CityPartitioner:
         # Step 2: Identify arterial network
         self._report_progress("arterials", 25, "Identifying arterial roads...")
         self._identify_arterials()
+        self._main_road_edges = set(self.arterial_edges)
         self._main_road_nodes = {node for edge in self.arterial_edges for node in edge[:2]}
         self._report_progress("arterials", 40, f"Found {len(self.arterial_edges)} arterial edges")
 
@@ -659,6 +664,7 @@ class CityPartitioner:
                     break
         finally:
             self.num_sectors = sectors
+        self._seal_crossings()
         self._report_progress("constraints", 95, f"Created {len(self.superblocks)} superblocks")
 
         # Step 6: Compute statistics
@@ -1924,6 +1930,158 @@ class CityPartitioner:
         if redesigned_any:
             self._repair_access()
         return redesigned_any
+
+    def _seal_crossings(self) -> None:
+        """Close routes that cross from one superblock straight into the next.
+
+        Each superblock keeps traffic between its own entries local, but where
+        a street of one meets a street of its neighbour at a junction on the
+        residential street between them, a car can drive in from one main
+        road, cross, and leave on another main road through the neighbour.
+        Neither superblock's own check sees that route. For each such route a
+        filter goes on the first street of the second superblock, or failing
+        that the last street of the first, provided it leaves every junction
+        reachable by car.
+        """
+        if not self.superblocks:
+            return
+        changes = [item for sb in self.superblocks for item in sb.modifications]
+        planned = TurnGraphBuilder(self.graph)._prepare_graph(VehicleClass.CAR, changes)
+        core = max(nx.strongly_connected_components(planned), key=len)
+        owner: dict[tuple[int, int], EnforcedSuperblock] = {}
+        for superblock in self.superblocks:
+            for u, v, _key in self._superblock_cells[superblock.id].interior_edges:
+                owner[(u, v)] = superblock
+        main = self._main_road_nodes
+        on_main = {
+            (u, v)
+            for u, v, _key in self._main_road_edges
+            if (min(u, v), max(u, v)) not in self._quiet_split_streets
+        }
+        entries: dict[str, set[int]] = defaultdict(set)
+        for (u, v), superblock in owner.items():
+            for node in (u, v):
+                if node in main:
+                    entries[superblock.id].add(node)
+
+        def minor_successors(node: int):
+            for nxt in planned.successors(node):
+                if (node, nxt) not in on_main:
+                    yield nxt
+
+        def still_connected(u: int, v: int) -> bool:
+            removed = [
+                (a, b, key, data)
+                for a, b in ((u, v), (v, u))
+                if planned.has_edge(a, b)
+                for key, data in list(planned[a][b].items())
+            ]
+            for a, b, key, _data in removed:
+                planned.remove_edge(a, b, key)
+            # The street stays strongly connected exactly when its two ends can
+            # still reach each other both ways without it.
+            ok = not (u in core and v in core) or (
+                nx.has_path(planned, u, v) and nx.has_path(planned, v, u)
+            )
+            if not ok:
+                for a, b, key, data in removed:
+                    planned.add_edge(a, b, key=key, **data)
+            return ok
+
+        def leak_from(start: int, home: str) -> list[int] | None:
+            parent = {start: None}
+            queue = deque([start])
+            while queue:
+                node = queue.popleft()
+                for nxt in minor_successors(node):
+                    if nxt in parent:
+                        continue
+                    parent[nxt] = node
+                    if nxt in main:
+                        other = owner.get((node, nxt))
+                        if (
+                            other is not None
+                            and other.id != home
+                            and nxt not in entries[home]
+                            and nxt in entries[other.id]
+                        ):
+                            path = [nxt]
+                            while parent[path[-1]] is not None:
+                                path.append(parent[path[-1]])
+                            return path[::-1]
+                        continue
+                    queue.append(nxt)
+            return None
+
+        sealed = 0
+        for superblock in list(self.superblocks):
+            for start in sorted(entries[superblock.id]):
+                for _attempt in range(MAX_CROSSING_SEALS_PER_ENTRY):
+                    path = leak_from(start, superblock.id)
+                    if path is None:
+                        break
+                    steps = list(itertools.pairwise(path))
+                    crossing = next(
+                        i
+                        for i, step in enumerate(steps)
+                        if owner.get(step) is not None and owner[step].id != superblock.id
+                    )
+                    candidates = [steps[crossing]]
+                    if crossing > 0:
+                        candidates.append(steps[crossing - 1])
+                    for u, v in candidates:
+                        target = owner.get((u, v))
+                        if target is None or not still_connected(u, v):
+                            continue
+                        target.modifications.append(self._crossing_filter(u, v))
+                        target.modal_filter_count += 1
+                        sealed += 1
+                        break
+                    else:
+                        break
+        self.crossings_sealed = sealed
+        if sealed:
+            by_id = {sb.id: sb for sb in self.superblocks}
+            for impact_input in self._impact_inputs:
+                superblock = by_id.get(impact_input.superblock_id)
+                if superblock is None:
+                    continue
+                known = {id(item) for item in impact_input.modifications}
+                impact_input.modifications.extend(
+                    item for item in superblock.modifications if id(item) not in known
+                )
+
+    def _crossing_filter(self, u: int, v: int) -> StreetModification:
+        key, data = min(
+            self.graph[u][v].items(), key=lambda item: float(item[1].get("length", 0) or 0)
+        )
+        nodes = [self.graph.nodes.get(node, {}) for node in (u, v)]
+        ids = self._normalize_osm_ids(data.get("osmid"))
+        name = data.get("name")
+        return self.filter_designer.design(
+            [
+                StreetModification(
+                    u=u,
+                    v=v,
+                    key=key,
+                    osm_id=ids[0] if ids else 0,
+                    name=str(name[0] if isinstance(name, list) else name) if name else None,
+                    modification_type=ModificationType.MODAL_FILTER,
+                    filter_location=Coordinates(
+                        lat=sum(node.get("y", 0) for node in nodes) / 2,
+                        lon=sum(node.get("x", 0) for node in nodes) / 2,
+                    ),
+                    allowed_modes=[TransportMode.WALK, TransportMode.WHEEL, TransportMode.BICYCLE],
+                    construction_treatment=(
+                        "Accessible pass-through modal filter; exact geometry requires survey"
+                    ),
+                    rationale=(
+                        "Modal filter where this superblock meets its neighbour across a "
+                        "residential street, so traffic cannot cross from one into the other"
+                    ),
+                )
+            ]
+        )[0]
 
     def _revalidate(self, superblock: EnforcedSuperblock) -> None:
         """Validate a superblock again after access changes were reopened."""
