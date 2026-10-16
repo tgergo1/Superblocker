@@ -135,6 +135,11 @@ MINOR_SPLIT_HIERARCHIES = frozenset({6, 8})  # residential, unclassified
 # Housing estates (lakótelepek) are often served only by living streets. A cell
 # that no residential street divides may split along one as a last resort.
 LIVING_STREET_SPLIT_HIERARCHIES = frozenset({7})
+# A cell over the maximum where most land lies beyond this many metres of any
+# street is open land with a road through it (forest, rail, an airfield), not
+# an oversized superblock: splitting it would only divide fields and forest.
+STREET_REACH_M = 100.0
+OPEN_LAND_STREET_SHARE = 0.5
 
 # Road hierarchy for boundary suitability
 MINOR_ROAD_CLASSES = frozenset(
@@ -1634,7 +1639,11 @@ class CityPartitioner:
                 self.non_street_cells += 1
             if superblock is not None:
                 superblock.cell_kind = self._cell_kind(cell)
-                superblock.size_status = self._size_status(cell.area_hectares)
+                if cell.area_hectares > self.max_area_ha:
+                    superblock.street_area_hectares = round(self._street_area_hectares(cell), 2)
+                superblock.size_status = self._size_status(
+                    cell.area_hectares, superblock.street_area_hectares
+                )
                 self.superblocks.append(superblock)
                 # Both neighbours see the filter on a shared split street; one owns it.
                 shared = [
@@ -1674,8 +1683,30 @@ class CityPartitioner:
                 return CellKind.SUPERBLOCK
         return CellKind.NATURALLY_CALM
 
-    def _size_status(self, area_hectares: float) -> SizeStatus:
+    def _street_area_hectares(self, cell: SuperblockCell) -> float:
+        """Land in ``cell`` within STREET_REACH_M of a street inside or around it."""
+        lines = [
+            self._edge_line(u, v, key) for u, v, key in [*cell.interior_edges, *cell.boundary_edges]
+        ]
+        lines = [line for line in lines if line is not None]
+        if not lines:
+            return 0.0
+        self._calculate_area_hectares(cell.polygon)  # sets up the projection
+        project = self._area_transformer
+        if project is None:
+            return cell.area_hectares
+        reach = unary_union([transform(project, line) for line in lines]).buffer(STREET_REACH_M)
+        return reach.intersection(transform(project, cell.polygon)).area / 10000
+
+    def _size_status(
+        self, area_hectares: float, street_area_hectares: float | None = None
+    ) -> SizeStatus:
         if area_hectares > self.max_area_ha:
+            if (
+                street_area_hectares is not None
+                and street_area_hectares < OPEN_LAND_STREET_SHARE * area_hectares
+            ):
+                return SizeStatus.MOSTLY_OPEN_LAND
             return SizeStatus.OVER_MAXIMUM
         if area_hectares < self.min_area_ha:
             return SizeStatus.UNDER_MINIMUM

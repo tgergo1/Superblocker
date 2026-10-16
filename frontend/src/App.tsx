@@ -294,6 +294,8 @@ function App() {
                 {selectedEnforcedSuperblock.area_hectares.toFixed(1)} ha
                 {selectedEnforcedSuperblock.size_status === 'over_maximum' && ' (over the size limit)'}
                 {selectedEnforcedSuperblock.size_status === 'under_minimum' && ' (under the minimum size)'}
+                {selectedEnforcedSuperblock.size_status === 'mostly_open_land' &&
+                  ` (mostly open land; streets reach ${(selectedEnforcedSuperblock.street_area_hectares ?? 0).toFixed(0)} ha)`}
               </span>
             </div>
             {selectedEnforcedSuperblock.cell_kind && selectedEnforcedSuperblock.cell_kind !== 'superblock' && (
