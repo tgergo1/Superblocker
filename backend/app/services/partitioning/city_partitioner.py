@@ -132,6 +132,9 @@ SPLIT_SHAPE_WEIGHT = 2.0
 OVERSIZED_CELL_FACTOR = 5.0
 MAIN_ROAD_SPLIT_HIERARCHY = 5
 MINOR_SPLIT_HIERARCHIES = frozenset({6, 8})  # residential, unclassified
+# Housing estates (lakótelepek) are often served only by living streets. A cell
+# that no residential street divides may split along one as a last resort.
+LIVING_STREET_SPLIT_HIERARCHIES = frozenset({7})
 
 # Road hierarchy for boundary suitability
 MINOR_ROAD_CLASSES = frozenset(
@@ -1144,15 +1147,17 @@ class CityPartitioner:
                     self._split_edges(cell),
                     min_piece_ha,
                 )
-                if best is None and may_use_minor:
+                for hierarchies in (MINOR_SPLIT_HIERARCHIES, LIVING_STREET_SPLIT_HIERARCHIES):
+                    if best is not None or not may_use_minor:
+                        break
                     best = self._best_split(
                         cell,
                         [
                             c
-                            for c in self._split_candidates(cell, MINOR_SPLIT_HIERARCHIES)
+                            for c in self._split_candidates(cell, hierarchies)
                             if (min(c[:2]), max(c[:2]), c[2]) not in rejected
                         ],
-                        self._split_edges(cell, MINOR_SPLIT_HIERARCHIES),
+                        self._split_edges(cell, hierarchies),
                         min_piece_ha,
                     )
                     quiet_street = best is not None
