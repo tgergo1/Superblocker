@@ -1,5 +1,6 @@
 """Authenticated import APIs for authoritative planning evidence."""
 
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -7,6 +8,7 @@ from pydantic import ValidationError
 
 from app.core.auth import require_admin_key
 from app.core.config import get_settings
+from app.models.schemas import BoundingBox
 from app.services.importers.evidence import (
     import_access_targets,
     import_authoritative_roads,
@@ -14,6 +16,12 @@ from app.services.importers.evidence import (
     import_gtfs_operational_requirements,
     import_traffic_observations,
 )
+from app.services.importers.telraam import (
+    import_telraam_observations,
+    match_segments_to_osm,
+    read_segment_mapping,
+)
+from app.services.osm_service import get_street_network_graph
 
 router = APIRouter(prefix="/evidence/import")
 settings = get_settings()
@@ -133,6 +141,44 @@ async def import_gtfs(
                 source=source,
                 maximum_detour_percent=maximum_detour_percent,
             )
+        }
+    except (KeyError, TypeError, ValueError, ValidationError) as exc:
+        raise _invalid_evidence(exc) from exc
+
+
+@router.post("/telraam")
+async def import_telraam(
+    report: Annotated[UploadFile, File()],
+    _actor_id: AdminActor,
+    segment_mapping: Annotated[UploadFile | None, File()] = None,
+    segments_geojson: Annotated[UploadFile | None, File()] = None,
+    north: Annotated[float | None, Form()] = None,
+    south: Annotated[float | None, Form()] = None,
+    east: Annotated[float | None, Form()] = None,
+    west: Annotated[float | None, Form()] = None,
+    min_uptime: Annotated[float, Form(ge=0, le=1)] = 0.5,
+):
+    """Convert a Telraam hourly report to peak-hour traffic observations.
+
+    Segments are tied to OSM ways by a ``segment_id,osm_id`` CSV, or matched to
+    the street network in the given bounding box from the segments GeoJSON.
+    """
+    try:
+        report_json = json.loads(await _read_upload(report))
+        if segment_mapping is not None:
+            mapping = read_segment_mapping(await _read_upload(segment_mapping))
+        elif segments_geojson is not None and None not in (north, south, east, west):
+            graph = await get_street_network_graph(
+                BoundingBox(north=north, south=south, east=east, west=west)
+            )
+            mapping = match_segments_to_osm(await _read_upload(segments_geojson), graph)
+        else:
+            raise ValueError("send segment_mapping, or segments_geojson with a bounding box")
+        observations = import_telraam_observations(report_json, mapping, min_uptime)
+        return {
+            "traffic_observations": observations,
+            "matched_segments": len(mapping),
+            "attribution": "Traffic counts: Telraam, CC BY 4.0",
         }
     except (KeyError, TypeError, ValueError, ValidationError) as exc:
         raise _invalid_evidence(exc) from exc

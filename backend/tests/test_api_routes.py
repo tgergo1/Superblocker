@@ -662,3 +662,88 @@ def test_evidence_import_api_rejects_invalid_road_inventory(client, monkeypatch)
 
     assert response.status_code == 422
     assert response.json()["detail"].startswith("Invalid evidence input:")
+
+
+def test_telraam_import_api_uses_segment_mapping(client, monkeypatch):
+    monkeypatch.setattr(cache.settings, "admin_api_key", "test-secret")
+    report = {
+        "report": [
+            {
+                "segment_id": 1,
+                "date": "2026-10-13T07:00:00Z",
+                "interval": "hourly",
+                "uptime": 1.0,
+                "car": 250,
+                "heavy": 10,
+            }
+        ]
+    }
+    files = {
+        "report": ("report.json", json.dumps(report), "application/json"),
+        "segment_mapping": ("map.csv", "segment_id,osm_id\n1,42\n", "text/csv"),
+    }
+
+    assert client.post("/api/v1/evidence/import/telraam", files=files).status_code == 403
+    response = client.post(
+        "/api/v1/evidence/import/telraam", files=files, headers={"X-Admin-Key": "test-secret"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["traffic_observations"][0]["osm_id"] == 42
+    assert body["traffic_observations"][0]["volume_vph"] == 260
+    assert "CC BY 4.0" in body["attribution"]
+
+
+def test_telraam_import_api_needs_a_way_to_match_segments(client, monkeypatch):
+    monkeypatch.setattr(cache.settings, "admin_api_key", "test-secret")
+    response = client.post(
+        "/api/v1/evidence/import/telraam",
+        files={"report": ("report.json", '{"report": []}', "application/json")},
+        headers={"X-Admin-Key": "test-secret"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_telraam_import_api_matches_segments_to_the_street_network(client, monkeypatch):
+    from app.api.routes import evidence
+
+    monkeypatch.setattr(cache.settings, "admin_api_key", "test-secret")
+    graph = nx.MultiDiGraph()
+    graph.add_node(1, x=19.05, y=47.50)
+    graph.add_node(2, x=19.052, y=47.50)
+    graph.add_edge(1, 2, 0, osmid=77)
+
+    async def fake_graph(_bbox):
+        return graph
+
+    monkeypatch.setattr(evidence, "get_street_network_graph", fake_graph)
+    report = {
+        "report": [{"segment_id": 5, "date": "2026-10-13T07:00:00Z", "uptime": 1.0, "car": 100}]
+    }
+    segments = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"segment_id": 5},
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [[19.0505, 47.50002], [19.0515, 47.50002]],
+                },
+            }
+        ],
+    }
+    response = client.post(
+        "/api/v1/evidence/import/telraam",
+        data={"north": 47.51, "south": 47.49, "east": 19.06, "west": 19.04},
+        files={
+            "report": ("report.json", json.dumps(report), "application/json"),
+            "segments_geojson": ("s.geojson", json.dumps(segments), "application/geo+json"),
+        },
+        headers={"X-Admin-Key": "test-secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["traffic_observations"][0]["osm_id"] == 77
