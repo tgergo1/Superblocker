@@ -781,6 +781,32 @@ class FilterDesignSummary(BaseModel):
     limitations: list[str] = Field(default_factory=list)
 
 
+class EmergencyAccessResult(BaseModel):
+    """Worst-case response time into one superblock."""
+
+    superblock_id: str
+    nearest_station: str | None = None
+    baseline_seconds: float = Field(ge=0)
+    planned_seconds: float | None = Field(default=None, ge=0)
+    planned_without_exemption_seconds: float | None = Field(default=None, ge=0)
+
+
+class EmergencyAccessSummary(BaseModel):
+    """Fire and ambulance response before and after the plan."""
+
+    checked: bool = False
+    stations_used: int = Field(default=0, ge=0)
+    superblocks_checked: int = Field(default=0, ge=0)
+    median_added_seconds: float = 0.0
+    maximum_added_seconds: float = 0.0
+    threshold_seconds: float = Field(default=60.0, ge=0)
+    superblocks_over_threshold: int = Field(default=0, ge=0)
+    superblocks_over_threshold_without_exemption: int = Field(default=0, ge=0)
+    unreachable_superblocks: int = Field(default=0, ge=0)
+    results: list[EmergencyAccessResult] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
 class EvaporationScenario(BaseModel):
     """Share of displaced through traffic assumed to disappear rather than reroute."""
 
@@ -1345,6 +1371,7 @@ class CityPartition(BaseModel):
     assignment_comparison: AssignmentComparison = Field(default_factory=AssignmentComparison)
     traffic_impact: TrafficImpactEstimate | None = None
     filter_design: FilterDesignSummary = Field(default_factory=FilterDesignSummary)
+    emergency_access: EmergencyAccessSummary = Field(default_factory=EmergencyAccessSummary)
     osm_context: OsmContext | None = None
     evidence: AnalysisEvidence = Field(
         default_factory=lambda: AnalysisEvidence(

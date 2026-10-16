@@ -938,3 +938,18 @@
     z-index: 2;
   }
 }
+
+.partition-controls .emergency-summary {
+  margin-top: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.partition-controls .emergency-summary.warn {
+  background: #fef2f2;
+  color: #991b1b;
+}

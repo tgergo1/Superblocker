@@ -29,6 +29,11 @@ function viewStateForBounds(bounds: BoundingBox): ViewState {
   };
 }
 
+function formatSeconds(seconds: number): string {
+  const total = Math.round(seconds);
+  return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`;
+}
+
 function App() {
   const {
     searchResults,
@@ -83,6 +88,9 @@ function App() {
 
   const activeStreetNetwork = partitionData?.street_network ?? null;
   const trafficImpact = partition?.traffic_impact ?? null;
+  const selectedEmergency = selectedEnforcedSuperblock
+    ? partition?.emergency_access?.results.find(item => item.superblock_id === selectedEnforcedSuperblock.id) ?? null
+    : null;
   const selectedImpact = selectedEnforcedSuperblock && trafficImpact
     ? trafficImpact.superblocks.find(item => item.superblock_id === selectedEnforcedSuperblock.id) ?? null
     : null;
@@ -267,6 +275,16 @@ function App() {
               <span>Street Cuts:</span>
               <span>{selectedEnforcedSuperblock.street_cut_count}</span>
             </div>
+            {selectedEmergency && (
+              <div className="detail-row">
+                <span>Emergency response:</span>
+                <span>
+                  {formatSeconds(selectedEmergency.baseline_seconds)} → {selectedEmergency.planned_seconds === null
+                    ? 'no route'
+                    : formatSeconds(selectedEmergency.planned_seconds)}
+                </span>
+              </div>
+            )}
             {selectedImpact && (
               <>
                 <div className="detail-row">

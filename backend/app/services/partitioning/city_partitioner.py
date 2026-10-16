@@ -41,6 +41,7 @@ from app.models.schemas import (
     Coordinates,
     DataQualityMetrics,
     DemandModel,
+    EmergencyAccessSummary,
     EnforcedSuperblock,
     EntryPoint,
     FilterDesignSettings,
@@ -73,6 +74,7 @@ from app.services.impact.boundary_impact import (
     BoundaryImpactEstimator,
     SuperblockImpactInput,
 )
+from app.services.impact.emergency_access import EmergencyAccessChecker
 from app.services.network.turn_graph import TurnGraphBuilder
 
 logger = logging.getLogger(__name__)
@@ -1705,6 +1707,18 @@ class CityPartitioner:
             except Exception as error:  # Screening output must not block the plan.
                 logger.warning("Traffic impact estimate failed: %s", error)
 
+        emergency_access = EmergencyAccessSummary(
+            limitations=["No OpenStreetMap context layers were loaded."]
+        )
+        if self.osm_context is not None:
+            self._report_progress("impact", 98, "Checking emergency response times...")
+            try:
+                emergency_access = EmergencyAccessChecker(
+                    self.graph, self.osm_context.facilities
+                ).check(self._impact_inputs, all_modifications)
+            except Exception as error:  # Screening output must not block the plan.
+                logger.warning("Emergency access check failed: %s", error)
+
         modeled_directional_validation_passed = bool(self.superblocks) and all(
             sb.modeled_directional_validation_passed for sb in self.superblocks
         )
@@ -1848,6 +1862,7 @@ class CityPartitioner:
             assignment_comparison=assignment_comparison,
             traffic_impact=traffic_impact,
             filter_design=self.filter_designer.finish(),
+            emergency_access=emergency_access,
             osm_context=self.osm_context,
             evidence=evidence,
             readiness=readiness,

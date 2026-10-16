@@ -564,6 +564,17 @@ export function PartitionControls({
               <span>{partition.filter_design?.bus_gates} bus gates</span>
             )}
           </div>
+          {partition.emergency_access?.checked && (
+            <div className={`emergency-summary ${partition.emergency_access.superblocks_over_threshold > 0 ? 'warn' : ''}`}>
+              Emergency response from {partition.emergency_access.stations_used} stations:{' '}
+              {partition.emergency_access.superblocks_over_threshold === 0
+                ? `no superblock slower by more than ${partition.emergency_access.threshold_seconds} s`
+                : `${partition.emergency_access.superblocks_over_threshold} superblocks slower by more than ${partition.emergency_access.threshold_seconds} s`}
+              {partition.emergency_access.superblocks_over_threshold_without_exemption > 0 &&
+                ` (${partition.emergency_access.superblocks_over_threshold_without_exemption} if bollards stay locked)`}
+              .
+            </div>
+          )}
           {partition.filter_design && partition.filter_design.protected_route_refs.length > 0 && (
             <div className="transit-protection">
               Keeps {partition.filter_design.protected_route_refs.length} bus, trolleybus and tram

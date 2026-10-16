@@ -174,6 +174,28 @@ export interface StreetModification {
   transit_route_refs?: string[];
 }
 
+export interface EmergencyAccessResult {
+  superblock_id: string;
+  nearest_station: string | null;
+  baseline_seconds: number;
+  planned_seconds: number | null;
+  planned_without_exemption_seconds: number | null;
+}
+
+export interface EmergencyAccessSummary {
+  checked: boolean;
+  stations_used: number;
+  superblocks_checked: number;
+  median_added_seconds: number;
+  maximum_added_seconds: number;
+  threshold_seconds: number;
+  superblocks_over_threshold: number;
+  superblocks_over_threshold_without_exemption: number;
+  unreachable_superblocks: number;
+  results: EmergencyAccessResult[];
+  limitations: string[];
+}
+
 export interface FilterDesignSummary {
   transit_routes_loaded: number;
   transit_ways_loaded: number;
@@ -467,6 +489,7 @@ export interface CityPartition {
   assignment_comparison: AssignmentComparison;
   traffic_impact?: TrafficImpactEstimate | null;
   filter_design?: FilterDesignSummary;
+  emergency_access?: EmergencyAccessSummary;
   evidence: AnalysisEvidence;
   readiness: PlanReadiness;
   total_area_hectares: number;
