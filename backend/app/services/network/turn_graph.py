@@ -108,6 +108,19 @@ def _class_matches(
     return VehicleClass.ALL_MOTOR in rule.applies_to or vehicle_class in rule.applies_to
 
 
+def _in_force(modification: StreetModification, active_time_window: str | None) -> bool:
+    """A timed measure applies only in its own windows.
+
+    With no active window it is modelled as in force, matching how timed turn
+    restrictions are treated.
+    """
+    return (
+        not modification.time_windows
+        or active_time_window is None
+        or active_time_window in modification.time_windows
+    )
+
+
 class TurnGraph:
     """A graph whose nodes are directed road edges and arcs are legal turns."""
 
@@ -118,6 +131,10 @@ class TurnGraph:
     ) -> None:
         self.graph = graph
         self.edge_data = edge_data
+
+    def restricted_to(self, states: set[DirectedEdgeRef]) -> "TurnGraph":
+        """The same turn graph limited to the given road states."""
+        return TurnGraph(self.graph.subgraph(states), self.edge_data)
 
     def outgoing_states(self, node_id: int) -> set[DirectedEdgeRef]:
         return {ref for ref in self.graph.nodes if ref[0] == node_id}
@@ -233,6 +250,7 @@ class TurnGraphBuilder:
             modification
             for modification in modifications
             if modification.modification_type == ModificationType.TURN_RESTRICTION
+            and _in_force(modification, active_time_window)
         ]
         for incoming_ref, incoming_data in edge_data.items():
             previous_node, via_node, _incoming_key = incoming_ref
@@ -275,14 +293,7 @@ class TurnGraphBuilder:
     ) -> nx.MultiDiGraph:
         graph = self.source_graph.copy()
         for modification in modifications:
-            # A timed measure (a school street, a peak-hour gate) applies only in
-            # its own windows; with no active window it is modelled as in force,
-            # matching how timed turn restrictions are treated.
-            if (
-                modification.time_windows
-                and active_time_window is not None
-                and active_time_window not in modification.time_windows
-            ):
+            if not _in_force(modification, active_time_window):
                 continue
             if modification.modification_type == ModificationType.TWO_WAY:
                 self._add_reverse(graph, modification)
@@ -333,7 +344,12 @@ class TurnGraphBuilder:
         if data is None:
             data = next(iter(graph[modification.u][modification.v].values()), None)
         if data is not None:
-            graph.add_edge(modification.v, modification.u, **dict(data))
+            reverse = dict(data)
+            # Edge shapes run from the edge's start node to its end node.
+            geometry = reverse.get("geometry")
+            if geometry is not None and hasattr(geometry, "reverse"):
+                reverse["geometry"] = geometry.reverse()
+            graph.add_edge(modification.v, modification.u, **reverse)
 
     def _restricted(
         self,

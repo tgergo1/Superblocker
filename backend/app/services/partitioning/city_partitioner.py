@@ -123,6 +123,14 @@ HIERARCHY_MAP = {
 }
 
 
+def _clearance(edge_data: dict | None) -> float | None:
+    """Surveyed clearance in metres, or None when it is unknown."""
+    try:
+        return float((edge_data or {})["clearance_m"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 @dataclass
 class SuperblockCell:
     """Intermediate representation of a potential superblock."""
@@ -1559,6 +1567,16 @@ class CityPartitioner:
                     if requested_class == VehicleClass.ALL_MOTOR
                     else requested_class
                 )
+                if snapped_node is not None and target.service_windows:
+                    # Reachability depends on which timed measures are in
+                    # force, so it is checked in each declared window.
+                    reasons = self._access_constraint_failures(
+                        graph, modifications, entry_nodes, snapped_node, target, vehicle_class
+                    )
+                    if reasons:
+                        failed_vehicle_classes.append(requested_class)
+                        constraint_reasons.extend(reasons)
+                    continue
                 turn_graph = turn_graphs[vehicle_class]
                 inbound = snapped_node is not None and any(
                     entry == snapped_node or turn_graph.has_path_between_nodes(entry, snapped_node)
@@ -1659,20 +1677,24 @@ class CityPartitioner:
             if planned is None:
                 reasons.append(f"No {vehicle_class.value} inbound-and-return path{label}")
                 continue
-            minutes, states = planned
             if target.minimum_clearance_m is not None:
-                clearances: list[float | None] = []
-                for state in states:
-                    try:
-                        clearances.append(float(planned_graph.edge_data[state]["clearance_m"]))
-                    except (KeyError, TypeError, ValueError):
-                        clearances.append(None)
-                if any(value is None for value in clearances):
-                    reasons.append(f"Clearance is not surveyed on the {vehicle_class.value} route")
-                elif clearances and min(clearances) < target.minimum_clearance_m:
+                # Route only over streets surveyed tall enough, so a slower
+                # route under the height limit still counts.
+                clear_states = {
+                    state
+                    for state in planned_graph.graph.nodes
+                    if (clearance := _clearance(planned_graph.edge_data.get(state))) is not None
+                    and clearance >= target.minimum_clearance_m
+                }
+                cleared = best_round_trip(planned_graph.restricted_to(clear_states))
+                if cleared is None:
                     reasons.append(
-                        f"Route clearance is below {target.minimum_clearance_m:.2f} m{label}"
+                        f"No {vehicle_class.value} route with surveyed clearance of at least "
+                        f"{target.minimum_clearance_m:.2f} m{label}"
                     )
+                    continue
+                planned = cleared
+            minutes, _states = planned
             if target.maximum_detour_minutes is not None:
                 baseline = best_round_trip(builder.build(vehicle_class, [], window))
                 if baseline is not None and (
