@@ -109,6 +109,10 @@ MAX_SPLIT_CANDIDATES = 150
 # as the street turns by no more than this at each one.
 MAX_CHAIN_EDGES = 60
 MAX_CHAIN_TURN_DEGREES = 50.0
+# When no split of an oversized cell leaves both pieces at the minimum size,
+# one piece may be this fraction of the minimum; merging then joins it to a
+# neighbour.
+UNEVEN_SPLIT_MIN_FACTOR = 0.25
 # Split lines come from main roads (tertiary and above). Outer districts such
 # as Rakosmente have no main road for kilometres, which left single "cells"
 # of thousands of hectares that cut no traffic at all. Cells this many times
@@ -1100,23 +1104,33 @@ class CityPartitioner:
         boundary; a cell far over the maximum size falls back to residential
         streets.
         """
-        best = self._best_split(cell, self._split_candidates(cell), self._split_edges(cell))
         # Circulation sectors are bounded by main roads only, by design.
         # With the "avoid" policy any cell over the maximum may split along a
         # quiet residential street; otherwise only cells far over it may.
         minor_split_factor = 1.0 if self.minor_boundary_policy == "avoid" else OVERSIZED_CELL_FACTOR
-        quiet_street = False
-        if (
-            best is None
-            and self.use_centrality_boundaries
+        may_use_minor = (
+            self.use_centrality_boundaries
             and cell.area_hectares > minor_split_factor * self.max_area_ha
-        ):
+        )
+        # An even split comes first. Failing that, a split may cut off a piece
+        # under the minimum size, which the next merge round joins to a
+        # neighbour other than its oversized sibling.
+        best = None
+        quiet_street = False
+        for min_piece_ha in (self.min_area_ha, UNEVEN_SPLIT_MIN_FACTOR * self.min_area_ha):
             best = self._best_split(
-                cell,
-                self._split_candidates(cell, MINOR_SPLIT_HIERARCHIES),
-                self._split_edges(cell, MINOR_SPLIT_HIERARCHIES),
+                cell, self._split_candidates(cell), self._split_edges(cell), min_piece_ha
             )
-            quiet_street = best is not None
+            if best is None and may_use_minor:
+                best = self._best_split(
+                    cell,
+                    self._split_candidates(cell, MINOR_SPLIT_HIERARCHIES),
+                    self._split_edges(cell, MINOR_SPLIT_HIERARCHIES),
+                    min_piece_ha,
+                )
+                quiet_street = best is not None
+            if best is not None:
+                break
         if best is None:
             return [cell]
         polygons, _edge, chain = best
@@ -1196,6 +1210,7 @@ class CityPartitioner:
         cell: SuperblockCell,
         candidates: list[tuple[int, int, int]],
         streets: list[tuple[int, int, int]] | None = None,
+        min_piece_ha: float | None = None,
     ) -> tuple[list[Polygon], tuple[int, int, int], list[tuple[int, int, int]]] | None:
         """The most even two-way split of ``cell``, the street it starts from
         and every edge it runs along.
@@ -1206,6 +1221,7 @@ class CityPartitioner:
         that cuts through the blocks beside it.
         """
         adjacency = self._street_adjacency(streets) if streets else None
+        min_piece_ha = self.min_area_ha if min_piece_ha is None else min_piece_ha
         best = None
         best_balance = float("inf")
         # Both directions of a two-way street share a key; parallel
@@ -1238,7 +1254,11 @@ class CityPartitioner:
                     if result is None or len(result) < 2:
                         continue
                     areas = [self._calculate_area_hectares(p) for p in result]
-                    if not all(a >= self.min_area_ha for a in areas):
+                    # A relaxed minimum lets at most one piece fall under the
+                    # real one, so the split never leaves only small pieces.
+                    if not all(a >= min_piece_ha for a in areas) or (
+                        sum(a < self.min_area_ha for a in areas) > 1
+                    ):
                         continue
                     balance = abs(areas[0] - areas[1])
                     if balance < best_balance:
