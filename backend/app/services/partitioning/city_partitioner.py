@@ -24,7 +24,7 @@ import networkx as nx
 import osmnx as ox
 import pyproj
 import shapely
-from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box, shape
+from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon, box, shape
 from shapely.ops import polygonize, transform, unary_union
 from shapely.strtree import STRtree
 
@@ -102,6 +102,13 @@ ARTERIAL_TYPES = {
 
 # Split lines tried per oversized cell, nearest the cell centre first.
 MAX_SPLIT_CANDIDATES = 150
+# Split lines come from main roads (tertiary and above). Outer districts such
+# as Rakosmente have no main road for kilometres, which left single "cells"
+# of thousands of hectares that cut no traffic at all. Cells this many times
+# over the maximum size may also split along residential streets.
+OVERSIZED_CELL_FACTOR = 5.0
+MAIN_ROAD_SPLIT_HIERARCHY = 5
+MINOR_SPLIT_HIERARCHIES = frozenset({6, 8})  # residential, unclassified
 
 # Road hierarchy for boundary suitability
 MINOR_ROAD_CLASSES = frozenset(
@@ -1071,13 +1078,42 @@ class CityPartitioner:
         """
         Split a large cell into smaller ones.
 
-        Tries to find an interior road that can serve as a new boundary.
+        Tries to find an interior main road that can serve as a new
+        boundary; a cell far over the maximum size falls back to residential
+        streets.
         """
-        # Find the best splitting line (an interior road that crosses the cell)
+        best = self._best_split(cell, self._split_candidates(cell))
+        # Circulation sectors are bounded by main roads only, by design.
+        if (
+            best is None
+            and self.use_centrality_boundaries
+            and cell.area_hectares > OVERSIZED_CELL_FACTOR * self.max_area_ha
+        ):
+            best = self._best_split(cell, self._split_candidates(cell, MINOR_SPLIT_HIERARCHIES))
+        if best is None:
+            return [cell]
+        polygons, (u, v, _key) = best
+        # The street the cell was split on is now a boundary road of both
+        # halves; without this it lies on both rings and belongs to neither.
+        self._promote_to_boundary(u, v)
+        return self._cells_from_polygons(polygons)
+
+    def _promote_to_boundary(self, u: int, v: int) -> None:
+        """Treat every carriageway between ``u`` and ``v`` as a boundary road."""
+        for a, b in ((u, v), (v, u)):
+            for key in self.graph.get_edge_data(a, b, default={}):
+                self.arterial_edges.add((a, b, key))
+        self._arterial_nodes.update((u, v))
+
+    def _best_split(
+        self, cell: SuperblockCell, candidates: list[tuple[int, int, int]]
+    ) -> tuple[list[Polygon], tuple[int, int, int]] | None:
+        """The most even two-way split of ``cell``, and the street it runs along."""
         best_split = None
+        best_edge = None
         best_balance = float("inf")
 
-        for u, v, key in self._split_candidates(cell):
+        for u, v, key in candidates:
             data = self.graph[u][v][key]
 
             geom = data.get("geometry")
@@ -1112,17 +1148,19 @@ class CityPartitioner:
                 if balance < best_balance and all(a >= self.min_area_ha for a in areas):
                     best_balance = balance
                     best_split = result
+                    best_edge = (u, v, key)
 
             except Exception as e:
                 logger.debug(f"Split attempt failed: {e}")
                 continue
 
-        if best_split is None:
-            return [cell]
+        if best_split is None or best_edge is None:
+            return None
+        return best_split, best_edge
 
-        # Create new cells from split polygons
+    def _cells_from_polygons(self, polygons: list[Polygon]) -> list[SuperblockCell]:
         new_cells = []
-        for polygon in best_split:
+        for polygon in polygons:
             if not polygon.is_valid:
                 polygon = polygon.buffer(0)
 
@@ -1141,8 +1179,12 @@ class CityPartitioner:
 
         return new_cells
 
-    def _split_candidates(self, cell: SuperblockCell) -> list[tuple[int, int, int]]:
+    def _split_candidates(
+        self, cell: SuperblockCell, hierarchies: frozenset[int] | None = None
+    ) -> list[tuple[int, int, int]]:
         """Interior main-road edges to try as split lines, nearest the centre first.
+
+        ``hierarchies`` picks other road levels instead of main roads.
 
         A line through the middle of a cell gives the most even split. Large
         circulation-sector cells hold thousands of candidate edges, and
@@ -1157,8 +1199,12 @@ class CityPartitioner:
             highway = self.graph[u][v][key].get("highway", "")
             if isinstance(highway, list):
                 highway = highway[0]
-            # Prefer higher-hierarchy roads for splitting
-            if HIERARCHY_MAP.get(highway, 6) > 5:  # Don't split on residential or lower
+            if hierarchies is None:
+                # Main roads only by default
+                if HIERARCHY_MAP.get(highway, 6) > MAIN_ROAD_SPLIT_HIERARCHY:
+                    continue
+            # Unknown types such as busway or road never qualify as a fallback.
+            elif HIERARCHY_MAP.get(highway) not in hierarchies:
                 continue
             u_data = self.graph.nodes.get(u, {})
             v_data = self.graph.nodes.get(v, {})
@@ -1210,6 +1256,12 @@ class CityPartitioner:
 
             if isinstance(clipped, LineString):
                 return clipped
+            if isinstance(clipped, MultiLineString):
+                # A concave cell or one with holes cuts the line into pieces;
+                # keep the piece that holds the road itself.
+                middle = line.interpolate(0.5, normalized=True)
+                piece = min(clipped.geoms, key=lambda part: part.distance(middle))
+                return piece if piece.distance(middle) < 1e-9 else None
 
             return None
 
