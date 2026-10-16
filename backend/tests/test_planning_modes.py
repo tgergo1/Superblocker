@@ -414,3 +414,47 @@ def test_even_splits_are_chosen_by_how_compact_the_pieces_are():
     )
     _pieces, edge, _chain = partitioner._best_split(cell, [(1, 2, 0), (3, 4, 0)])
     assert edge == (3, 4, 0)
+
+
+def test_split_never_leaves_a_piece_without_entries():
+    import networkx as nx
+    from shapely.geometry import box
+
+    graph = nx.MultiDiGraph()
+    points = {
+        100: (0.0, 0.01),
+        101: (0.02, 0.01),
+        1: (0.004, 0.005),
+        2: (0.006, 0.005),
+        102: (0.015, 0.01),
+        3: (0.015, 0.002),
+        4: (0.018, 0.001),
+    }
+    for node, (x, y) in points.items():
+        graph.add_node(node, x=x, y=y)
+    # A main road along the top edge; a short stub in the middle whose straight
+    # extension would cut the cell in half; a street down from the main road
+    # with a branch that would end up below that cut.
+    graph.add_edge(100, 102, 0, highway="primary", length=1650.0)
+    graph.add_edge(102, 101, 0, highway="primary", length=550.0)
+    graph.add_edge(1, 2, 0, highway="residential", length=220.0)
+    graph.add_edge(2, 1, 0, highway="residential", length=220.0)
+    graph.add_edge(102, 3, 0, highway="residential", length=900.0)
+    graph.add_edge(3, 4, 0, highway="residential", length=350.0)
+    partitioner = CityPartitioner(
+        graph,
+        BoundingBox(north=0.011, south=-0.001, east=0.021, west=-0.001),
+        min_area_ha=6,
+        max_area_ha=20,
+        minor_boundary_policy="avoid",
+    )
+    partitioner.arterial_edges = {(100, 102, 0), (102, 101, 0)}
+    partitioner._arterial_nodes = {100, 101, 102}
+    (cell,) = partitioner._cells_from_polygons([box(0.0, 0.0, 0.02, 0.01)])
+    assert cell.entry_nodes
+    pieces = partitioner._split_cell(cell)
+    for piece in pieces:
+        assert piece.entry_nodes or not piece.interior_edges
+    # A rejected cut leaves no boundary road behind, in either direction.
+    if len(pieces) == 1:
+        assert not {(1, 2, 0), (2, 1, 0)} & partitioner.arterial_edges
