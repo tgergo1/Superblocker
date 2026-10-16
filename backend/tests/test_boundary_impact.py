@@ -161,6 +161,19 @@ def test_entry_pair_sample_spreads_over_every_sector():
     assert all(sectors[a] != sectors[b] for a, b in pairs)
 
 
+def test_entry_pair_sample_keeps_every_side_when_sectors_are_uneven():
+    from app.services.impact.boundary_impact import sample_entry_pairs
+
+    entries = list(range(12))
+    sectors = {node: 0 if node < 10 else node - 9 for node in entries}  # sizes 10, 1, 1
+    pairs, total = sample_entry_pairs(entries, sectors, cap=12)
+
+    assert total == 10 * 2 + 2 * 11
+    sources = {a for a, _b in pairs}
+    assert {sectors[source] for source in sources} == {0, 1, 2}
+    assert all(sectors[a] != sectors[b] for a, b in pairs)
+
+
 def test_entry_pair_sample_keeps_every_pair_under_the_cap():
     from app.services.impact.boundary_impact import sample_entry_pairs
 
@@ -170,8 +183,12 @@ def test_entry_pair_sample_keeps_every_pair_under_the_cap():
 
 def test_sampled_pairs_are_reported():
     settings = TrafficImpactSettings(max_entry_pairs_per_superblock=6)
-    estimate = BoundaryImpactEstimator(cell_graph(), settings).estimate([cell_input(closures())])
+    item = cell_input(closures())
+    # Two entries per side: the corners join the mid-side entries.
+    item.entry_sectors.update({1: 0, 2: 1, 3: 2, 4: 3})
+    estimate = BoundaryImpactEstimator(cell_graph(), settings).estimate([item])
     cell = estimate.superblocks[0]
-    assert cell.entry_pairs_total == 12
-    assert cell.entry_pairs_checked == 6
+    assert cell.entry_pairs_total == 48
+    # One entry per side is always kept, each checked against its 6 destinations.
+    assert cell.entry_pairs_checked == 24
     assert any("sample of entries" in text for text in estimate.limitations)

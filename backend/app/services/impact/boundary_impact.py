@@ -115,15 +115,30 @@ def edge_baseline_vph(data: Mapping[str, Any]) -> tuple[float, bool]:
     return min(volume, 0.9 * edge_capacity_vph(data)), False
 
 
+def _spread_order(nodes: list[int]) -> list[int]:
+    """Nodes in an order that keeps any prefix spread along the list (0, 1/2, 1/4, 3/4...)."""
+
+    def van_der_corput(index: int) -> float:
+        value, base = 0.0, 0.5
+        while index:
+            value += base * (index & 1)
+            index >>= 1
+            base /= 2
+        return value
+
+    return [node for _key, node in sorted((van_der_corput(i), n) for i, n in enumerate(nodes))]
+
+
 def sample_entry_pairs(
     entries: list[int], entry_sectors: dict[int, int], cap: int
 ) -> tuple[list[tuple[int, int]], int]:
-    """Entry pairs in different sectors, sampled to at most ``cap``, and the full count.
+    """Entry pairs in different sectors, sampled down to about ``cap``, and the full count.
 
     Every sampled entry is checked against all its destinations, so the cost
-    stays at one shortest-path search per sampled entry. Sampled entries are
-    spread evenly over the sectors rather than taken in node id order, which
-    would check only one corner of a large superblock.
+    stays at one shortest-path search per sampled entry. Entries are taken in
+    turn from each sector, spread along it, rather than in node id order,
+    which would check only one corner of a large superblock. Every sector
+    keeps at least one entry even when that goes past ``cap``.
     """
     destinations = {
         a: [b for b in entries if b != a and entry_sectors[b] != entry_sectors[a]] for a in entries
@@ -131,12 +146,23 @@ def sample_entry_pairs(
     total = sum(len(items) for items in destinations.values())
     if total <= cap:
         return [(a, b) for a in entries for b in destinations[a]], total
-    ordered = sorted(entries, key=lambda node: (entry_sectors[node], node))
-    count = len(ordered)
-    sources = max(1, min(count, cap * count // total))
-    chosen = sorted({ordered[index * count // sources] for index in range(sources)})
-    pairs = [(a, b) for a in chosen for b in destinations[a]]
-    return pairs[:cap], total
+    by_sector: dict[int, list[int]] = defaultdict(list)
+    for node in entries:
+        by_sector[entry_sectors[node]].append(node)
+    queues = [_spread_order(sorted(by_sector[sector])) for sector in sorted(by_sector)]
+    chosen: list[int] = []
+    count = 0
+    for turn in range(max(len(queue) for queue in queues)):
+        for queue in queues:
+            if turn >= len(queue):
+                continue
+            node = queue[turn]
+            size = len(destinations[node])
+            if turn == 0 or count + size <= cap:
+                chosen.append(node)
+                count += size
+    pairs = [(a, b) for a in sorted(chosen) for b in destinations[a]]
+    return pairs, total
 
 
 class BoundaryImpactEstimator:
