@@ -765,6 +765,10 @@
   background: #047857;
 }
 
+.plan-sign.destination-gate {
+  background: #c27a00;
+}
+
 .plan-sign.school-street {
   background: #f97316;
 }

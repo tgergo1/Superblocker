@@ -68,7 +68,14 @@ const ROAD_COLORS: Record<number, [number, number, number, number]> = {
 
 const DEFAULT_ROAD_COLOR: [number, number, number, number] = [128, 128, 128, 200];
 
-type PlanActionType = 'modal_filter' | 'bus_gate' | 'one_way' | 'two_way' | 'turn_restriction' | 'full_closure';
+type PlanActionType =
+  | 'modal_filter'
+  | 'bus_gate'
+  | 'destination_gate'
+  | 'one_way'
+  | 'two_way'
+  | 'turn_restriction'
+  | 'full_closure';
 
 interface PlanMarkerDatum {
   position: [number, number];
@@ -78,6 +85,13 @@ interface PlanMarkerDatum {
   actionType: PlanActionType | 'entry_point' | 'school' | 'pilot';
   angle?: number;
   detail?: string;
+}
+
+// Gates are filters with exemptions; each kind gets its own sign.
+function displayType(mod: { modification_type: string; filter_type?: string | null }): string {
+  if (mod.filter_type === 'bus_gate') return 'bus_gate';
+  if (mod.filter_type === 'camera_gate') return 'destination_gate';
+  return mod.modification_type;
 }
 
 // One visual language for modified road lines, map signs, hover labels, and the
@@ -105,6 +119,14 @@ const PLAN_ACTION_STYLES: Record<PlanActionType, {
     text: [255, 255, 255, 255],
     symbol: 'B',
     title: 'Bus gate',
+  },
+  destination_gate: {
+    line: [194, 122, 0, 255],
+    markerFill: [194, 122, 0, 255],
+    markerLine: [255, 255, 255, 255],
+    text: [255, 255, 255, 255],
+    symbol: 'C',
+    title: 'Destination-only gate',
   },
   one_way: {
     line: [37, 99, 235, 255],
@@ -297,7 +319,7 @@ export function StreetMap({
     partition.superblocks.forEach(sb => {
       sb.modifications.forEach(mod => {
         const display = {
-          type: mod.filter_type === 'bus_gate' ? 'bus_gate' : mod.modification_type,
+          type: displayType(mod),
           direction: mod.direction
         };
         if (mod.modification_type !== 'one_way' || mod.direction === 'u_to_v') {
@@ -626,7 +648,9 @@ export function StreetMap({
             title: style.title,
             symbol: style.symbol,
             actionType,
-            detail: actionType === 'one_way'
+            detail: actionType === 'destination_gate'
+              ? 'Kivéve célforgalom: residents, deliveries and visitors pass; through traffic is fined.'
+              : actionType === 'one_way'
               ? 'Follow the marked direction; return to the same boundary side.'
               : actionType === 'two_way'
                 ? 'Both local directions remain available inside this territory.'
@@ -1491,6 +1515,10 @@ export function StreetMap({
                   <div className="legend-item">
                     <span className="plan-sign bus-gate">B</span>
                     <span className="legend-label">Bus gate · buses and emergency pass</span>
+                  </div>
+                  <div className="legend-item">
+                    <span className="plan-sign destination-gate">C</span>
+                    <span className="legend-label">Destination-only gate · residents pass</span>
                   </div>
                   <div className="legend-item">
                     <span className="plan-sign school-street">S</span>

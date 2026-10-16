@@ -765,6 +765,11 @@
   --action-tint: #ecfdf5;
 }
 
+.partition-controls .street-action-item.destination_gate {
+  --action-color: #c27a00;
+  --action-tint: #fff7e6;
+}
+
 .partition-controls .transit-protection {
   margin-top: 8px;
   padding: 7px 9px;
