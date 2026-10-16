@@ -115,6 +115,30 @@ def edge_baseline_vph(data: Mapping[str, Any]) -> tuple[float, bool]:
     return min(volume, 0.9 * edge_capacity_vph(data)), False
 
 
+def sample_entry_pairs(
+    entries: list[int], entry_sectors: dict[int, int], cap: int
+) -> tuple[list[tuple[int, int]], int]:
+    """Entry pairs in different sectors, sampled to at most ``cap``, and the full count.
+
+    Every sampled entry is checked against all its destinations, so the cost
+    stays at one shortest-path search per sampled entry. Sampled entries are
+    spread evenly over the sectors rather than taken in node id order, which
+    would check only one corner of a large superblock.
+    """
+    destinations = {
+        a: [b for b in entries if b != a and entry_sectors[b] != entry_sectors[a]] for a in entries
+    }
+    total = sum(len(items) for items in destinations.values())
+    if total <= cap:
+        return [(a, b) for a in entries for b in destinations[a]], total
+    ordered = sorted(entries, key=lambda node: (entry_sectors[node], node))
+    count = len(ordered)
+    sources = max(1, min(count, cap * count // total))
+    chosen = sorted({ordered[index * count // sources] for index in range(sources)})
+    pairs = [(a, b) for a in chosen for b in destinations[a]]
+    return pairs[:cap], total
+
+
 class BoundaryImpactEstimator:
     """Screen boundary-road load changes for a set of superblocks."""
 
@@ -192,6 +216,15 @@ class BoundaryImpactEstimator:
                 f"{unresolved} cut-through entry pairs have no legal local detour; their "
                 "traffic is counted as displaced but not assigned."
             )
+        sampled = [
+            item for item in superblock_results if item.entry_pairs_total > item.entry_pairs_checked
+        ]
+        if sampled:
+            limitations.append(
+                f"{len(sampled)} large superblocks have more than "
+                f"{settings.max_entry_pairs_per_superblock} entry pairs; a sample of entries "
+                "spread over every side was checked against all their destinations."
+            )
         return TrafficImpactEstimate(
             settings=settings,
             traffic_basis=traffic_basis,
@@ -265,12 +298,9 @@ class BoundaryImpactEstimator:
         boundary = {(u, v) for u, v, _key in item.boundary_edges} - interior
 
         entries = sorted(node for node in item.entry_sectors if node in baseline)
-        pairs = [
-            (a, b)
-            for a in entries
-            for b in entries
-            if a != b and item.entry_sectors[a] != item.entry_sectors[b]
-        ][: settings.max_entry_pairs_per_superblock]
+        pairs, total_pairs = sample_entry_pairs(
+            entries, item.entry_sectors, settings.max_entry_pairs_per_superblock
+        )
         sources = sorted({a for a, _b in pairs})
         base_paths = {
             source: nx.single_source_dijkstra(baseline, source, weight="seconds")
@@ -387,6 +417,7 @@ class BoundaryImpactEstimator:
         result = SuperblockTrafficImpact(
             superblock_id=item.superblock_id,
             entry_pairs_checked=len(pairs),
+            entry_pairs_total=total_pairs,
             cut_through_pairs=len(cut_through),
             unresolved_pairs=unresolved,
             displaced_peak_vph=round(displaced, 1),

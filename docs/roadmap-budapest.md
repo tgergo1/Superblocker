@@ -6,6 +6,7 @@ Rules: free tools and open data only; every feature ships with tests; screening 
 
 ## Done
 
+- [x] Entry-pair cap: the traffic cut is measured over every entry pair (cap raised from 200 to 20,000; any sample left is spread over all sides). On the offline Budapest graph, removed through traffic rises 22% in circulation-sector mode (24,600 to 30,100 veh/h) and 4% in superblock mode, for under 3% more run time.
 - [x] Transit in the pilot ranking: superblocks where under half the streets are within walking distance of a stop rank 15% lower, the "Where to start" list says so, and the map outlines them in purple.
 - [x] Import the local planning stack (registry, jobs, planning, evidence, SUMO adapter, optimizer, engineering compiler, approvals, workbench).
 - [x] Boundary-road impact estimate with evaporation scenarios, map view and ranked road list.
@@ -29,7 +30,6 @@ Rules: free tools and open data only; every feature ships with tests; screening 
 ## Next
 
 1. **Minor-boundary repair.** First step done: the "Keep busy residential streets inside superblocks" option stops residential and living streets becoming boundary roads on centrality alone. On the offline Budapest graph it removes diverted traffic from all 1,311 minor roads, lowers the worst boundary-road increase from 510% to 84% and calms 3,673 km of street instead of 3,277 km, but the median cell grows from 23 ha to 42 ha. Next: split those large cells along low-traffic residential streets with filters, so cells stay near the target size.
-2. **Sector mode, next step.** Raise the 200 entry-pair cap in large sectors so the interior traffic cut is not understated.
-3. **Health, next step.** Calibrate the NO2 share against OKIR stations. Resident weighting is done. The gap between people-weighted and per-superblock results came from outer districts left as single cells of 1,000-12,000 ha (no main road to split on) holding about 30% of residents; those now split along residential streets. Remaining: about 5,300 ha of motorway-only or hillside cells, and the 20-100 ha suburban cells that keep their residential streets inside.
-4. **Data importers.** OpenFreeMap vector basemap.
-5. **Performance.** Constraint enforcement and cell optimisation still take most of the 45 s; parallelise per cell.
+2. **Health, next step.** Calibrate the NO2 share against OKIR stations. Resident weighting is done. The gap between people-weighted and per-superblock results came from outer districts left as single cells of 1,000-12,000 ha (no main road to split on) holding about 30% of residents; those now split along residential streets. Remaining: about 5,300 ha of motorway-only or hillside cells, and the 20-100 ha suburban cells that keep their residential streets inside.
+3. **Data importers.** OpenFreeMap vector basemap.
+4. **Performance.** Constraint enforcement and cell optimisation still take most of the 45 s; parallelise per cell.

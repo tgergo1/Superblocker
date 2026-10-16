@@ -142,3 +142,36 @@ def test_zero_through_share_displaces_nothing():
     ).estimate([cell_input(closures())])
     assert estimate.total_displaced_peak_vph == 0
     assert estimate.boundary_roads == []
+
+
+def test_entry_pair_sample_spreads_over_every_sector():
+    from app.services.impact.boundary_impact import sample_entry_pairs
+
+    entries = list(range(40))
+    sectors = {node: node // 10 for node in entries}  # four sectors of ten entries
+    pairs, total = sample_entry_pairs(entries, sectors, cap=120)
+
+    assert total == 40 * 30
+    assert 0 < len(pairs) <= 120
+    sources = {a for a, _b in pairs}
+    # Each sampled entry is checked against all 30 entries in other sectors.
+    assert all(sum(1 for a, _b in pairs if a == source) == 30 for source in sources)
+    # The old "first 120 pairs" took entries 0-3 only, all in sector 0.
+    assert {sectors[source] for source in sources} == {0, 1, 2, 3}
+    assert all(sectors[a] != sectors[b] for a, b in pairs)
+
+
+def test_entry_pair_sample_keeps_every_pair_under_the_cap():
+    from app.services.impact.boundary_impact import sample_entry_pairs
+
+    pairs, total = sample_entry_pairs([5, 7, 8, 9], {5: 0, 8: 1, 7: 2, 9: 3}, cap=200)
+    assert total == len(pairs) == 12
+
+
+def test_sampled_pairs_are_reported():
+    settings = TrafficImpactSettings(max_entry_pairs_per_superblock=6)
+    estimate = BoundaryImpactEstimator(cell_graph(), settings).estimate([cell_input(closures())])
+    cell = estimate.superblocks[0]
+    assert cell.entry_pairs_total == 12
+    assert cell.entry_pairs_checked == 6
+    assert any("sample of entries" in text for text in estimate.limitations)
