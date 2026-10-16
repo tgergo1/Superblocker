@@ -20,6 +20,11 @@ import './StreetMap.css';
 const OPENSTREETMAP_TILE_URL =
   import.meta.env.VITE_OSM_TILE_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
+// Optional vector basemap style, such as OpenFreeMap's no-key
+// https://tiles.openfreemap.org/styles/positron. If it fails to load, the map
+// falls back to the local raster style below.
+const VECTOR_STYLE_URL: string | undefined = import.meta.env.VITE_BASEMAP_STYLE_URL || undefined;
+
 const MAP_STYLE: StyleSpecification = {
   version: 8,
   name: 'Superblocker OpenStreetMap',
@@ -279,6 +284,7 @@ export function StreetMap({
   const mapRef = useRef<MapRef>(null);
   const [mapReady, setMapReady] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
+  const [rasterBasemap, setRasterBasemap] = useState(!VECTOR_STYLE_URL);
 
   // Panel collapse states
   const [legendCollapsed, setLegendCollapsed] = useState(false);
@@ -1042,10 +1048,14 @@ export function StreetMap({
         ref={mapRef}
         {...viewState}
         onMove={handleMove}
-        mapStyle={MAP_STYLE}
+        mapStyle={rasterBasemap ? MAP_STYLE : VECTOR_STYLE_URL}
         onLoad={onMapLoad}
         onIdle={() => setMapReady(true)}
         onError={(event) => {
+          if (!rasterBasemap && !mapReady) {
+            setRasterBasemap(true);
+            return;
+          }
           setMapError(event.error?.message || 'The basemap could not be loaded.');
         }}
         attributionControl={false}
