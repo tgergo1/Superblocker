@@ -508,6 +508,7 @@ export interface BoundaryRoadImpact {
 export interface SuperblockTrafficImpact {
   superblock_id: string;
   entry_pairs_checked: number;
+  entry_pairs_total?: number;
   cut_through_pairs: number;
   unresolved_pairs: number;
   displaced_peak_vph: number;

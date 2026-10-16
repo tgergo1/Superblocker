@@ -1030,7 +1030,10 @@ class TrafficImpactSettings(BaseModel):
 
     through_traffic_share: float = Field(default=0.5, ge=0, le=1)
     peak_hour_share_of_daily: float = Field(default=0.1, gt=0, le=1)
-    max_entry_pairs_per_superblock: int = Field(default=200, ge=1, le=5_000)
+    # The cost is one route search per entry, not per pair, so a high cap is cheap:
+    # on the offline Budapest graph, circulation sectors with every pair take
+    # 177 s instead of 172 s with 200, and 200 understated the cut by a fifth.
+    max_entry_pairs_per_superblock: int = Field(default=20_000, ge=1, le=100_000)
     scenarios: list[EvaporationScenario] = Field(
         default_factory=lambda: [
             EvaporationScenario(
@@ -1078,6 +1081,8 @@ class SuperblockTrafficImpact(BaseModel):
 
     superblock_id: str
     entry_pairs_checked: int = Field(ge=0)
+    # All entry pairs in different sectors; more than checked when sampled.
+    entry_pairs_total: int = Field(default=0, ge=0)
     cut_through_pairs: int = Field(ge=0)
     unresolved_pairs: int = Field(ge=0)
     displaced_peak_vph: float = Field(ge=0)

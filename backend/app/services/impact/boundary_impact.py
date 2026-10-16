@@ -115,6 +115,56 @@ def edge_baseline_vph(data: Mapping[str, Any]) -> tuple[float, bool]:
     return min(volume, 0.9 * edge_capacity_vph(data)), False
 
 
+def _spread_order(nodes: list[int]) -> list[int]:
+    """Nodes in an order that keeps any prefix spread along the list (0, 1/2, 1/4, 3/4...)."""
+
+    def van_der_corput(index: int) -> float:
+        value, base = 0.0, 0.5
+        while index:
+            value += base * (index & 1)
+            index >>= 1
+            base /= 2
+        return value
+
+    return [node for _key, node in sorted((van_der_corput(i), n) for i, n in enumerate(nodes))]
+
+
+def sample_entry_pairs(
+    entries: list[int], entry_sectors: dict[int, int], cap: int
+) -> tuple[list[tuple[int, int]], int]:
+    """Entry pairs in different sectors, sampled down to about ``cap``, and the full count.
+
+    Every sampled entry is checked against all its destinations, so the cost
+    stays at one shortest-path search per sampled entry. Entries are taken in
+    turn from each sector, spread along it, rather than in node id order,
+    which would check only one corner of a large superblock. Every sector
+    keeps at least one entry even when that goes past ``cap``.
+    """
+    destinations = {
+        a: [b for b in entries if b != a and entry_sectors[b] != entry_sectors[a]] for a in entries
+    }
+    total = sum(len(items) for items in destinations.values())
+    if total <= cap:
+        return [(a, b) for a in entries for b in destinations[a]], total
+    by_sector: dict[int, list[int]] = defaultdict(list)
+    for node in entries:
+        by_sector[entry_sectors[node]].append(node)
+    queues = [_spread_order(sorted(by_sector[sector])) for sector in sorted(by_sector)]
+    chosen: list[int] = []
+    count = 0
+    for turn in range(max(len(queue) for queue in queues)):
+        for queue in queues:
+            if turn >= len(queue):
+                continue
+            node = queue[turn]
+            size = len(destinations[node])
+            if turn == 0 or count + size <= cap:
+                chosen.append(node)
+                count += size
+    pairs = [(a, b) for a in sorted(chosen) for b in destinations[a]]
+    return pairs, total
+
+
 class BoundaryImpactEstimator:
     """Screen boundary-road load changes for a set of superblocks."""
 
@@ -192,6 +242,15 @@ class BoundaryImpactEstimator:
                 f"{unresolved} cut-through entry pairs have no legal local detour; their "
                 "traffic is counted as displaced but not assigned."
             )
+        sampled = [
+            item for item in superblock_results if item.entry_pairs_total > item.entry_pairs_checked
+        ]
+        if sampled:
+            limitations.append(
+                f"{len(sampled)} large superblocks have more than "
+                f"{settings.max_entry_pairs_per_superblock} entry pairs; a sample of entries "
+                "spread over every side was checked against all their destinations."
+            )
         return TrafficImpactEstimate(
             settings=settings,
             traffic_basis=traffic_basis,
@@ -265,12 +324,9 @@ class BoundaryImpactEstimator:
         boundary = {(u, v) for u, v, _key in item.boundary_edges} - interior
 
         entries = sorted(node for node in item.entry_sectors if node in baseline)
-        pairs = [
-            (a, b)
-            for a in entries
-            for b in entries
-            if a != b and item.entry_sectors[a] != item.entry_sectors[b]
-        ][: settings.max_entry_pairs_per_superblock]
+        pairs, total_pairs = sample_entry_pairs(
+            entries, item.entry_sectors, settings.max_entry_pairs_per_superblock
+        )
         sources = sorted({a for a, _b in pairs})
         base_paths = {
             source: nx.single_source_dijkstra(baseline, source, weight="seconds")
@@ -387,6 +443,7 @@ class BoundaryImpactEstimator:
         result = SuperblockTrafficImpact(
             superblock_id=item.superblock_id,
             entry_pairs_checked=len(pairs),
+            entry_pairs_total=total_pairs,
             cut_through_pairs=len(cut_through),
             unresolved_pairs=unresolved,
             displaced_peak_vph=round(displaced, 1),
