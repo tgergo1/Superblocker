@@ -22,12 +22,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import networkx as nx
+import numpy as np
 import osmnx as ox
 import pyproj
 import shapely
 from shapely import affinity
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon, box, shape
-from shapely.ops import polygonize, transform, unary_union
+from shapely.ops import polygonize, unary_union
 from shapely.strtree import STRtree
 
 from app.models.schemas import (
@@ -901,6 +902,16 @@ class CityPartitioner:
                 )
             )
 
+    def _project(self, geometry):
+        """``geometry`` in the metric projection, transformed in one array call."""
+        project = self._area_transformer
+
+        def coordinates(xy):
+            x, y = project(xy[:, 0], xy[:, 1])
+            return np.column_stack([x, y])
+
+        return shapely.transform(geometry, coordinates)
+
     def _calculate_area_hectares(self, polygon: Polygon) -> float:
         """Calculate polygon area in hectares using appropriate projection."""
         if polygon.is_empty:
@@ -916,8 +927,7 @@ class CityPartitioner:
                     "EPSG:4326", proj_string, always_xy=True
                 ).transform
                 self._area_transformer = project
-            projected = transform(project, polygon)
-            return projected.area / 10000  # m² to hectares
+            return self._project(polygon).area / 10000  # m² to hectares
 
         except Exception as e:
             logger.warning(f"Area calculation failed: {e}")
@@ -1968,8 +1978,8 @@ class CityPartitioner:
         project = self._area_transformer
         if project is None:
             return cell.area_hectares
-        reach = unary_union([transform(project, line) for line in lines]).buffer(STREET_REACH_M)
-        return reach.intersection(transform(project, cell.polygon)).area / 10000
+        reach = unary_union([self._project(line) for line in lines]).buffer(STREET_REACH_M)
+        return reach.intersection(self._project(cell.polygon)).area / 10000
 
     def _size_status(
         self, area_hectares: float, street_area_hectares: float | None = None
