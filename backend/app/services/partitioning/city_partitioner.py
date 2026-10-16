@@ -1254,7 +1254,11 @@ class CityPartitioner:
                     if result is None or len(result) < 2:
                         continue
                     areas = [self._calculate_area_hectares(p) for p in result]
-                    if not all(a >= min_piece_ha for a in areas):
+                    # A relaxed minimum lets at most one piece fall under the
+                    # real one, so the split never leaves only small pieces.
+                    if not all(a >= min_piece_ha for a in areas) or (
+                        sum(a < self.min_area_ha for a in areas) > 1
+                    ):
                         continue
                     balance = abs(areas[0] - areas[1])
                     if balance < best_balance:

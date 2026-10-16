@@ -343,3 +343,15 @@ def test_oversized_cell_splits_unevenly_when_no_even_split_exists():
     pieces = partitioner._split_cell(cell)
     small, large = sorted(piece.area_hectares for piece in pieces)
     assert 1.5 <= small < 6 < large <= 20
+
+
+def test_uneven_split_keeps_one_piece_at_the_minimum():
+    # With the minimum close to the maximum, a central split of a slightly
+    # oversized cell would leave two pieces under the minimum that can never
+    # merge back; it is refused.
+    partitioner, cell = _residential_cell(0.004, minor_boundary_policy="avoid")
+    partitioner.min_area_ha = 26
+    partitioner.max_area_ha = 45
+    assert 45 < cell.area_hectares < 52  # its one street halves it into 2 x 24.6 ha
+    assert partitioner._best_split(cell, cell.interior_edges, min_piece_ha=6.5) is None
+    assert partitioner._split_cell(cell) == [cell]
