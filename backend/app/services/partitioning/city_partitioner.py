@@ -117,6 +117,9 @@ UNEVEN_SPLIT_MIN_FACTOR = 0.25
 # How far a clipped split line is pushed past the cell boundary, in degrees
 # (about 10 cm).
 SPLIT_OVERSHOOT = 1e-6
+# Splits tried per cell before giving up when each leaves a piece without
+# entries.
+MAX_SPLIT_ATTEMPTS = 3
 # How much a split's choice weighs the compactness of its least compact piece
 # against how evenly it divides the area (both on a 0-1 scale).
 SPLIT_SHAPE_WEIGHT = 2.0
@@ -224,7 +227,7 @@ def assess_plan_readiness(
     accounted_coverage = min(100.0, coverage_percent)
     if accounted_coverage < MIN_COMPLETE_COVERAGE_PERCENT:
         topology_blockers.append(
-            f"Only {accounted_coverage:.1f}% of eligible physical road length is assigned to a "
+            f"Only {accounted_coverage:.2f}% of eligible physical road length is assigned to a "
             "generated cell, boundary corridor, or reviewed exclusion; "
             f"at least {MIN_COMPLETE_COVERAGE_PERCENT:.1f}% is required"
         )
@@ -1122,41 +1125,73 @@ class CityPartitioner:
         # An even split comes first. Failing that, a split may cut off a piece
         # under the minimum size, which the next merge round joins to a
         # neighbour other than its oversized sibling.
-        best = None
-        quiet_street = False
-        for min_piece_ha in (self.min_area_ha, UNEVEN_SPLIT_MIN_FACTOR * self.min_area_ha):
-            best = self._best_split(
-                cell, self._split_candidates(cell), self._split_edges(cell), min_piece_ha
-            )
-            if best is None and may_use_minor:
+        rejected: set[tuple[int, int, int]] = set()
+        for _attempt in range(MAX_SPLIT_ATTEMPTS):
+            best = None
+            quiet_street = False
+            for min_piece_ha in (self.min_area_ha, UNEVEN_SPLIT_MIN_FACTOR * self.min_area_ha):
                 best = self._best_split(
                     cell,
-                    self._split_candidates(cell, MINOR_SPLIT_HIERARCHIES),
-                    self._split_edges(cell, MINOR_SPLIT_HIERARCHIES),
+                    [c for c in self._split_candidates(cell) if c not in rejected],
+                    self._split_edges(cell),
                     min_piece_ha,
                 )
-                quiet_street = best is not None
-            if best is not None:
-                break
-        if best is None:
-            return [cell]
-        polygons, _edge, chain = best
-        if quiet_street:
-            # A filter on every section of the street, so neither half of it
-            # becomes a through route between the main roads at its ends.
-            self._quiet_split_streets.update((min(a, b), max(a, b)) for a, b, _k in chain)
-        # The street the cell was split on is now a boundary road of both
-        # halves; without this it lies on both rings and belongs to neither.
-        for a, b, _k in chain:
-            self._promote_to_boundary(a, b)
-        return self._cells_from_polygons(polygons)
+                if best is None and may_use_minor:
+                    best = self._best_split(
+                        cell,
+                        [
+                            c
+                            for c in self._split_candidates(cell, MINOR_SPLIT_HIERARCHIES)
+                            if c not in rejected
+                        ],
+                        self._split_edges(cell, MINOR_SPLIT_HIERARCHIES),
+                        min_piece_ha,
+                    )
+                    quiet_street = best is not None
+                if best is not None:
+                    break
+            if best is None:
+                return [cell]
+            polygons, edge, chain = best
+            # The street the cell was split on is now a boundary road of both
+            # halves; without this it lies on both rings and belongs to neither.
+            promoted_edges = set()
+            promoted_nodes = set()
+            for a, b, _k in chain:
+                promoted_nodes |= {a, b} - self._arterial_nodes
+                promoted_edges |= self._promote_to_boundary(a, b)
+            pieces = self._cells_from_polygons(polygons)
+            # A cut that is not a street (a straight extension past the end of
+            # one) can leave a piece whose streets reach no boundary road at
+            # all, only the neighbour across the cut: it has no entries and
+            # can never be a valid superblock. Try the next street instead.
+            if cell.entry_nodes and any(
+                piece.interior_edges and not piece.entry_nodes for piece in pieces
+            ):
+                self.arterial_edges -= promoted_edges
+                self._arterial_nodes -= promoted_nodes
+                rejected.add(edge)
+                continue
+            if quiet_street:
+                # A filter on every section of the street, so neither half of
+                # it becomes a through route between the main roads at its ends.
+                self._quiet_split_streets.update((min(a, b), max(a, b)) for a, b, _k in chain)
+            return pieces
+        return [cell]
 
-    def _promote_to_boundary(self, u: int, v: int) -> None:
-        """Treat every carriageway between ``u`` and ``v`` as a boundary road."""
+    def _promote_to_boundary(self, u: int, v: int) -> set[tuple[int, int, int]]:
+        """Treat every carriageway between ``u`` and ``v`` as a boundary road.
+
+        Returns the edges that were not boundary roads before.
+        """
+        added = set()
         for a, b in ((u, v), (v, u)):
             for key in self.graph.get_edge_data(a, b, default={}):
-                self.arterial_edges.add((a, b, key))
+                if (a, b, key) not in self.arterial_edges:
+                    added.add((a, b, key))
+        self.arterial_edges |= added
         self._arterial_nodes.update((u, v))
+        return added
 
     def _split_street_filters(self, cell: SuperblockCell) -> list[StreetModification]:
         """Modal filters on the quiet residential streets this cell was split from."""
