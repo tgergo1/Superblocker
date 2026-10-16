@@ -46,13 +46,17 @@ class PopulationGrid:
     source: str = GHS_POP_SOURCE
     limitations: list[str] = field(default_factory=list)
 
-    def total_in(self, bbox: BoundingBox) -> float:
+    def total_in(self, bbox: BoundingBox, area: shapely_base.BaseGeometry | None = None) -> float:
+        """Residents in the box, or in ``area`` (such as a district boundary) when given."""
         inside = (
             (self.lon >= bbox.west)
             & (self.lon <= bbox.east)
             & (self.lat >= bbox.south)
             & (self.lat <= bbox.north)
         )
+        if area is not None and not area.is_empty and inside.any():
+            points = shapely.points(self.lon[inside], self.lat[inside])
+            inside[inside] = shapely.intersects(area, points)
         return float(self.residents[inside].sum())
 
 
@@ -156,10 +160,15 @@ def summarize_population(
     polygons: dict[str, shapely_base.BaseGeometry],
     areas_ha: dict[str, float],
     bbox: BoundingBox,
+    area: shapely_base.BaseGeometry | None = None,
 ) -> PopulationSummary:
-    """Residents per superblock and the plan's share of the area's residents."""
+    """Residents per superblock and the plan's share of the area's residents.
+
+    ``area`` is the analysis boundary, so the share is measured against the
+    same district the superblocks were drawn in rather than its bounding box.
+    """
     counts = residents_by_polygon(grid, polygons)
-    in_area = grid.total_in(bbox)
+    in_area = grid.total_in(bbox, area)
     in_superblocks = sum(counts.values())
     return PopulationSummary(
         source=grid.source,

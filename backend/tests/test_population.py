@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import rasterio
 from rasterio.transform import from_origin
-from shapely.geometry import box
+from shapely.geometry import Polygon, box
 
 from app.models.schemas import BoundingBox
 from app.services.design.pilot_plan import PilotPlanner
@@ -154,3 +154,34 @@ def test_raster_away_from_the_area_is_empty(tmp_path):
     path = tmp_path / "far.tif"
     write_raster(path, "EPSG:4326", (10.0, 50.0), 0.01, np.full((2, 2), 5.0))
     assert read_population(path, AREA).residents.size == 0
+
+
+def test_share_uses_the_boundary_not_its_bounding_box():
+    grid = PopulationGrid(
+        lon=np.array([0.5, 3.5]),
+        lat=np.array([0.5, 3.5]),
+        residents=np.array([100.0, 900.0]),
+    )
+    triangle = Polygon([(0, 0), (4, 0), (0, 4)])
+    area = BoundingBox(north=4, south=0, east=4, west=0)
+    summary = summarize_population(grid, {"a": box(0, 0, 1, 1)}, {"a": 1.0}, area, triangle)
+    assert summary.residents_in_area == 100
+    assert summary.share_in_superblocks == 1.0
+    whole_box = summarize_population(grid, {"a": box(0, 0, 1, 1)}, {"a": 1.0}, area)
+    assert whole_box.residents_in_area == 1000
+
+
+def test_grid_without_cells_here_keeps_the_street_density_ranking():
+    grid = PopulationGrid(np.array([50.0]), np.array([50.0]), np.array([10.0]))
+    result = CityPartitioner(
+        partition_graph(),
+        BoundingBox(north=0.002, south=0, east=0.002, west=0),
+        target_size_ha=5,
+        min_area_ha=0.5,
+        max_area_ha=20,
+        arterial_road_types={"primary"},
+        population=grid,
+    ).partition()
+    assert result.population.residents_in_superblocks == 0
+    assert "no residents" in result.population.limitations[-1]
+    assert all(item.residents is None for item in result.pilot_plan.candidates)

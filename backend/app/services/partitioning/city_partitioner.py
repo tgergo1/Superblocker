@@ -1962,8 +1962,24 @@ class CityPartitioner:
         residents: dict[str, float] = {}
         if self.population_grid is not None and polygons:
             try:
-                population = summarize_population(self.population_grid, polygons, areas, self.bbox)
-                residents = {item.superblock_id: item.residents for item in population.superblocks}
+                population = summarize_population(
+                    self.population_grid,
+                    polygons,
+                    areas,
+                    self.bbox,
+                    shape(self.boundary.model_dump()) if self.boundary else None,
+                )
+                # A grid with no cells here says nothing about density, so the
+                # pilot ranking keeps its street-density fallback.
+                if population.residents_in_superblocks > 0:
+                    residents = {
+                        item.superblock_id: item.residents for item in population.superblocks
+                    }
+                else:
+                    population.limitations.append(
+                        "The population grid has no residents in these superblocks; "
+                        "check that it covers this area."
+                    )
             except Exception as error:  # Screening output must not block the plan.
                 logger.warning("Population count failed: %s", error)
         if transit_access is not None and transit_access.checked and residents:
