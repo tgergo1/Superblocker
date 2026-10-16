@@ -105,6 +105,10 @@ ARTERIAL_TYPES = {
 
 # Split lines tried per oversized cell, nearest the cell centre first.
 MAX_SPLIT_CANDIDATES = 150
+# A split follows its street through junctions up to this many edges, as long
+# as the street turns by no more than this at each one.
+MAX_CHAIN_EDGES = 60
+MAX_CHAIN_TURN_DEGREES = 50.0
 # Split lines come from main roads (tertiary and above). Outer districts such
 # as Rakosmente have no main road for kilometres, which left single "cells"
 # of thousands of hectares that cut no traffic at all. Cells this many times
@@ -1096,7 +1100,7 @@ class CityPartitioner:
         boundary; a cell far over the maximum size falls back to residential
         streets.
         """
-        best = self._best_split(cell, self._split_candidates(cell))
+        best = self._best_split(cell, self._split_candidates(cell), self._split_edges(cell))
         # Circulation sectors are bounded by main roads only, by design.
         # With the "avoid" policy any cell over the maximum may split along a
         # quiet residential street; otherwise only cells far over it may.
@@ -1107,16 +1111,23 @@ class CityPartitioner:
             and self.use_centrality_boundaries
             and cell.area_hectares > minor_split_factor * self.max_area_ha
         ):
-            best = self._best_split(cell, self._split_candidates(cell, MINOR_SPLIT_HIERARCHIES))
+            best = self._best_split(
+                cell,
+                self._split_candidates(cell, MINOR_SPLIT_HIERARCHIES),
+                self._split_edges(cell, MINOR_SPLIT_HIERARCHIES),
+            )
             quiet_street = best is not None
         if best is None:
             return [cell]
-        polygons, (u, v, _key) = best
+        polygons, _edge, chain = best
         if quiet_street:
-            self._quiet_split_streets.add((min(u, v), max(u, v)))
+            # A filter on every section of the street, so neither half of it
+            # becomes a through route between the main roads at its ends.
+            self._quiet_split_streets.update((min(a, b), max(a, b)) for a, b, _k in chain)
         # The street the cell was split on is now a boundary road of both
         # halves; without this it lies on both rings and belongs to neither.
-        self._promote_to_boundary(u, v)
+        for a, b, _k in chain:
+            self._promote_to_boundary(a, b)
         return self._cells_from_polygons(polygons)
 
     def _promote_to_boundary(self, u: int, v: int) -> None:
@@ -1181,57 +1192,171 @@ class CityPartitioner:
         return owned
 
     def _best_split(
-        self, cell: SuperblockCell, candidates: list[tuple[int, int, int]]
-    ) -> tuple[list[Polygon], tuple[int, int, int]] | None:
-        """The most even two-way split of ``cell``, and the street it runs along."""
-        best_split = None
-        best_edge = None
+        self,
+        cell: SuperblockCell,
+        candidates: list[tuple[int, int, int]],
+        streets: list[tuple[int, int, int]] | None = None,
+    ) -> tuple[list[Polygon], tuple[int, int, int], list[tuple[int, int, int]]] | None:
+        """The most even two-way split of ``cell``, the street it starts from
+        and every edge it runs along.
+
+        With ``streets`` (the edges a split may follow) a candidate is first
+        followed along its street to the cell boundary, so the split runs
+        down the real street rather than a straight extension of one segment
+        that cuts through the blocks beside it.
+        """
+        adjacency = self._street_adjacency(streets) if streets else None
+        best = None
         best_balance = float("inf")
+        # Both directions of a two-way street share a key; parallel
+        # carriageways between the same junctions do not.
+        followed: set[tuple[int, int, int]] = set()
 
-        for u, v, key in candidates:
-            data = self.graph[u][v][key]
-
-            geom = data.get("geometry")
-            if geom is None:
-                u_data = self.graph.nodes.get(u, {})
-                v_data = self.graph.nodes.get(v, {})
-                if "x" not in u_data or "x" not in v_data:
-                    continue
-                geom = LineString(
-                    [
-                        (u_data["x"], u_data["y"]),
-                        (v_data["x"], v_data["y"]),
-                    ]
-                )
-
-            # Try to split polygon with this line
-            try:
-                # Extend line to polygon boundary
-                extended = self._extend_line_to_boundary(geom, cell.polygon)
-                if extended is None:
-                    continue
-
-                # Split polygon
-                result = self._split_polygon_with_line(cell.polygon, extended)
-                if result is None or len(result) < 2:
-                    continue
-
-                # Check balance
-                areas = [self._calculate_area_hectares(p) for p in result]
-                balance = abs(areas[0] - areas[1])
-
-                if balance < best_balance and all(a >= self.min_area_ha for a in areas):
-                    best_balance = balance
-                    best_split = result
-                    best_edge = (u, v, key)
-
-            except Exception as e:
-                logger.debug(f"Split attempt failed: {e}")
+        for edge in candidates:
+            if (min(edge[:2]), max(edge[:2]), edge[2]) in followed:
                 continue
+            lines: list[tuple[LineString, list[tuple[int, int, int]]]] = []
+            if adjacency is not None:
+                chain = self._street_chain(edge, adjacency)
+                followed.update((min(u, v), max(u, v), key) for u, v, key in chain)
+                if len(chain) > 1:
+                    line = self._chain_line(chain)
+                    if line is not None:
+                        lines.append((line, chain))
+            geom = self._edge_line(*edge)
+            if geom is not None:
+                lines.append((geom, [edge]))
 
-        if best_split is None or best_edge is None:
+            for geom, chain in lines:
+                try:
+                    extended = self._extend_line_to_boundary(
+                        geom, cell.polygon, follow_ends=len(chain) > 1
+                    )
+                    if extended is None:
+                        continue
+                    result = self._split_polygon_with_line(cell.polygon, extended)
+                    if result is None or len(result) < 2:
+                        continue
+                    areas = [self._calculate_area_hectares(p) for p in result]
+                    if not all(a >= self.min_area_ha for a in areas):
+                        continue
+                    balance = abs(areas[0] - areas[1])
+                    if balance < best_balance:
+                        best_balance = balance
+                        best = (result, edge, chain)
+                    # A split along the real street beats a straight cut.
+                    break
+                except Exception as e:
+                    logger.debug(f"Split attempt failed: {e}")
+                    continue
+
+        return best
+
+    def _edge_line(self, u: int, v: int, key: int) -> LineString | None:
+        """The edge's geometry from ``u`` to ``v``."""
+        data = self.graph[u][v][key]
+        geom = data.get("geometry")
+        if geom is not None:
+            return geom
+        u_data = self.graph.nodes.get(u, {})
+        v_data = self.graph.nodes.get(v, {})
+        if "x" not in u_data or "x" not in v_data:
             return None
-        return best_split, best_edge
+        return LineString([(u_data["x"], u_data["y"]), (v_data["x"], v_data["y"])])
+
+    def _street_label(self, edge: tuple[int, int, int]) -> str:
+        """The street's name, or its road type when it has none."""
+        data = self.graph[edge[0]][edge[1]][edge[2]]
+        label = data.get("name") or data.get("highway", "")
+        return str(label[0] if isinstance(label, list) else label)
+
+    @staticmethod
+    def _street_adjacency(
+        streets: list[tuple[int, int, int]],
+    ) -> dict[int, list[tuple[int, tuple[int, int, int]]]]:
+        adjacency: dict[int, list[tuple[int, tuple[int, int, int]]]] = {}
+        for edge in streets:
+            u, v, _key = edge
+            adjacency.setdefault(u, []).append((v, edge))
+            adjacency.setdefault(v, []).append((u, edge))
+        return adjacency
+
+    def _turn_degrees(self, a: int, b: int, c: int) -> float:
+        """How far the path a-b-c turns at ``b``, in degrees."""
+        points = [self.graph.nodes.get(node, {}) for node in (a, b, c)]
+        if any("x" not in point for point in points):
+            return 180.0
+        # Coordinates are degrees: a degree of longitude shrinks with latitude.
+        scale = math.cos(math.radians(points[1]["y"]))
+        ax = (points[1]["x"] - points[0]["x"]) * scale
+        ay = points[1]["y"] - points[0]["y"]
+        bx = (points[2]["x"] - points[1]["x"]) * scale
+        by = points[2]["y"] - points[1]["y"]
+        if (ax == 0 and ay == 0) or (bx == 0 and by == 0):
+            return 180.0
+        return abs(math.degrees(math.atan2(ax * by - ay * bx, ax * bx + ay * by)))
+
+    def _street_chain(
+        self,
+        edge: tuple[int, int, int],
+        adjacency: dict[int, list[tuple[int, tuple[int, int, int]]]],
+    ) -> list[tuple[int, int, int]]:
+        """``edge`` and the same street on either side of it, in order.
+
+        The street is followed through each junction along its straightest
+        continuation with the same name, until it reaches a boundary road or
+        turns sharply away.
+        """
+        label = self._street_label(edge)
+        u, v, _key = edge
+        seen = {u, v}
+
+        def walk(prev: int, node: int) -> list[tuple[tuple[int, int, int], int, int]]:
+            path = []
+            while len(path) < MAX_CHAIN_EDGES and node not in self._arterial_nodes:
+                options = [
+                    (self._turn_degrees(prev, node, nbr), nbr, step)
+                    for nbr, step in adjacency.get(node, [])
+                    if nbr != prev and self._street_label(step) == label
+                ]
+                if not options:
+                    break
+                turn, nbr, step = min(options, key=lambda item: item[0])
+                if turn > MAX_CHAIN_TURN_DEGREES or nbr in seen:
+                    break
+                seen.add(nbr)
+                path.append((step, node, nbr))
+                prev, node = node, nbr
+            return path
+
+        backward = walk(v, u)
+        forward = walk(u, v)
+        # Edges in travel order from the far end behind ``u`` to the far end past ``v``.
+        return (
+            [step for step, _a, _b in reversed(backward)]
+            + [edge]
+            + [step for step, _a, _b in forward]
+        )
+
+    def _chain_line(self, chain: list[tuple[int, int, int]]) -> LineString | None:
+        """One line along consecutive edges, each turned to run the same way."""
+        coords: list[tuple[float, float]] = []
+        for index, (u, v, key) in enumerate(chain):
+            geom = self._edge_line(u, v, key)
+            if geom is None:
+                return None
+            points = list(geom.coords)
+            if index == 0:
+                # Orient the first edge towards the second.
+                if len(chain) > 1 and u in chain[1][:2] and v not in chain[1][:2]:
+                    points.reverse()
+            elif coords and Point(points[-1]).distance(Point(coords[-1])) < Point(
+                points[0]
+            ).distance(Point(coords[-1])):
+                points.reverse()
+            coords.extend(points if not coords else points[1:])
+        line = LineString(coords)
+        return line if line.is_simple else None
 
     def _cells_from_polygons(self, polygons: list[Polygon]) -> list[SuperblockCell]:
         new_cells = []
@@ -1254,20 +1379,11 @@ class CityPartitioner:
 
         return new_cells
 
-    def _split_candidates(
+    def _split_edges(
         self, cell: SuperblockCell, hierarchies: frozenset[int] | None = None
     ) -> list[tuple[int, int, int]]:
-        """Interior main-road edges to try as split lines, nearest the centre first.
-
-        ``hierarchies`` picks other road levels instead of main roads.
-
-        A line through the middle of a cell gives the most even split. Large
-        circulation-sector cells hold thousands of candidate edges, and
-        clipping each against the cell polygon dominated the run, so only the
-        nearest ``MAX_SPLIT_CANDIDATES`` are tried.
-        """
-        candidates: list[tuple[float, tuple[int, int, int]]] = []
-        centroid = cell.polygon.centroid
+        """Interior edges a split line may run along: main roads, or ``hierarchies``."""
+        edges = []
         for u, v, key in cell.interior_edges:
             if not self.graph.has_edge(u, v, key):
                 continue
@@ -1285,6 +1401,24 @@ class CityPartitioner:
                 or (min(u, v), max(u, v)) in self._busy_minor_streets
             ):
                 continue
+            edges.append((u, v, key))
+        return edges
+
+    def _split_candidates(
+        self, cell: SuperblockCell, hierarchies: frozenset[int] | None = None
+    ) -> list[tuple[int, int, int]]:
+        """Interior main-road edges to try as split lines, nearest the centre first.
+
+        ``hierarchies`` picks other road levels instead of main roads.
+
+        A line through the middle of a cell gives the most even split. Large
+        circulation-sector cells hold thousands of candidate edges, and
+        clipping each against the cell polygon dominated the run, so only the
+        nearest ``MAX_SPLIT_CANDIDATES`` are tried.
+        """
+        candidates: list[tuple[float, tuple[int, int, int]]] = []
+        centroid = cell.polygon.centroid
+        for u, v, key in self._split_edges(cell, hierarchies):
             u_data = self.graph.nodes.get(u, {})
             v_data = self.graph.nodes.get(v, {})
             if "x" in u_data and "x" in v_data:
@@ -1299,32 +1433,41 @@ class CityPartitioner:
             candidates = candidates[:MAX_SPLIT_CANDIDATES]
         return [edge for _distance, edge in candidates]
 
-    def _extend_line_to_boundary(self, line: LineString, polygon: Polygon) -> LineString | None:
-        """Extend a line to intersect the polygon boundary on both ends."""
+    def _extend_line_to_boundary(
+        self, line: LineString, polygon: Polygon, follow_ends: bool = False
+    ) -> LineString | None:
+        """Extend a line to intersect the polygon boundary on both ends.
+
+        The line is extended along its overall direction, or with
+        ``follow_ends`` (a split along a winding street) along the direction
+        each end is heading.
+        """
         try:
             coords = list(line.coords)
             if len(coords) < 2:
                 return None
 
-            Point(coords[0])
-            Point(coords[-1])
+            def unit(a, b):
+                dx, dy = b[0] - a[0], b[1] - a[1]
+                length = math.sqrt(dx * dx + dy * dy)
+                return (dx / length, dy / length) if length else None
 
-            # Direction vectors
-            dx = coords[-1][0] - coords[0][0]
-            dy = coords[-1][1] - coords[0][1]
-            length = math.sqrt(dx * dx + dy * dy)
-            if length == 0:
+            if follow_ends:
+                start_dir = unit(coords[1], coords[0])
+                end_dir = unit(coords[-2], coords[-1])
+            else:
+                overall = unit(coords[0], coords[-1])
+                start_dir = (-overall[0], -overall[1]) if overall else None
+                end_dir = overall
+            if start_dir is None or end_dir is None:
                 return None
-
-            dx /= length
-            dy /= length
 
             # Extend factor (enough to reach boundary)
             extend = polygon.bounds[2] - polygon.bounds[0]  # Width of bbox
 
             # Extend both ends
-            new_start = (coords[0][0] - dx * extend, coords[0][1] - dy * extend)
-            new_end = (coords[-1][0] + dx * extend, coords[-1][1] + dy * extend)
+            new_start = (coords[0][0] + start_dir[0] * extend, coords[0][1] + start_dir[1] * extend)
+            new_end = (coords[-1][0] + end_dir[0] * extend, coords[-1][1] + end_dir[1] * extend)
 
             extended = LineString([new_start, *list(coords), new_end])
 

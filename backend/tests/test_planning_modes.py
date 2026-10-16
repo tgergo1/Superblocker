@@ -219,3 +219,92 @@ def test_large_cells_split_until_they_fit_in_one_pass():
         for piece in partitioner.cells
         if piece.area_hectares > 20
     )
+
+
+def _dogleg_cell():
+    """A 0.02 x 0.01 degree cell crossed by one named street of four segments.
+
+    The street runs north, jogs east across the middle and runs north again,
+    so no straight line along any one segment follows it.
+    """
+    import networkx as nx
+    from shapely.geometry import box
+
+    from app.services.partitioning import city_partitioner as module
+
+    graph = nx.MultiDiGraph()
+    points = [(0.009, 0.0), (0.009, 0.004), (0.011, 0.006), (0.011, 0.008), (0.011, 0.01)]
+    for node, (x, y) in enumerate(points):
+        graph.add_node(node, x=x, y=y)
+    edges = []
+    for node in range(len(points) - 1):
+        graph.add_edge(node, node + 1, 0, highway="residential", name="Dob utca", length=300.0)
+        edges.append((node, node + 1, 0))
+    # A side street off the jog, which the split must not follow.
+    graph.add_node(10, x=0.013, y=0.004)
+    graph.add_edge(2, 10, 0, highway="residential", name="Kazinczy utca", length=300.0)
+    edges.append((2, 10, 0))
+    partitioner = CityPartitioner(
+        graph,
+        BoundingBox(north=0.011, south=-0.001, east=0.021, west=-0.001),
+        min_area_ha=6,
+        max_area_ha=20,
+        minor_boundary_policy="avoid",
+    )
+    polygon = box(0.0, 0.0, 0.02, 0.01)
+    cell = module.SuperblockCell(
+        polygon=polygon,
+        area_hectares=partitioner._calculate_area_hectares(polygon),
+        boundary_edges=[],
+        interior_edges=edges,
+        entry_nodes=[],
+    )
+    return partitioner, cell
+
+
+def test_split_follows_the_whole_street_through_its_bends():
+    partitioner, cell = _dogleg_cell()
+    pieces = partitioner._split_cell(cell)
+    assert len(pieces) == 2
+    street = [(0, 1, 0), (1, 2, 0), (2, 3, 0), (3, 4, 0)]
+    for edge in street:
+        assert edge in partitioner.arterial_edges
+        for piece in pieces:
+            assert edge in piece.boundary_edges
+            assert edge not in piece.interior_edges
+    # The side street is not part of the split and stays inside one half.
+    assert (2, 10, 0) not in partitioner.arterial_edges
+    assert sum((2, 10, 0) in piece.interior_edges for piece in pieces) == 1
+    # A filter on every section of the street, shared by both halves.
+    assert partitioner._quiet_split_streets == {(0, 1), (1, 2), (2, 3), (3, 4)}
+    assert len(partitioner._split_street_filters(pieces[0])) == 4
+
+
+def test_street_chain_stops_at_main_roads_and_sharp_turns():
+    partitioner, cell = _dogleg_cell()
+    adjacency = partitioner._street_adjacency(cell.interior_edges)
+    assert partitioner._street_chain((1, 2, 0), adjacency) == [
+        (0, 1, 0),
+        (1, 2, 0),
+        (2, 3, 0),
+        (3, 4, 0),
+    ]
+    partitioner._arterial_nodes.add(3)
+    assert partitioner._street_chain((1, 2, 0), adjacency) == [(0, 1, 0), (1, 2, 0), (2, 3, 0)]
+    # A right-angle turn ends the street even when the name carries on.
+    partitioner._arterial_nodes.discard(3)
+    partitioner.graph[2][10][0]["name"] = "Dob utca"
+    partitioner.graph[2][3][0]["name"] = "Other utca"
+    partitioner.graph[3][4][0]["name"] = "Other utca"
+    assert partitioner._street_chain((1, 2, 0), adjacency) == [(0, 1, 0), (1, 2, 0)]
+
+
+def test_turn_angles_are_measured_on_the_ground_not_in_degrees():
+    partitioner, _cell = _dogleg_cell()
+    graph = partitioner.graph
+    # At 47.5 N, one degree east then one degree north-east in raw degrees
+    # is a 45 degree turn, but on the ground the second leg runs further north.
+    graph.add_node(100, x=19.0, y=47.5)
+    graph.add_node(101, x=19.001, y=47.5)
+    graph.add_node(102, x=19.002, y=47.501)
+    assert partitioner._turn_degrees(100, 101, 102) == pytest.approx(55.9, abs=0.5)
