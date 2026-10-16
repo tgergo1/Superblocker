@@ -59,8 +59,17 @@ const BUS_GATE_PRESENTATION = {
   purpose: 'Buses, trolleybuses, trams and emergency vehicles pass; general traffic does not.',
 };
 
+const DESTINATION_GATE_PRESENTATION = {
+  symbol: 'C',
+  label: 'Destination-only gate',
+  purpose:
+    'Kivéve célforgalom: residents, deliveries and visitors pass; through traffic is fined. ' +
+    'Used where a full closure would cut homes off.',
+};
+
 function actionPresentation(modification: StreetModification) {
   if (modification.filter_type === 'bus_gate') return BUS_GATE_PRESENTATION;
+  if (modification.filter_type === 'camera_gate') return DESTINATION_GATE_PRESENTATION;
   const presentation = ACTION_PRESENTATION[modification.modification_type];
   if (modification.filter_type === 'emergency_bollard') {
     return {
@@ -72,7 +81,9 @@ function actionPresentation(modification: StreetModification) {
 }
 
 function actionClass(modification: StreetModification): string {
-  return modification.filter_type === 'bus_gate' ? 'bus_gate' : modification.modification_type;
+  if (modification.filter_type === 'bus_gate') return 'bus_gate';
+  if (modification.filter_type === 'camera_gate') return 'destination_gate';
+  return modification.modification_type;
 }
 
 function streetName(modification: StreetModification): string {
@@ -100,6 +111,9 @@ function actionInstruction(modification: StreetModification): string {
           ? ` It keeps ${modification.transit_route_refs.slice(0, 4).join(', ')} on their route.`
           : '';
         return `Install a camera-enforced bus gate on “${name}” at ${location}.${routes}`;
+      }
+      if (modification.filter_type === 'camera_gate') {
+        return `Sign “${name}” at ${location} as “Behajtani tilos, kivéve célforgalom” with an enforcement camera.`;
       }
       return `Install a modal filter on “${name}” at ${location}.`;
     case 'one_way':
