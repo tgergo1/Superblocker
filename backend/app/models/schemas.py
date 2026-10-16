@@ -1644,6 +1644,10 @@ class CityPartition(BaseModel):
     # Superblocks proper (not calm or street-free cells) outside the size range.
     oversized_superblocks: int = 0
     undersized_superblocks: int = 0
+    # Junctions reachable by car today that the whole plan leaves unreachable,
+    # after access changes that stranded streets were reopened.
+    stranded_junctions: int = 0
+    access_changes_reopened: int = 0
     total_modal_filters: int
     total_one_way_conversions: int
     total_street_cuts: int

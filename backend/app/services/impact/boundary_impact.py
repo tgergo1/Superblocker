@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from itertools import pairwise
 from typing import Any
 
 import networkx as nx
@@ -165,6 +166,27 @@ def sample_entry_pairs(
     return pairs, total
 
 
+class _CityRouter:
+    """Routes on the whole planned city, for trips with no local detour."""
+
+    def __init__(self, graph: nx.MultiDiGraph, items: list[SuperblockImpactInput]) -> None:
+        modifications = [mod for item in items for mod in item.modifications]
+        planned = TurnGraphBuilder(graph)._prepare_graph(VehicleClass.CAR, modifications)
+        # Two-way conversions add edges the source graph lacks; keep their data.
+        self.edges = planned
+        self.graph = BoundaryImpactEstimator._collapse(planned)
+        self.interior_edges = {(u, v) for item in items for u, v, _key in item.interior_edges}
+        self._cache: dict[DirectedEdge, tuple[float, list[int]] | None] = {}
+
+    def route(self, a: int, b: int) -> tuple[float, list[int]] | None:
+        if (a, b) not in self._cache:
+            try:
+                self._cache[(a, b)] = nx.bidirectional_dijkstra(self.graph, a, b, weight="seconds")
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                self._cache[(a, b)] = None
+        return self._cache[(a, b)]
+
+
 class BoundaryImpactEstimator:
     """Screen boundary-road load changes for a set of superblocks."""
 
@@ -192,8 +214,10 @@ class BoundaryImpactEstimator:
         measured_edges = 0
         modeled_edges = 0
 
-        for item in superblocks:
-            result, stats, vkm, removed_vkm, measured, modeled = self._estimate_one(item)
+        items = list(superblocks)
+        city = _CityRouter(self.graph, items) if items else None
+        for item in items:
+            result, stats, vkm, removed_vkm, measured, modeled = self._estimate_one(item, city)
             superblock_results.append(result)
             total_displaced += result.displaced_peak_vph
             interior_vkm_removed += removed_vkm
@@ -304,7 +328,7 @@ class BoundaryImpactEstimator:
         return simple
 
     def _estimate_one(
-        self, item: SuperblockImpactInput
+        self, item: SuperblockImpactInput, city: _CityRouter | None = None
     ) -> tuple[
         SuperblockTrafficImpact,
         dict[DirectedEdge, _EdgeStats],
@@ -341,6 +365,11 @@ class BoundaryImpactEstimator:
 
         def edge_data(graph: nx.DiGraph, u: int, v: int) -> dict[str, Any]:
             return local[u][v][graph[u][v]["key"]]
+
+        def route_data(graph: nx.DiGraph, u: int, v: int) -> dict[str, Any]:
+            if graph is planned:
+                return edge_data(graph, u, v)
+            return city.edges[u][v][graph[u][v]["key"]]
 
         cut_through: list[tuple[int, int, list[DirectedEdge]]] = []
         for a, b in pairs:
@@ -392,6 +421,20 @@ class BoundaryImpactEstimator:
             )
             if any(edge in interior for edge in route_edges):
                 continue  # The plan still lets this trip cut through.
+            planned_seconds = plan_distances.get(b)
+            route_graph = planned
+            if planned_seconds is None and city is not None:
+                # No legal detour inside this superblock's ring: an entry on a
+                # filtered split street is a dead end locally, its trips having
+                # come across the street from the neighbour. Route on the whole
+                # planned city instead.
+                found = city.route(a, b)
+                if found is not None:
+                    planned_seconds, city_route = found
+                    route_edges = list(pairwise(city_route))
+                    if any(edge in interior for edge in route_edges):
+                        continue
+                    route_graph = city.graph
             displaced += volume
             for edge in used:
                 removed_on_edge[edge] += volume
@@ -400,25 +443,30 @@ class BoundaryImpactEstimator:
                 * sum(float(edge_data(baseline, u, v).get("length", 0) or 0) for u, v in used)
                 / 1000
             )
-            if b not in plan_route:
+            if planned_seconds is None:
                 unresolved += 1
                 continue
-            detour = max(0.0, plan_distances[b] - base_paths[a][0][b])
+            detour = max(0.0, planned_seconds - base_paths[a][0][b])
             detour_weighted += detour * volume
             detour_volume += volume
             route_km = (
-                sum(float(edge_data(planned, u, v).get("length", 0) or 0) for u, v in route_edges)
+                sum(
+                    float(route_data(route_graph, u, v).get("length", 0) or 0)
+                    for u, v in route_edges
+                )
                 / 1000
             )
             for scenario in settings.scenarios:
                 rerouted = volume * (1 - scenario.evaporation_rate)
                 added_vkm[scenario.name] += rerouted * route_km
                 for edge in route_edges:
-                    if edge not in boundary:
+                    if edge not in boundary and (
+                        route_graph is planned or edge in city.interior_edges
+                    ):
                         continue
                     stat = stats.get(edge)
                     if stat is None:
-                        data = edge_data(planned, *edge)
+                        data = route_data(route_graph, *edge)
                         baseline_volume, measured = edge_baseline_vph(data)
                         name = _first(data.get("name"), None)
                         stat = _EdgeStats(
