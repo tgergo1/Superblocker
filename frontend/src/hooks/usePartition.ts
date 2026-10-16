@@ -25,12 +25,13 @@ export interface PartitionStageInfo {
 }
 
 export const PARTITION_STAGES: Record<PartitionProgress['stage'], PartitionStageInfo> = {
-  network: { stage: 'network', stepNumber: 1, totalSteps: 6, stepName: 'Preparing Network', stepDescription: 'Loading and preparing street network data' },
-  arterials: { stage: 'arterials', stepNumber: 2, totalSteps: 6, stepName: 'Identifying Arterials', stepDescription: 'Finding main roads that will form superblock boundaries' },
-  cells: { stage: 'cells', stepNumber: 3, totalSteps: 6, stepName: 'Creating Cells', stepDescription: 'Polygonizing arterial network to create superblock cells' },
-  constraints: { stage: 'constraints', stepNumber: 4, totalSteps: 6, stepName: 'Enforcing Constraints', stepDescription: 'Computing minimum edge cuts to enforce enter-exit rules' },
-  validation: { stage: 'validation', stepNumber: 5, totalSteps: 6, stepName: 'Validating', stepDescription: 'Checking accessibility and constraint satisfaction' },
-  complete: { stage: 'complete', stepNumber: 6, totalSteps: 6, stepName: 'Complete', stepDescription: 'Partitioning finished' },
+  network: { stage: 'network', stepNumber: 1, totalSteps: 7, stepName: 'Preparing Network', stepDescription: 'Loading and preparing street network data' },
+  arterials: { stage: 'arterials', stepNumber: 2, totalSteps: 7, stepName: 'Identifying Arterials', stepDescription: 'Finding main roads that will form superblock boundaries' },
+  cells: { stage: 'cells', stepNumber: 3, totalSteps: 7, stepName: 'Creating Cells', stepDescription: 'Polygonizing arterial network to create superblock cells' },
+  constraints: { stage: 'constraints', stepNumber: 4, totalSteps: 7, stepName: 'Enforcing Constraints', stepDescription: 'Computing minimum edge cuts to enforce enter-exit rules' },
+  impact: { stage: 'impact', stepNumber: 5, totalSteps: 7, stepName: 'Predicting Traffic', stepDescription: 'Rerouting cut-through trips onto boundary roads' },
+  validation: { stage: 'validation', stepNumber: 6, totalSteps: 7, stepName: 'Validating', stepDescription: 'Checking accessibility and constraint satisfaction' },
+  complete: { stage: 'complete', stepNumber: 7, totalSteps: 7, stepName: 'Complete', stepDescription: 'Partitioning finished' },
 };
 
 export interface PartitionParameters {

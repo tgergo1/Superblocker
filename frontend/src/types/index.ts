@@ -309,6 +309,62 @@ export interface AssignmentComparison {
   limitations: string[];
 }
 
+export interface EvaporationScenario {
+  name: string;
+  evaporation_rate: number;
+  description: string;
+}
+
+export interface TrafficImpactSettings {
+  through_traffic_share: number;
+  peak_hour_share_of_daily: number;
+  max_entry_pairs_per_superblock: number;
+  scenarios: EvaporationScenario[];
+  central_scenario: string;
+  high_increase_percent: number;
+}
+
+export interface BoundaryRoadImpact {
+  osm_id: number;
+  name: string | null;
+  highway: string;
+  baseline_peak_vph: number;
+  capacity_vph: number;
+  added_peak_vph: Record<string, number>;
+  percent_increase_central: number;
+  baseline_volume_capacity_ratio: number;
+  planned_volume_capacity_ratio_central: number;
+  measured: boolean;
+  arterial: boolean;
+  superblock_ids: string[];
+}
+
+export interface SuperblockTrafficImpact {
+  superblock_id: string;
+  entry_pairs_checked: number;
+  cut_through_pairs: number;
+  unresolved_pairs: number;
+  displaced_peak_vph: number;
+  interior_traffic_reduction_percent: number;
+  mean_detour_seconds: number;
+}
+
+export interface TrafficImpactEstimate {
+  method: string;
+  settings: TrafficImpactSettings;
+  traffic_basis: 'modeled_topology' | 'measured_volume' | 'mixed';
+  total_displaced_peak_vph: number;
+  added_boundary_vehicle_km_peak: Record<string, number>;
+  interior_vehicle_km_removed_peak: number;
+  maximum_percent_increase_central: number;
+  roads_over_threshold: number;
+  roads_over_capacity_central: number;
+  minor_roads_loaded: number;
+  boundary_roads: BoundaryRoadImpact[];
+  superblocks: SuperblockTrafficImpact[];
+  limitations: string[];
+}
+
 export interface OperationalValidationSummary {
   validated: boolean;
   all_hard_constraints_passed: boolean;
@@ -394,6 +450,7 @@ export interface CityPartition {
   operational_validation: OperationalValidationSummary;
   active_mode_validation: ActiveModeValidationSummary;
   assignment_comparison: AssignmentComparison;
+  traffic_impact?: TrafficImpactEstimate | null;
   evidence: AnalysisEvidence;
   readiness: PlanReadiness;
   total_area_hectares: number;
@@ -412,7 +469,7 @@ export interface CityPartition {
 }
 
 export interface PartitionProgress {
-  stage: 'network' | 'arterials' | 'cells' | 'constraints' | 'validation' | 'complete';
+  stage: 'network' | 'arterials' | 'cells' | 'constraints' | 'impact' | 'validation' | 'complete';
   percent: number;
   message: string;
   current_superblock?: number;
