@@ -81,6 +81,7 @@ from app.services.impact.boundary_impact import (
     SuperblockImpactInput,
 )
 from app.services.impact.emergency_access import EmergencyAccessChecker
+from app.services.impact.health import HealthEstimator
 from app.services.network.turn_graph import TurnGraphBuilder
 from app.services.partitioning.fast_centrality import sampled_edge_betweenness
 
@@ -1921,6 +1922,13 @@ class CityPartitioner:
             except Exception as error:  # Screening output must not block the plan.
                 logger.warning("Emergency access check failed: %s", error)
 
+        health = None
+        if traffic_impact is not None:
+            try:
+                health = HealthEstimator().estimate(traffic_impact)
+            except Exception as error:  # Screening output must not block the plan.
+                logger.warning("Health estimate failed: %s", error)
+
         pilot_plan = None
         if self._impact_inputs:
             try:
@@ -2089,6 +2097,7 @@ class CityPartitioner:
             public_space=public_space,
             school_streets=school_streets,
             pilot_plan=pilot_plan,
+            health=health,
             osm_context=self.osm_context,
             evidence=evidence,
             readiness=readiness,

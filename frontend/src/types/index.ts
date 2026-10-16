@@ -258,6 +258,26 @@ export interface PilotPlanSummary {
   limitations: string[];
 }
 
+export interface SuperblockHealth {
+  superblock_id: string;
+  interior_noise_change_db_low: number;
+  interior_noise_change_db_high: number;
+  interior_no2_change_percent_low: number;
+  interior_no2_change_percent_high: number;
+}
+
+export interface HealthEstimate {
+  method: string;
+  mean_interior_noise_change_db_low: number;
+  mean_interior_noise_change_db_high: number;
+  mean_interior_no2_change_percent_low: number;
+  mean_interior_no2_change_percent_high: number;
+  boundary_roads_noticeably_louder: number;
+  maximum_boundary_noise_increase_db: number;
+  superblocks: SuperblockHealth[];
+  limitations: string[];
+}
+
 export interface PublicSpaceSummary {
   settings: { reallocation_share: number; max_plazas_per_superblock: number };
   calmed_street_km: number;
@@ -565,6 +585,7 @@ export interface CityPartition {
   public_space?: PublicSpaceSummary | null;
   school_streets?: SchoolStreetSummary | null;
   pilot_plan?: PilotPlanSummary | null;
+  health?: HealthEstimate | null;
   evidence: AnalysisEvidence;
   readiness: PlanReadiness;
   total_area_hectares: number;

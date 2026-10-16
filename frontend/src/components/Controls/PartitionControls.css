@@ -954,7 +954,8 @@
   color: #991b1b;
 }
 
-.partition-controls .public-space-summary {
+.partition-controls .public-space-summary,
+.partition-controls .health-summary {
   margin-top: 8px;
   padding: 7px 9px;
   border-radius: 8px;

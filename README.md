@@ -78,6 +78,15 @@ On the offline Budapest graph, the top ten trials cost about €160k. The whole-
 
 ![Budapest pilot ranking](docs/screenshots/budapest-pilot-ranking.png)
 
+## Noise and air quality
+
+Each plan carries a screening estimate of what it does to noise and NO2, on both sides of the change:
+
+- **Inside superblocks**, noise falls with the through traffic removed: half the traffic is about 3 dB quieter. A 30 km/h limit takes off another 1–3 dB. NO2 falls by the traffic cut times an assumed local-traffic share of street-level NO2 (30–60%).
+- **On main roads**, the diverted traffic makes them louder. Roads that get 3 dB louder or more, roughly a doubling of traffic, are counted as noticeably louder.
+
+On the offline Budapest graph, superblock interiors get about 2–4 dB quieter on average, with 4–7% less NO2. 172 main roads get noticeably louder; the "Keep busy residential streets inside superblocks" option and traffic evaporation both reduce that. These are relative changes, not a noise map or dispersion model; check the NO2 share against the OKIR monitoring stations before quoting a figure.
+
 ## Budapest verification run
 
 Observed in the local app on 2026-08-31 with the default 12 ha target, 6 ha minimum, 20 ha maximum, four entry sectors, the exact Nominatim administrative polygon, and no external traffic/access evidence:
