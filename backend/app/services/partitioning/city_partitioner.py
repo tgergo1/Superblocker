@@ -1792,9 +1792,11 @@ class CityPartitioner:
         split along, can together cut a junction off from every main road,
         stranding the streets behind it. This pass routes on the whole planned
         city and, for each stranded pocket, reopens one access change on its
-        edge, the one least likely to reopen a through route: a one-way first,
-        then a filter inside a superblock, and a split-street filter last.
-        The superblocks it touches are validated again.
+        edge: a one-way first, then a split-street filter (which moves along
+        its street or becomes a destination-only gate, so through traffic
+        stays out), and a filter inside a superblock last, since reopening
+        one sends the superblock back to the solver. The superblocks it
+        touches are validated again.
         """
         if not self.superblocks:
             return
