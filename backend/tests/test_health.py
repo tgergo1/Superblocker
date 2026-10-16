@@ -127,3 +127,31 @@ def test_partition_result_carries_the_health_estimate():
     assert result.health is not None
     assert len(result.health.superblocks) == len(result.traffic_impact.superblocks)
     assert result.health.limitations
+
+
+def test_residents_weight_the_means_and_count_noticeably_quieter_people():
+    estimate = impact(80.0, 10.0)
+    calm = estimate.superblocks[0].model_copy(
+        update={"superblock_id": "sb_2", "interior_traffic_reduction_percent": 10.0}
+    )
+    estimate.superblocks.append(calm)
+    health = HealthEstimator().estimate(estimate, residents={"sb_1": 9_000.0, "sb_2": 1_000.0})
+    by_id = {item.superblock_id: item for item in health.superblocks}
+    assert by_id["sb_1"].residents == 9_000.0
+    assert health.residents_counted == 10_000
+    # sb_1: 80% cut is about -7 dB before the speed bonus; sb_2's 10% cut is not noticeable.
+    assert health.residents_noticeably_quieter == 9_000
+    expected = (
+        9_000 * by_id["sb_1"].interior_noise_change_db_low
+        + 1_000 * by_id["sb_2"].interior_noise_change_db_low
+    ) / 10_000
+    assert health.resident_weighted_noise_change_db_low == pytest.approx(expected, abs=0.06)
+    assert (
+        health.resident_weighted_no2_change_percent_high
+        < health.mean_interior_no2_change_percent_high
+    )
+
+    unweighted = HealthEstimator().estimate(estimate)
+    assert unweighted.residents_counted is None
+    assert unweighted.residents_noticeably_quieter is None
+    assert unweighted.resident_weighted_noise_change_db_low is None

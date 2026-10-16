@@ -1926,13 +1926,6 @@ class CityPartitioner:
             except Exception as error:  # Screening output must not block the plan.
                 logger.warning("Emergency access check failed: %s", error)
 
-        health = None
-        if traffic_impact is not None:
-            try:
-                health = HealthEstimator(self.graph).estimate(traffic_impact, self._impact_inputs)
-            except Exception as error:  # Screening output must not block the plan.
-                logger.warning("Health estimate failed: %s", error)
-
         transit_access = None
         if self.osm_context is not None and self._impact_inputs:
             try:
@@ -1990,6 +1983,15 @@ class CityPartitioner:
                     if item.covered_share < POORLY_SERVED_SHARE
                 )
             )
+
+        health = None
+        if traffic_impact is not None:
+            try:
+                health = HealthEstimator(self.graph).estimate(
+                    traffic_impact, self._impact_inputs, residents
+                )
+            except Exception as error:  # Screening output must not block the plan.
+                logger.warning("Health estimate failed: %s", error)
 
         pilot_plan = None
         if self._impact_inputs:

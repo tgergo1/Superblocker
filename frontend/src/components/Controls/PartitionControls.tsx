@@ -595,6 +595,9 @@ export function PartitionControls({
               {partition.health.boundary_roads_noticeably_louder > 0
                 ? `; ${partition.health.boundary_roads_noticeably_louder} main roads get noticeably louder (3 dB or more).`
                 : '; no main road gets noticeably louder.'}{' '}
+              {partition.health.residents_noticeably_quieter != null
+                ? `${Math.round(partition.health.residents_noticeably_quieter).toLocaleString('en')} residents live on streets that get noticeably quieter (3 dB or more). `
+                : ''}
               Screening estimate.
             </div>
           )}
