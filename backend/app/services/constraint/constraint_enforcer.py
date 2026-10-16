@@ -58,6 +58,12 @@ HIERARCHY_MAP = {
 }
 
 
+# Edges marked with this attribute keep streets behind them reachable in the
+# whole plan; a cut avoids them unless no other cut separates the sectors.
+KEEP_OPEN_ATTRIBUTE = "superblocker_keep_open"
+KEEP_OPEN_CUT_COST = 1_000.0
+
+
 @dataclass
 class SectorAssignment:
     """Entry points organized by sector."""
@@ -631,6 +637,8 @@ class ConstraintEnforcer:
 
         Higher hierarchy roads have higher cut cost (prefer cutting minor roads).
         """
+        if edge_data.get(KEEP_OPEN_ATTRIBUTE):
+            return KEEP_OPEN_CUT_COST
         highway = edge_data.get("highway", "residential")
         if isinstance(highway, list):
             highway = highway[0]
