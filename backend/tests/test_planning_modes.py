@@ -308,3 +308,38 @@ def test_turn_angles_are_measured_on_the_ground_not_in_degrees():
     graph.add_node(101, x=19.001, y=47.5)
     graph.add_node(102, x=19.002, y=47.501)
     assert partitioner._turn_degrees(100, 101, 102) == pytest.approx(55.9, abs=0.5)
+
+
+def test_oversized_cell_splits_unevenly_when_no_even_split_exists():
+    import networkx as nx
+    from shapely.geometry import box
+
+    from app.services.partitioning import city_partitioner as module
+
+    graph = nx.MultiDiGraph()
+    # The only street runs close to the west edge of a 25 ha cell.
+    graph.add_node(1, x=0.0004, y=0.0)
+    graph.add_node(2, x=0.0004, y=0.01)
+    graph.add_edge(1, 2, 0, highway="residential", length=1100.0)
+    partitioner = CityPartitioner(
+        graph,
+        BoundingBox(north=0.011, south=-0.001, east=0.003, west=-0.001),
+        min_area_ha=6,
+        max_area_ha=20,
+        minor_boundary_policy="avoid",
+    )
+    polygon = box(0.0, 0.0, 0.002, 0.01)
+    cell = module.SuperblockCell(
+        polygon=polygon,
+        area_hectares=partitioner._calculate_area_hectares(polygon),
+        boundary_edges=[],
+        interior_edges=[(1, 2, 0)],
+        entry_nodes=[],
+    )
+    assert cell.area_hectares > 20
+    # No split leaves both pieces at the minimum size ...
+    assert partitioner._best_split(cell, [(1, 2, 0)]) is None
+    # ... so the cell splits anyway, leaving a small piece for merging.
+    pieces = partitioner._split_cell(cell)
+    small, large = sorted(piece.area_hectares for piece in pieces)
+    assert 1.5 <= small < 6 < large <= 20
