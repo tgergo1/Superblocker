@@ -795,6 +795,54 @@ def test_cut_that_would_strand_a_street_becomes_a_destination_gate():
     assert VehicleClass.PERMIT in spur.allowed_vehicle_classes
 
 
+def test_pocket_ringed_by_filters_gets_one_destination_gate():
+    import networkx as nx
+
+    from app.models.schemas import (
+        EnforcedSuperblock,
+        ModificationType,
+        StreetModification,
+        VehicleClass,
+    )
+
+    graph = nx.MultiDiGraph()
+    for node, x, y in ((1, 0.0, 0.0), (2, 0.002, 0.0), (3, 0.004, 0.0), (7, 0.003, 0.002)):
+        graph.add_node(node, x=x, y=y)
+    for u, v in ((1, 2), (2, 3), (3, 1), (2, 7), (7, 3)):
+        graph.add_edge(u, v, 0, highway="residential", length=200.0)
+        graph.add_edge(v, u, 0, highway="residential", length=200.0)
+    partitioner = CityPartitioner(
+        graph, BoundingBox(north=0.011, south=-0.001, east=0.021, west=-0.001)
+    )
+    # Junction 7 is reachable only through two filters, one from each side.
+    filters = [
+        StreetModification(u=u, v=v, osm_id=1, modification_type=ModificationType.MODAL_FILTER)
+        for u, v in ((2, 7), (7, 3))
+    ]
+    partitioner.superblocks = [
+        EnforcedSuperblock(
+            id="sb",
+            geometry={},
+            area_hectares=10.0,
+            num_sectors=4,
+            boundary_roads=[],
+            entry_points=[],
+            modifications=filters,
+            constraint_validated=True,
+            interior_roads_count=2,
+            modal_filter_count=2,
+            one_way_conversion_count=0,
+            street_cut_count=0,
+        )
+    ]
+    partitioner._gate_stranded()
+    gate, kept = partitioner.superblocks[0].modifications
+    assert partitioner.stranded_junctions == 0
+    assert partitioner.destination_gates == 1
+    assert VehicleClass.PERMIT in gate.allowed_vehicle_classes
+    assert kept is filters[1]
+
+
 def test_split_follows_a_street_that_changes_tag_along_its_length():
     partitioner, cell = _dogleg_cell()
     # Dob utca turns into a living street halfway along.
