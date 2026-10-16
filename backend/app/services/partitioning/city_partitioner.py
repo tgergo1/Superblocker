@@ -1208,15 +1208,17 @@ class CityPartitioner:
         adjacency = self._street_adjacency(streets) if streets else None
         best = None
         best_balance = float("inf")
-        followed: set[tuple[int, int]] = set()
+        # Both directions of a two-way street share a key; parallel
+        # carriageways between the same junctions do not.
+        followed: set[tuple[int, int, int]] = set()
 
         for edge in candidates:
-            if (min(edge[:2]), max(edge[:2])) in followed:
+            if (min(edge[:2]), max(edge[:2]), edge[2]) in followed:
                 continue
             lines: list[tuple[LineString, list[tuple[int, int, int]]]] = []
             if adjacency is not None:
                 chain = self._street_chain(edge, adjacency)
-                followed.update((min(u, v), max(u, v)) for u, v, _key in chain)
+                followed.update((min(u, v), max(u, v), key) for u, v, key in chain)
                 if len(chain) > 1:
                     line = self._chain_line(chain)
                     if line is not None:
@@ -1284,8 +1286,12 @@ class CityPartitioner:
         points = [self.graph.nodes.get(node, {}) for node in (a, b, c)]
         if any("x" not in point for point in points):
             return 180.0
-        ax, ay = points[1]["x"] - points[0]["x"], points[1]["y"] - points[0]["y"]
-        bx, by = points[2]["x"] - points[1]["x"], points[2]["y"] - points[1]["y"]
+        # Coordinates are degrees: a degree of longitude shrinks with latitude.
+        scale = math.cos(math.radians(points[1]["y"]))
+        ax = (points[1]["x"] - points[0]["x"]) * scale
+        ay = points[1]["y"] - points[0]["y"]
+        bx = (points[2]["x"] - points[1]["x"]) * scale
+        by = points[2]["y"] - points[1]["y"]
         if (ax == 0 and ay == 0) or (bx == 0 and by == 0):
             return 180.0
         return abs(math.degrees(math.atan2(ax * by - ay * bx, ax * bx + ay * by)))

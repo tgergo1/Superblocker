@@ -297,3 +297,14 @@ def test_street_chain_stops_at_main_roads_and_sharp_turns():
     partitioner.graph[2][3][0]["name"] = "Other utca"
     partitioner.graph[3][4][0]["name"] = "Other utca"
     assert partitioner._street_chain((1, 2, 0), adjacency) == [(0, 1, 0), (1, 2, 0)]
+
+
+def test_turn_angles_are_measured_on_the_ground_not_in_degrees():
+    partitioner, _cell = _dogleg_cell()
+    graph = partitioner.graph
+    # At 47.5 N, one degree east then one degree north-east in raw degrees
+    # is a 45 degree turn, but on the ground the second leg runs further north.
+    graph.add_node(100, x=19.0, y=47.5)
+    graph.add_node(101, x=19.001, y=47.5)
+    graph.add_node(102, x=19.002, y=47.501)
+    assert partitioner._turn_degrees(100, 101, 102) == pytest.approx(55.9, abs=0.5)
