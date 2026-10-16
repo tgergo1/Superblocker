@@ -807,6 +807,35 @@ class EmergencyAccessSummary(BaseModel):
     limitations: list[str] = Field(default_factory=list)
 
 
+class PublicSpaceSettings(BaseModel):
+    """Assumptions for the reclaimed public space estimate."""
+
+    reallocation_share: float = Field(default=0.3, ge=0, le=1)
+    max_plazas_per_superblock: int = Field(default=3, ge=0, le=50)
+
+
+class SuperblockPublicSpace(BaseModel):
+    """Street space one superblock calms and could give back."""
+
+    superblock_id: str
+    calmed_street_km: float = Field(ge=0)
+    calmed_carriageway_m2: float = Field(ge=0)
+    reclaimable_m2: float = Field(ge=0)
+    plaza_candidates: list[Coordinates] = Field(default_factory=list)
+
+
+class PublicSpaceSummary(BaseModel):
+    """Citywide calmed streets and reclaimable space."""
+
+    settings: PublicSpaceSettings = Field(default_factory=PublicSpaceSettings)
+    calmed_street_km: float = 0.0
+    calmed_carriageway_m2: float = 0.0
+    reclaimable_m2: float = 0.0
+    plaza_candidates: int = 0
+    superblocks: list[SuperblockPublicSpace] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
 class EvaporationScenario(BaseModel):
     """Share of displaced through traffic assumed to disappear rather than reroute."""
 
@@ -1372,6 +1401,7 @@ class CityPartition(BaseModel):
     traffic_impact: TrafficImpactEstimate | None = None
     filter_design: FilterDesignSummary = Field(default_factory=FilterDesignSummary)
     emergency_access: EmergencyAccessSummary = Field(default_factory=EmergencyAccessSummary)
+    public_space: PublicSpaceSummary | None = None
     osm_context: OsmContext | None = None
     evidence: AnalysisEvidence = Field(
         default_factory=lambda: AnalysisEvidence(
@@ -1440,6 +1470,7 @@ class PartitionRequest(BaseModel):
     assignment_settings: AssignmentSettings = Field(default_factory=AssignmentSettings)
     traffic_impact_settings: TrafficImpactSettings = Field(default_factory=TrafficImpactSettings)
     filter_design_settings: FilterDesignSettings = Field(default_factory=FilterDesignSettings)
+    public_space_settings: PublicSpaceSettings = Field(default_factory=PublicSpaceSettings)
     osm_context: OsmContext | None = None
     fetch_osm_context: bool = True
     target_size_hectares: float = Field(default=12.0, ge=4.0, le=50.0)

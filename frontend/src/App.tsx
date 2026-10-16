@@ -91,6 +91,9 @@ function App() {
   const selectedEmergency = selectedEnforcedSuperblock
     ? partition?.emergency_access?.results.find(item => item.superblock_id === selectedEnforcedSuperblock.id) ?? null
     : null;
+  const selectedSpace = selectedEnforcedSuperblock
+    ? partition?.public_space?.superblocks.find(item => item.superblock_id === selectedEnforcedSuperblock.id) ?? null
+    : null;
   const selectedImpact = selectedEnforcedSuperblock && trafficImpact
     ? trafficImpact.superblocks.find(item => item.superblock_id === selectedEnforcedSuperblock.id) ?? null
     : null;
@@ -275,6 +278,12 @@ function App() {
               <span>Street Cuts:</span>
               <span>{selectedEnforcedSuperblock.street_cut_count}</span>
             </div>
+            {selectedSpace && (
+              <div className="detail-row">
+                <span>Street space to reclaim:</span>
+                <span>{Math.round(selectedSpace.reclaimable_m2).toLocaleString()} m²</span>
+              </div>
+            )}
             {selectedEmergency && (
               <div className="detail-row">
                 <span>Emergency response:</span>

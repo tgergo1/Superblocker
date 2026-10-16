@@ -564,6 +564,13 @@ export function PartitionControls({
               <span>{partition.filter_design?.bus_gates} bus gates</span>
             )}
           </div>
+          {partition.public_space && partition.public_space.calmed_street_km > 0 && (
+            <div className="public-space-summary">
+              {partition.public_space.calmed_street_km.toFixed(0)} km of streets calmed;{' '}
+              {(partition.public_space.reclaimable_m2 / 10_000).toFixed(1)} ha could become public space,
+              with {partition.public_space.plaza_candidates} candidate plazas (green squares on the map).
+            </div>
+          )}
           {partition.emergency_access?.checked && (
             <div className={`emergency-summary ${partition.emergency_access.superblocks_over_threshold > 0 ? 'warn' : ''}`}>
               Emergency response from {partition.emergency_access.stations_used} stations:{' '}

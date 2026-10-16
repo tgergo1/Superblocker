@@ -196,6 +196,24 @@ export interface EmergencyAccessSummary {
   limitations: string[];
 }
 
+export interface SuperblockPublicSpace {
+  superblock_id: string;
+  calmed_street_km: number;
+  calmed_carriageway_m2: number;
+  reclaimable_m2: number;
+  plaza_candidates: Coordinates[];
+}
+
+export interface PublicSpaceSummary {
+  settings: { reallocation_share: number; max_plazas_per_superblock: number };
+  calmed_street_km: number;
+  calmed_carriageway_m2: number;
+  reclaimable_m2: number;
+  plaza_candidates: number;
+  superblocks: SuperblockPublicSpace[];
+  limitations: string[];
+}
+
 export interface FilterDesignSummary {
   transit_routes_loaded: number;
   transit_ways_loaded: number;
@@ -490,6 +508,7 @@ export interface CityPartition {
   traffic_impact?: TrafficImpactEstimate | null;
   filter_design?: FilterDesignSummary;
   emergency_access?: EmergencyAccessSummary;
+  public_space?: PublicSpaceSummary | null;
   evidence: AnalysisEvidence;
   readiness: PlanReadiness;
   total_area_hectares: number;

@@ -52,6 +52,7 @@ from app.models.schemas import (
     PartitionProgress,
     PlanReadiness,
     PlanStage,
+    PublicSpaceSettings,
     ReadinessGate,
     StreetModification,
     StudyAreaMode,
@@ -70,6 +71,7 @@ from app.services.constraint.active_mode_validator import ActiveModeValidator
 from app.services.constraint.constraint_enforcer import ConstraintEnforcer
 from app.services.constraint.operational_validator import OperationalValidator
 from app.services.design.filter_design import FilterDesigner
+from app.services.design.public_space import PublicSpaceEstimator
 from app.services.impact.boundary_impact import (
     BoundaryImpactEstimator,
     SuperblockImpactInput,
@@ -436,6 +438,7 @@ class CityPartitioner:
         traffic_impact_settings: TrafficImpactSettings | None = None,
         osm_context: OsmContext | None = None,
         filter_design_settings: FilterDesignSettings | None = None,
+        public_space_settings: PublicSpaceSettings | None = None,
         progress_callback: Callable[[PartitionProgress], None] | None = None,
     ):
         """
@@ -494,6 +497,7 @@ class CityPartitioner:
         self.traffic_impact_settings = traffic_impact_settings or TrafficImpactSettings()
         self._impact_inputs: list[SuperblockImpactInput] = []
         self.osm_context = osm_context
+        self.public_space_settings = public_space_settings or PublicSpaceSettings()
         self.filter_designer = FilterDesigner(
             graph, osm_context, filter_design_settings or FilterDesignSettings()
         )
@@ -1707,6 +1711,13 @@ class CityPartitioner:
             except Exception as error:  # Screening output must not block the plan.
                 logger.warning("Traffic impact estimate failed: %s", error)
 
+        public_space = (
+            PublicSpaceEstimator(self.graph, self.public_space_settings).estimate(
+                self._impact_inputs
+            )
+            if self._impact_inputs
+            else None
+        )
         emergency_access = EmergencyAccessSummary(
             limitations=["No OpenStreetMap context layers were loaded."]
         )
@@ -1863,6 +1874,7 @@ class CityPartitioner:
             traffic_impact=traffic_impact,
             filter_design=self.filter_designer.finish(),
             emergency_access=emergency_access,
+            public_space=public_space,
             osm_context=self.osm_context,
             evidence=evidence,
             readiness=readiness,

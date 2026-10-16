@@ -953,3 +953,13 @@
   background: #fef2f2;
   color: #991b1b;
 }
+
+.partition-controls .public-space-summary {
+  margin-top: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 10px;
+  line-height: 1.35;
+}

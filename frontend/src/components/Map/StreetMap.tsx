@@ -653,6 +653,31 @@ export function StreetMap({
       }
     }
 
+    // Candidate plazas: junctions whose every leg is a calmed interior street.
+    if (showPartition && partition?.public_space && showDetailedPlanSigns && colorBy !== 'impact') {
+      const plazas = partition.public_space.superblocks.flatMap(item =>
+        item.plaza_candidates.map(point => ({ position: [point.lon, point.lat] as [number, number] })),
+      );
+      if (plazas.length > 0) {
+        result.push(
+          new ScatterplotLayer<{ position: [number, number] }>({
+            id: 'plaza-candidates',
+            data: plazas,
+            pickable: false,
+            stroked: true,
+            filled: true,
+            radiusUnits: 'meters',
+            getRadius: 14,
+            radiusMinPixels: 5,
+            getPosition: d => d.position,
+            getFillColor: [34, 197, 94, 120],
+            getLineColor: [21, 128, 61, 230],
+            lineWidthMinPixels: 1.5,
+          }),
+        );
+      }
+    }
+
     // Entry points layer - simple markers at superblock entries
     if (showPartition && showEntryPoints && partition && showDetailedPlanSigns) {
       const entryPointData = partition.superblocks.flatMap((sb, sbIndex) =>
@@ -1240,6 +1265,10 @@ export function StreetMap({
                   <div className="legend-item">
                     <span className="plan-sign modal-filter">X</span>
                     <span className="legend-label">Modal filter · cars blocked</span>
+                  </div>
+                  <div className="legend-item">
+                    <span className="plan-area-status valid" />
+                    <span className="legend-label">Candidate plaza · all legs calmed</span>
                   </div>
                   <div className="legend-item">
                     <span className="plan-sign bus-gate">B</span>
