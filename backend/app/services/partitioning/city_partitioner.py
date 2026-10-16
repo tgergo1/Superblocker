@@ -1132,7 +1132,11 @@ class CityPartitioner:
             for min_piece_ha in (self.min_area_ha, UNEVEN_SPLIT_MIN_FACTOR * self.min_area_ha):
                 best = self._best_split(
                     cell,
-                    [c for c in self._split_candidates(cell) if c not in rejected],
+                    [
+                        c
+                        for c in self._split_candidates(cell)
+                        if (min(c[:2]), max(c[:2]), c[2]) not in rejected
+                    ],
                     self._split_edges(cell),
                     min_piece_ha,
                 )
@@ -1142,7 +1146,7 @@ class CityPartitioner:
                         [
                             c
                             for c in self._split_candidates(cell, MINOR_SPLIT_HIERARCHIES)
-                            if c not in rejected
+                            if (min(c[:2]), max(c[:2]), c[2]) not in rejected
                         ],
                         self._split_edges(cell, MINOR_SPLIT_HIERARCHIES),
                         min_piece_ha,
@@ -1170,7 +1174,9 @@ class CityPartitioner:
             ):
                 self.arterial_edges -= promoted_edges
                 self._arterial_nodes -= promoted_nodes
-                rejected.add(edge)
+                # Both directions and every section of the street, or the
+                # next attempt rebuilds the same cut from another of them.
+                rejected.update((min(a, b), max(a, b), k) for a, b, k in [edge, *chain])
                 continue
             if quiet_street:
                 # A filter on every section of the street, so neither half of

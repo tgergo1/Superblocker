@@ -438,6 +438,7 @@ def test_split_never_leaves_a_piece_without_entries():
     graph.add_edge(100, 102, 0, highway="primary", length=1650.0)
     graph.add_edge(102, 101, 0, highway="primary", length=550.0)
     graph.add_edge(1, 2, 0, highway="residential", length=220.0)
+    graph.add_edge(2, 1, 0, highway="residential", length=220.0)
     graph.add_edge(102, 3, 0, highway="residential", length=900.0)
     graph.add_edge(3, 4, 0, highway="residential", length=350.0)
     partitioner = CityPartitioner(
@@ -454,5 +455,6 @@ def test_split_never_leaves_a_piece_without_entries():
     pieces = partitioner._split_cell(cell)
     for piece in pieces:
         assert piece.entry_nodes or not piece.interior_edges
-    # A rejected cut leaves no boundary road behind.
-    assert (1, 2, 0) not in partitioner.arterial_edges or len(pieces) > 1
+    # A rejected cut leaves no boundary road behind, in either direction.
+    if len(pieces) == 1:
+        assert not {(1, 2, 0), (2, 1, 0)} & partitioner.arterial_edges
