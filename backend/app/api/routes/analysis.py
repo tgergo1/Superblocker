@@ -538,7 +538,7 @@ def run_partition_sync(
     filter_design_settings=None,
     public_space_settings=None,
     school_street_settings=None,
-    minor_road_boundaries="allow",
+    minor_road_boundaries="avoid",
     planning_mode="superblocks",
 ):
     """

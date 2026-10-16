@@ -1663,9 +1663,12 @@ class PartitionRequest(BaseModel):
     filter_design_settings: FilterDesignSettings = Field(default_factory=FilterDesignSettings)
     public_space_settings: PublicSpaceSettings = Field(default_factory=PublicSpaceSettings)
     school_street_settings: SchoolStreetSettings = Field(default_factory=SchoolStreetSettings)
-    # "avoid" keeps busy residential and living streets inside cells instead of
-    # promoting them to boundary roads on centrality alone.
-    minor_road_boundaries: Literal["allow", "avoid"] = "allow"
+    # "avoid" (default) keeps busy residential and living streets inside cells
+    # instead of promoting them to boundary roads on centrality alone; oversized
+    # cells then split on quiet residential streets with a filter. On the
+    # offline Budapest graph it gives smaller cells and loads 1 minor road
+    # instead of 1,350. "allow" is the older behaviour.
+    minor_road_boundaries: Literal["allow", "avoid"] = "avoid"
     osm_context: OsmContext | None = None
     fetch_osm_context: bool = True
     # "circulation_sectors" is Ghent's circulation plan: a few large sectors

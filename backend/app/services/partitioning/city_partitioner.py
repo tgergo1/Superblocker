@@ -473,7 +473,7 @@ class CityPartitioner:
         filter_design_settings: FilterDesignSettings | None = None,
         public_space_settings: PublicSpaceSettings | None = None,
         school_street_settings: SchoolStreetSettings | None = None,
-        minor_boundary_policy: str = "allow",
+        minor_boundary_policy: str = "avoid",
         use_centrality_boundaries: bool = True,
         progress_callback: Callable[[PartitionProgress], None] | None = None,
     ):
