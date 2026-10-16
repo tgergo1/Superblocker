@@ -43,9 +43,11 @@ from app.models.schemas import (
     DemandModel,
     EnforcedSuperblock,
     EntryPoint,
+    FilterDesignSettings,
     ImpactValidationSummary,
     NetworkAuthorityMode,
     OperationalRequirement,
+    OsmContext,
     PartitionProgress,
     PlanReadiness,
     PlanStage,
@@ -66,6 +68,7 @@ from app.services.assignment.network_assignment import (
 from app.services.constraint.active_mode_validator import ActiveModeValidator
 from app.services.constraint.constraint_enforcer import ConstraintEnforcer
 from app.services.constraint.operational_validator import OperationalValidator
+from app.services.design.filter_design import FilterDesigner
 from app.services.impact.boundary_impact import (
     BoundaryImpactEstimator,
     SuperblockImpactInput,
@@ -429,6 +432,8 @@ class CityPartitioner:
         demand_model: DemandModel | None = None,
         assignment_settings: AssignmentSettings | None = None,
         traffic_impact_settings: TrafficImpactSettings | None = None,
+        osm_context: OsmContext | None = None,
+        filter_design_settings: FilterDesignSettings | None = None,
         progress_callback: Callable[[PartitionProgress], None] | None = None,
     ):
         """
@@ -486,6 +491,10 @@ class CityPartitioner:
         self.assignment_settings = assignment_settings or AssignmentSettings()
         self.traffic_impact_settings = traffic_impact_settings or TrafficImpactSettings()
         self._impact_inputs: list[SuperblockImpactInput] = []
+        self.osm_context = osm_context
+        self.filter_designer = FilterDesigner(
+            graph, osm_context, filter_design_settings or FilterDesignSettings()
+        )
         self.progress_callback = progress_callback
 
         # Convert graph to GeoDataFrames for spatial operations
@@ -1201,6 +1210,9 @@ class CityPartitioner:
         except Exception as e:
             logger.warning(f"Constraint enforcement failed for cell {index}: {e}")
             return self._create_simple_superblock(cell, index, constraint_validated=False)
+        # Design each action for buses and emergency vehicles. Car topology is
+        # unchanged, so the validations below still test the solver's result.
+        modifications = self.filter_designer.design(modifications)
 
         # Build entry points with sector info
         entry_points = []
@@ -1835,6 +1847,8 @@ class CityPartitioner:
             active_mode_validation=active_mode_validation,
             assignment_comparison=assignment_comparison,
             traffic_impact=traffic_impact,
+            filter_design=self.filter_designer.finish(),
+            osm_context=self.osm_context,
             evidence=evidence,
             readiness=readiness,
             total_area_hectares=total_area,

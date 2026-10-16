@@ -66,7 +66,7 @@ const ROAD_COLORS: Record<number, [number, number, number, number]> = {
 
 const DEFAULT_ROAD_COLOR: [number, number, number, number] = [128, 128, 128, 200];
 
-type PlanActionType = 'modal_filter' | 'one_way' | 'two_way' | 'turn_restriction' | 'full_closure';
+type PlanActionType = 'modal_filter' | 'bus_gate' | 'one_way' | 'two_way' | 'turn_restriction' | 'full_closure';
 
 interface PlanMarkerDatum {
   position: [number, number];
@@ -95,6 +95,14 @@ const PLAN_ACTION_STYLES: Record<PlanActionType, {
     text: [255, 255, 255, 255],
     symbol: 'X',
     title: 'Modal filter',
+  },
+  bus_gate: {
+    line: [4, 120, 87, 255],
+    markerFill: [4, 120, 87, 255],
+    markerLine: [255, 255, 255, 255],
+    text: [255, 255, 255, 255],
+    symbol: 'B',
+    title: 'Bus gate',
   },
   one_way: {
     line: [37, 99, 235, 255],
@@ -276,7 +284,7 @@ export function StreetMap({
     partition.superblocks.forEach(sb => {
       sb.modifications.forEach(mod => {
         const display = {
-          type: mod.modification_type,
+          type: mod.filter_type === 'bus_gate' ? 'bus_gate' : mod.modification_type,
           direction: mod.direction
         };
         if (mod.modification_type !== 'one_way' || mod.direction === 'u_to_v') {
@@ -1232,6 +1240,10 @@ export function StreetMap({
                   <div className="legend-item">
                     <span className="plan-sign modal-filter">X</span>
                     <span className="legend-label">Modal filter · cars blocked</span>
+                  </div>
+                  <div className="legend-item">
+                    <span className="plan-sign bus-gate">B</span>
+                    <span className="legend-label">Bus gate · buses and emergency pass</span>
                   </div>
                   <div className="legend-item">
                     <span className="plan-sign one-way">&gt;</span>

@@ -53,6 +53,28 @@ const PLAN_STAGE_LABELS: Record<CityPartition['readiness']['status'], string> = 
   approved_for_permanent_works: 'Approved for permanent works',
 };
 
+const BUS_GATE_PRESENTATION = {
+  symbol: 'B',
+  label: 'Bus gate',
+  purpose: 'Buses, trolleybuses, trams and emergency vehicles pass; general traffic does not.',
+};
+
+function actionPresentation(modification: StreetModification) {
+  if (modification.filter_type === 'bus_gate') return BUS_GATE_PRESENTATION;
+  const presentation = ACTION_PRESENTATION[modification.modification_type];
+  if (modification.filter_type === 'emergency_bollard') {
+    return {
+      ...presentation,
+      purpose: 'Planters stop through traffic; a lockable bollard lets emergency vehicles through.',
+    };
+  }
+  return presentation;
+}
+
+function actionClass(modification: StreetModification): string {
+  return modification.filter_type === 'bus_gate' ? 'bus_gate' : modification.modification_type;
+}
+
 function streetName(modification: StreetModification): string {
   return modification.name?.trim() || `OSM way ${modification.osm_id}`;
 }
@@ -73,6 +95,12 @@ function actionInstruction(modification: StreetModification): string {
 
   switch (modification.modification_type) {
     case 'modal_filter':
+      if (modification.filter_type === 'bus_gate') {
+        const routes = modification.transit_route_refs?.length
+          ? ` It keeps ${modification.transit_route_refs.slice(0, 4).join(', ')} on their route.`
+          : '';
+        return `Install a camera-enforced bus gate on “${name}” at ${location}.${routes}`;
+      }
       return `Install a modal filter on “${name}” at ${location}.`;
     case 'one_way':
       return `Make “${name}” one-way at ${location}; follow the > direction shown on the map.`;
@@ -532,7 +560,16 @@ export function PartitionControls({
             <span>{partition.total_one_way_conversions} one-way changes</span>
             <span>{partition.total_two_way_conversions} two-way access changes</span>
             <span>{partition.total_street_cuts} street cuts</span>
+            {(partition.filter_design?.bus_gates ?? 0) > 0 && (
+              <span>{partition.filter_design?.bus_gates} bus gates</span>
+            )}
           </div>
+          {partition.filter_design && partition.filter_design.protected_route_refs.length > 0 && (
+            <div className="transit-protection">
+              Keeps {partition.filter_design.protected_route_refs.length} bus, trolleybus and tram
+              routes running through superblocks via bus gates.
+            </div>
+          )}
           {partition.total_unreachable_access_targets > 0 && (
             <div className="warning-banner">
               {partition.total_unreachable_access_targets} supplied access targets lack modeled entry-and-return access
@@ -570,10 +607,10 @@ export function PartitionControls({
           </p>
           <ol className="street-action-list">
             {streetActions.slice(0, visibleActionCount).map(({ modification, superblockIndex, key }) => {
-              const presentation = ACTION_PRESENTATION[modification.modification_type];
+              const presentation = actionPresentation(modification);
               return (
-                <li key={key} className={`street-action-item ${modification.modification_type}`}>
-                  <span className={`action-sign ${modification.modification_type}`} aria-hidden="true">
+                <li key={key} className={`street-action-item ${actionClass(modification)}`}>
+                  <span className={`action-sign ${actionClass(modification)}`} aria-hidden="true">
                     {presentation.symbol}
                   </span>
                   <div className="street-action-copy">

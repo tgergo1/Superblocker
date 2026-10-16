@@ -761,6 +761,10 @@
   background: #dc2626;
 }
 
+.plan-sign.bus-gate {
+  background: #047857;
+}
+
 .plan-sign.one-way {
   border-color: #2563eb;
   background: white;

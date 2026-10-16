@@ -303,6 +303,38 @@ class EntryPoint(BaseModel):
     access_type: str = "vehicle"  # 'vehicle', 'bicycle', 'pedestrian', 'all'
 
 
+class TransitRoute(BaseModel):
+    """One OSM public transport route relation and the ways it runs on."""
+
+    relation_id: int
+    mode: Literal["bus", "trolleybus", "tram", "minibus", "share_taxi"]
+    ref: str | None = Field(default=None, max_length=50)
+    name: str | None = Field(default=None, max_length=300)
+    way_ids: list[int] = Field(default_factory=list, max_length=20_000)
+
+
+class ContextFacility(BaseModel):
+    """A point of interest that shapes access design."""
+
+    osm_type: Literal["node", "way", "relation"]
+    osm_id: int
+    kind: Literal["fire_station", "ambulance_station", "school", "kindergarten"]
+    name: str | None = Field(default=None, max_length=300)
+    coordinates: Coordinates
+
+
+class OsmContext(BaseModel):
+    """Transit and facility layers loaded with the street network."""
+
+    source: str = Field(default="OpenStreetMap contributors (ODbL)", max_length=300)
+    transit_routes: list[TransitRoute] = Field(default_factory=list, max_length=10_000)
+    facilities: list[ContextFacility] = Field(default_factory=list, max_length=50_000)
+    limitations: list[str] = Field(default_factory=list)
+
+    def transit_way_ids(self) -> set[int]:
+        return {way_id for route in self.transit_routes for way_id in route.way_ids}
+
+
 class StreetModification(BaseModel):
     """A modification to a street segment to enforce superblock constraints."""
 
@@ -325,6 +357,10 @@ class StreetModification(BaseModel):
     turn_from_osm_id: int | None = Field(default=None, gt=0)
     turn_to_osm_id: int | None = Field(default=None, gt=0)
     via_node_id: int | None = None
+    filter_type: (
+        Literal["planter", "emergency_bollard", "camera_gate", "bus_gate", "school_street"] | None
+    ) = None
+    transit_route_refs: list[str] = Field(default_factory=list, max_length=200)
 
 
 class TurnRestriction(BaseModel):
@@ -720,6 +756,28 @@ class AssignmentComparison(BaseModel):
     boundary_capacity_passed: bool = False
     spillover_passed: bool = False
     all_demand_assigned: bool = False
+    limitations: list[str] = Field(default_factory=list)
+
+
+class FilterDesignSettings(BaseModel):
+    """How generated filters are built and who may pass them."""
+
+    bus_gates_on_transit_routes: bool = True
+    emergency_passable_filters: bool = True
+
+
+class FilterDesignSummary(BaseModel):
+    """What the filter design step did with transit and emergency access."""
+
+    transit_routes_loaded: int = Field(default=0, ge=0)
+    transit_ways_loaded: int = Field(default=0, ge=0)
+    facilities_loaded: int = Field(default=0, ge=0)
+    bus_gates: int = Field(default=0, ge=0)
+    emergency_bollards: int = Field(default=0, ge=0)
+    planters: int = Field(default=0, ge=0)
+    closures_converted_to_gates: int = Field(default=0, ge=0)
+    one_way_changes_on_transit: int = Field(default=0, ge=0)
+    protected_route_refs: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
 
 
@@ -1286,6 +1344,8 @@ class CityPartition(BaseModel):
     )
     assignment_comparison: AssignmentComparison = Field(default_factory=AssignmentComparison)
     traffic_impact: TrafficImpactEstimate | None = None
+    filter_design: FilterDesignSummary = Field(default_factory=FilterDesignSummary)
+    osm_context: OsmContext | None = None
     evidence: AnalysisEvidence = Field(
         default_factory=lambda: AnalysisEvidence(
             boundary_mode="bounding_box_fallback",
@@ -1352,6 +1412,9 @@ class PartitionRequest(BaseModel):
     demand_model: DemandModel | None = None
     assignment_settings: AssignmentSettings = Field(default_factory=AssignmentSettings)
     traffic_impact_settings: TrafficImpactSettings = Field(default_factory=TrafficImpactSettings)
+    filter_design_settings: FilterDesignSettings = Field(default_factory=FilterDesignSettings)
+    osm_context: OsmContext | None = None
+    fetch_osm_context: bool = True
     target_size_hectares: float = Field(default=12.0, ge=4.0, le=50.0)
     min_area_hectares: float = Field(default=6.0, ge=1.0)
     max_area_hectares: float = Field(default=20.0, le=100.0)

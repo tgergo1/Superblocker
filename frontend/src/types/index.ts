@@ -170,6 +170,21 @@ export interface StreetModification {
   turn_from_osm_id: number | null;
   turn_to_osm_id: number | null;
   via_node_id: number | null;
+  filter_type?: 'planter' | 'emergency_bollard' | 'camera_gate' | 'bus_gate' | 'school_street' | null;
+  transit_route_refs?: string[];
+}
+
+export interface FilterDesignSummary {
+  transit_routes_loaded: number;
+  transit_ways_loaded: number;
+  facilities_loaded: number;
+  bus_gates: number;
+  emergency_bollards: number;
+  planters: number;
+  closures_converted_to_gates: number;
+  one_way_changes_on_transit: number;
+  protected_route_refs: string[];
+  limitations: string[];
 }
 
 export interface UnreachableAddress {
@@ -451,6 +466,7 @@ export interface CityPartition {
   active_mode_validation: ActiveModeValidationSummary;
   assignment_comparison: AssignmentComparison;
   traffic_impact?: TrafficImpactEstimate | null;
+  filter_design?: FilterDesignSummary;
   evidence: AnalysisEvidence;
   readiness: PlanReadiness;
   total_area_hectares: number;

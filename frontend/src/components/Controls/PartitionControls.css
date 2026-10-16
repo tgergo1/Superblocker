@@ -760,6 +760,21 @@
   --action-tint: #fef2f2;
 }
 
+.partition-controls .street-action-item.bus_gate {
+  --action-color: #047857;
+  --action-tint: #ecfdf5;
+}
+
+.partition-controls .transit-protection {
+  margin-top: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: #ecfdf5;
+  color: #065f46;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
 .partition-controls .street-action-item.one_way {
   --action-color: #2563eb;
   --action-tint: #eff6ff;
