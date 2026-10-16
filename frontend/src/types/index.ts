@@ -640,6 +640,8 @@ export interface CityPartition {
   cell_kind_counts?: Partial<Record<CellKind, number>>;
   oversized_superblocks?: number;
   undersized_superblocks?: number;
+  stranded_junctions?: number;
+  access_changes_reopened?: number;
   total_modal_filters: number;
   total_one_way_conversions: number;
   total_street_cuts: number;

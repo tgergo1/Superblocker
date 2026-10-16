@@ -275,9 +275,10 @@ def test_split_follows_the_whole_street_through_its_bends():
     # The side street is not part of the split and stays inside one half.
     assert (2, 10, 0) not in partitioner.arterial_edges
     assert sum((2, 10, 0) in piece.interior_edges for piece in pieces) == 1
-    # A filter on every section of the street, shared by both halves.
-    assert partitioner._quiet_split_streets == {(0, 1), (1, 2), (2, 3), (3, 4)}
-    assert len(partitioner._split_street_filters(pieces[0])) == 4
+    # One filter halfway along the street, shared by both halves. A filter on
+    # every section would cut the side street at node 2 off from both ends.
+    assert partitioner._quiet_split_streets == {(1, 2)}
+    assert len(partitioner._split_street_filters(pieces[0])) == 1
 
 
 def test_street_chain_stops_at_main_roads_and_sharp_turns():
@@ -556,3 +557,66 @@ def test_big_cell_with_one_road_through_is_open_land():
     assert partitioner._size_status(cell.area_hectares, street_area) == SizeStatus.MOSTLY_OPEN_LAND
     # Streets reaching most of the land make it an oversized superblock.
     assert partitioner._size_status(cell.area_hectares, 200.0) == SizeStatus.OVER_MAXIMUM
+
+
+def test_junctions_behind_a_split_street_filter_are_not_entries():
+    import networkx as nx
+
+    partitioner = CityPartitioner(
+        nx.MultiDiGraph(),
+        BoundingBox(north=0.011, south=-0.001, east=0.021, west=-0.001),
+    )
+    # Main road 1-2; split street 2-3-4-5 filtered between 3 and 4; 5 is a
+    # dead end, so 4 and 5 reach no main road along the boundary roads.
+    partitioner._main_road_nodes = {1, 2}
+    partitioner.arterial_edges = {(1, 2, 0), (2, 3, 0), (3, 4, 0), (4, 5, 0)}
+    partitioner._quiet_split_streets = {(3, 4)}
+    assert partitioner._live_boundary_nodes() == {1, 2, 3}
+
+
+def test_repair_reopens_a_filter_that_strands_a_street():
+    import networkx as nx
+    from shapely.geometry import box
+
+    from app.models.schemas import EnforcedSuperblock, ModificationType, StreetModification
+    from app.services.partitioning.city_partitioner import SuperblockCell
+
+    graph = nx.MultiDiGraph()
+    for node, x in ((1, 0.0), (2, 0.002), (3, 0.004), (4, 0.006)):
+        graph.add_node(node, x=x, y=0.0)
+    for u, v, highway in ((1, 2, "primary"), (2, 3, "residential"), (3, 4, "residential")):
+        graph.add_edge(u, v, 0, highway=highway, length=200.0)
+        graph.add_edge(v, u, 0, highway=highway, length=200.0)
+    partitioner = CityPartitioner(
+        graph, BoundingBox(north=0.011, south=-0.001, east=0.021, west=-0.001)
+    )
+    stranding = StreetModification(
+        u=2, v=3, osm_id=1, modification_type=ModificationType.MODAL_FILTER
+    )
+    superblock = EnforcedSuperblock(
+        id="sb",
+        geometry={},
+        area_hectares=10.0,
+        num_sectors=4,
+        boundary_roads=[],
+        entry_points=[],
+        modifications=[stranding],
+        constraint_validated=True,
+        interior_roads_count=2,
+        modal_filter_count=1,
+        one_way_conversion_count=0,
+        street_cut_count=0,
+    )
+    partitioner.superblocks = [superblock]
+    partitioner._superblock_cells["sb"] = SuperblockCell(
+        polygon=box(0, 0, 0.01, 0.01),
+        area_hectares=10.0,
+        boundary_edges=[],
+        interior_edges=[(2, 3, 0), (3, 2, 0), (3, 4, 0), (4, 3, 0)],
+        entry_nodes=[2],
+    )
+    partitioner._repair_access()
+    assert superblock.modifications == []
+    assert superblock.modal_filter_count == 0
+    assert partitioner.reopened_for_access == 1
+    assert partitioner.stranded_junctions == 0

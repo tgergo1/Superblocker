@@ -1588,6 +1588,12 @@ export function StreetMap({
                     <span>{partition.cell_kind_counts.naturally_calm}</span>
                   </div>
                 )}
+                {!!partition.stranded_junctions && (
+                  <div className="info-row warning">
+                    <span>Junctions left without car access:</span>
+                    <span>{partition.stranded_junctions}</span>
+                  </div>
+                )}
                 {!!partition.oversized_superblocks && (
                   <div className="info-row warning">
                     <span>Over the size limit:</span>

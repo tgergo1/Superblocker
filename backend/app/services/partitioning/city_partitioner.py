@@ -17,7 +17,7 @@ import json
 import logging
 import math
 import uuid
-from collections import deque
+from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -139,6 +139,11 @@ LIVING_STREET_SPLIT_HIERARCHIES = frozenset({7})
 # street is open land with a road through it (forest, rail, an airfield), not
 # an oversized superblock: splitting it would only divide fields and forest.
 STREET_REACH_M = 100.0
+MAX_ACCESS_REPAIR_ROUNDS = 10
+# Access changes a repair pass may reopen when they strand streets.
+REPAIRABLE_CHANGES = frozenset(
+    {ModificationType.MODAL_FILTER, ModificationType.FULL_CLOSURE, ModificationType.ONE_WAY}
+)
 OPEN_LAND_STREET_SHARE = 0.5
 
 # Road hierarchy for boundary suitability
@@ -593,6 +598,11 @@ class CityPartitioner:
         self.arterial_edges: set[tuple[int, int, int]] = set()
         self.cells: list[SuperblockCell] = []
         self.superblocks: list[EnforcedSuperblock] = []
+        self._superblock_cells: dict[str, SuperblockCell] = {}
+        self._main_road_nodes: set[int] = set()
+        self._live_nodes: set[int] | None = None
+        self.reopened_for_access = 0
+        self.stranded_junctions = 0
         # Cells with no streets inside are not superblocks; they are only counted.
         self.non_street_cells = 0
 
@@ -612,6 +622,7 @@ class CityPartitioner:
         # Step 2: Identify arterial network
         self._report_progress("arterials", 25, "Identifying arterial roads...")
         self._identify_arterials()
+        self._main_road_nodes = {node for edge in self.arterial_edges for node in edge[:2]}
         self._report_progress("arterials", 40, f"Found {len(self.arterial_edges)} arterial edges")
 
         # Step 3: Create cells by polygonizing arterials
@@ -627,6 +638,7 @@ class CityPartitioner:
         # Step 5: Enforce constraints for each cell
         self._report_progress("constraints", 75, "Enforcing superblock constraints...")
         self._enforce_all_constraints()
+        self._repair_access()
         self._report_progress("constraints", 95, f"Created {len(self.superblocks)} superblocks")
 
         # Step 6: Compute statistics
@@ -1193,11 +1205,25 @@ class CityPartitioner:
                 rejected.update((min(a, b), max(a, b), k) for a, b, k in [edge, *chain])
                 continue
             if quiet_street:
-                # A filter on every section of the street, so neither half of
-                # it becomes a through route between the main roads at its ends.
-                self._quiet_split_streets.update((min(a, b), max(a, b)) for a, b, _k in chain)
+                # One filter halfway along stops through traffic between the
+                # roads at its ends. A filter on every section would also cut
+                # each junction along it off from both ends, stranding the
+                # streets behind it.
+                a, b, _k = self._middle_section(chain)
+                self._quiet_split_streets.add((min(a, b), max(a, b)))
             return pieces
         return [cell]
+
+    def _middle_section(self, chain: list[tuple[int, int, int]]) -> tuple[int, int, int]:
+        """The section of a street that holds its halfway point by length."""
+        lengths = [float(self.graph.edges[edge].get("length", 0) or 0) for edge in chain]
+        half = sum(lengths) / 2
+        walked = 0.0
+        for edge, length in zip(chain, lengths, strict=True):
+            walked += length
+            if walked >= half:
+                return edge
+        return chain[len(chain) // 2]
 
     def _promote_to_boundary(self, u: int, v: int) -> set[tuple[int, int, int]]:
         """Treat every carriageway between ``u`` and ``v`` as a boundary road.
@@ -1645,6 +1671,7 @@ class CityPartitioner:
                     cell.area_hectares, superblock.street_area_hectares
                 )
                 self.superblocks.append(superblock)
+                self._superblock_cells[superblock.id] = cell
                 # Both neighbours see the filter on a shared split street; one owns it.
                 shared = [
                     item
@@ -1662,6 +1689,181 @@ class CityPartitioner:
                         modifications=list(superblock.modifications) + shared,
                     )
                 )
+
+    def _live_boundary_nodes(self) -> set[int]:
+        """Nodes joined to a main road along boundary roads open to cars.
+
+        Boundary roads are the main roads and the streets cells were split
+        along; a split street is closed only at its filter. Computed once,
+        after every split is made.
+        """
+        if self._live_nodes is None:
+            network = nx.Graph()
+            network.add_nodes_from(self._main_road_nodes)
+            network.add_edges_from(
+                (u, v)
+                for u, v, _key in self.arterial_edges
+                if (min(u, v), max(u, v)) not in self._quiet_split_streets
+            )
+            self._live_nodes = {
+                node
+                for component in nx.connected_components(network)
+                if component & self._main_road_nodes
+                for node in component
+            }
+        return self._live_nodes
+
+    def _repair_access(self) -> None:
+        """Reopen the fewest access changes that leave streets unreachable by car.
+
+        Each superblock is designed and validated on its own, treating every
+        junction on its boundary as reachable from outside. Filters in
+        neighbouring superblocks, and the filter on a street two of them were
+        split along, can together cut a junction off from every main road,
+        stranding the streets behind it. This pass routes on the whole planned
+        city and, for each stranded pocket, reopens one access change on its
+        edge, the one least likely to reopen a through route: a one-way first,
+        then a filter inside a superblock, and a split-street filter last.
+        The superblocks it touches are validated again.
+        """
+        if not self.superblocks:
+            return
+        owner: dict[int, EnforcedSuperblock] = {}
+        changes: list[StreetModification] = []
+        for superblock in self.superblocks:
+            for item in superblock.modifications:
+                if id(item) not in owner:
+                    owner[id(item)] = superblock
+                    changes.append(item)
+        if not changes:
+            return
+        planned = TurnGraphBuilder(self.graph)._prepare_graph(VehicleClass.CAR, changes)
+        baseline_core = max(nx.strongly_connected_components(self.graph), key=len)
+        core = max(nx.strongly_connected_components(planned), key=len)
+        stranded = baseline_core - core
+        if not stranded:
+            return
+        quiet = {id(item) for item in self._split_filters.values()}
+
+        def priority(item: StreetModification) -> int:
+            if item.modification_type == ModificationType.ONE_WAY:
+                return 0
+            return 1 if id(item) in quiet else 2
+
+        def removed_edges(item: StreetModification) -> list[tuple[int, int, int, dict]]:
+            if item.modification_type == ModificationType.ONE_WAY:
+                pairs = [(item.v, item.u)] if item.direction == "u_to_v" else [(item.u, item.v)]
+            else:
+                pairs = [(item.u, item.v), (item.v, item.u)]
+            return [
+                (a, b, key, data)
+                for a, b in pairs
+                if self.graph.has_edge(a, b) and not planned.has_edge(a, b)
+                for key, data in self.graph[a][b].items()
+            ]
+
+        def reaches_core(node: int, graph) -> bool:
+            seen = {node}
+            queue = deque([node])
+            while queue:
+                current = queue.popleft()
+                if current in core:
+                    return True
+                for nxt in graph.successors(current):
+                    if nxt not in seen:
+                        seen.add(nxt)
+                        queue.append(nxt)
+            return False
+
+        by_node: dict[int, list[StreetModification]] = defaultdict(list)
+        for item in changes:
+            if item.modification_type not in REPAIRABLE_CHANGES:
+                continue
+            by_node[item.u].append(item)
+            by_node[item.v].append(item)
+        reopened: set[int] = set()
+        undirected = planned.to_undirected(as_view=True)
+        pockets = sorted(
+            nx.connected_components(undirected.subgraph(stranded)), key=lambda p: min(p)
+        )
+        # A pocket behind another pocket reconnects only once the nearer one has.
+        for _round in range(MAX_ACCESS_REPAIR_ROUNDS):
+            remaining = [pocket for pocket in pockets if min(pocket) not in core]
+            if not remaining:
+                break
+            before = len(reopened)
+            for pocket in remaining:
+                self._reopen_one(
+                    pocket, core, planned, by_node, reopened, priority, removed_edges, reaches_core
+                )
+            if len(reopened) == before:
+                break
+        self.stranded_junctions = len(stranded - core)
+        if not reopened:
+            return
+        self.reopened_for_access = len(reopened)
+        for item_id in reopened:
+            self._split_filters = {
+                street: item for street, item in self._split_filters.items() if id(item) != item_id
+            }
+        touched = {owner[item_id].id for item_id in reopened}
+        for superblock in self.superblocks:
+            if superblock.id not in touched:
+                continue
+            superblock.modifications = [
+                item for item in superblock.modifications if id(item) not in reopened
+            ]
+            self._revalidate(superblock)
+        for impact_input in self._impact_inputs:
+            impact_input.modifications = [
+                item for item in impact_input.modifications if id(item) not in reopened
+            ]
+
+    @staticmethod
+    def _reopen_one(
+        pocket, core, planned, by_node, reopened, priority, removed_edges, reaches_core
+    ):
+        """Reopen the first access change on ``pocket``'s edge that reconnects it."""
+        node = min(pocket)
+        border = {
+            id(item): item
+            for member in pocket
+            for item in by_node.get(member, [])
+            if id(item) not in reopened and ((item.u in pocket) != (item.v in pocket))
+        }
+        for item in sorted(border.values(), key=priority):
+            added = removed_edges(item)
+            if not added:
+                continue
+            for a, b, key, data in added:
+                planned.add_edge(a, b, key=key, **data)
+            if reaches_core(node, planned) and reaches_core(node, planned.reverse(copy=False)):
+                reopened.add(id(item))
+                core |= pocket
+                return
+            for a, b, key, _data in added:
+                planned.remove_edge(a, b, key)
+
+    def _revalidate(self, superblock: EnforcedSuperblock) -> None:
+        """Validate a superblock again after access changes were reopened."""
+        cell = self._superblock_cells[superblock.id]
+        sectors: dict[int, list[int]] = defaultdict(list)
+        for entry in superblock.entry_points:
+            sectors[entry.sector].append(entry.node_id)
+        turn_valid, vehicle_class_validation = self._validate_turn_aware_constraints(
+            self._build_interior_subgraph(cell), superblock.modifications, dict(sectors)
+        )
+        superblock.constraint_validated = turn_valid
+        superblock.modeled_directional_validation_passed = turn_valid
+        superblock.turn_aware_validation_passed = turn_valid
+        superblock.vehicle_class_validation = vehicle_class_validation
+        counts = defaultdict(int)
+        for item in superblock.modifications:
+            counts[item.modification_type] += 1
+        superblock.modal_filter_count = counts[ModificationType.MODAL_FILTER]
+        superblock.one_way_conversion_count = counts[ModificationType.ONE_WAY]
+        superblock.street_cut_count = counts[ModificationType.FULL_CLOSURE]
+        superblock.two_way_conversion_count = counts[ModificationType.TWO_WAY]
 
     def _cell_kind(self, cell: SuperblockCell) -> CellKind:
         """Read whether a cell has through routes to remove at all.
@@ -1732,11 +1934,16 @@ class CityPartitioner:
         if interior_graph.number_of_edges() == 0:
             return self._create_simple_superblock(cell, index)
 
-        # Create constraint enforcer
+        # Create constraint enforcer. A junction on a filtered split street
+        # with no open way along the boundary roads to a main road is no real
+        # entry: designing as if traffic could arrive there strands the streets
+        # behind it. It is reached from the superblock's other entries instead.
+        live = self._live_boundary_nodes()
+        entry_nodes = [node for node in cell.entry_nodes if node in live] or cell.entry_nodes
         enforcer = ConstraintEnforcer(
             interior_graph=interior_graph,
             boundary_polygon=cell.polygon,
-            entry_node_ids=cell.entry_nodes,
+            entry_node_ids=entry_nodes,
             num_sectors=self.num_sectors,
         )
 
@@ -2635,6 +2842,8 @@ class CityPartitioner:
                 for sb in self.superblocks
                 if sb.cell_kind == CellKind.SUPERBLOCK and sb.size_status == SizeStatus.OVER_MAXIMUM
             ),
+            stranded_junctions=self.stranded_junctions,
+            access_changes_reopened=self.reopened_for_access,
             undersized_superblocks=sum(
                 1
                 for sb in self.superblocks
