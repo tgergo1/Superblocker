@@ -710,6 +710,17 @@ def test_crossing_out_at_a_shared_corner_is_sealed():
     assert [(m.u, m.v) for m in east.modifications] == [(3, 4)]
 
 
+def test_route_out_along_a_split_street_half_is_sealed():
+    partitioner = _two_superblocks_meeting_at_a_junction()
+    # Junctions 3-4-5 are the open half of a split street, owned by no cell:
+    # a car can enter the west superblock at 1 and leave along it at 5.
+    partitioner._superblock_cells["east"].interior_edges.clear()
+    partitioner._seal_crossings()
+    west, _east = partitioner.superblocks
+    assert partitioner.crossings_sealed == 1
+    assert [(m.u, m.v) for m in west.modifications] == [(2, 3)]
+
+
 def test_crossing_that_is_the_only_way_in_gets_a_destination_gate():
     from app.models.schemas import VehicleClass
 

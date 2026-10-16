@@ -2308,9 +2308,10 @@ class CityPartitioner:
                     parent[nxt] = node
                     if nxt in main:
                         other = owner.get((node, nxt))
-                        # Out onto a main road from another superblock's
-                        # street, even at a corner the two share.
-                        if other is not None and other.id != home and nxt != start:
+                        # Out onto another main road from a neighbour's street,
+                        # even at a corner the two share, or along the open half
+                        # of a split street.
+                        if nxt != start and (other is None or other.id != home):
                             path = [nxt]
                             while parent[path[-1]] is not None:
                                 path.append(parent[path[-1]])
@@ -2330,11 +2331,15 @@ class CityPartitioner:
                     crossing = next(
                         i
                         for i, step in enumerate(steps)
-                        if owner.get(step) is not None and owner[step].id != superblock.id
+                        if owner.get(step) is None or owner[step].id != superblock.id
                     )
-                    candidates = [steps[crossing]]
-                    if crossing > 0:
-                        candidates.append(steps[crossing - 1])
+                    candidates = [
+                        step
+                        for step in (steps[crossing], steps[crossing - 1] if crossing else None)
+                        if step is not None and step in owner
+                    ]
+                    if not candidates:
+                        break
                     for u, v in candidates:
                         target = owner.get((u, v))
                         if target is None or not still_connected(u, v):
