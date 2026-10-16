@@ -310,6 +310,9 @@ class SizeStatus(StrEnum):
     # Over the maximum, but most of its land is out of reach of any street:
     # forest, rail land or an airfield with a road through it.
     MOSTLY_OPEN_LAND = "mostly_open_land"
+    # Over the maximum, but every street that could divide it leaves a piece
+    # too small: one large block such as a housing estate or a works.
+    UNDIVIDABLE_BLOCK = "undividable_block"
 
 
 class EntryPoint(BaseModel):
@@ -1643,6 +1646,7 @@ class CityPartition(BaseModel):
     cell_kind_counts: dict[str, int] = Field(default_factory=dict)
     # Superblocks proper (not calm or street-free cells) outside the size range.
     oversized_superblocks: int = 0
+    undividable_blocks: int = 0
     undersized_superblocks: int = 0
     # Junctions reachable by car today that the whole plan leaves unreachable,
     # after access changes that stranded streets were reopened.

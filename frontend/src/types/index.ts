@@ -581,7 +581,12 @@ export interface PlanReadiness {
 }
 
 export type CellKind = 'superblock' | 'naturally_calm' | 'non_street_land';
-export type SizeStatus = 'within' | 'under_minimum' | 'over_maximum' | 'mostly_open_land';
+export type SizeStatus =
+  | 'within'
+  | 'under_minimum'
+  | 'over_maximum'
+  | 'mostly_open_land'
+  | 'undividable_block';
 
 export interface EnforcedSuperblock {
   id: string;
@@ -639,6 +644,7 @@ export interface CityPartition {
   total_superblocks: number;
   cell_kind_counts?: Partial<Record<CellKind, number>>;
   oversized_superblocks?: number;
+  undividable_blocks?: number;
   undersized_superblocks?: number;
   stranded_junctions?: number;
   access_changes_reopened?: number;

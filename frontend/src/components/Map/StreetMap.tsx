@@ -1600,6 +1600,12 @@ export function StreetMap({
                     <span>{partition.stranded_junctions}</span>
                   </div>
                 )}
+                {!!partition.undividable_blocks && (
+                  <div className="info-row">
+                    <span>Large blocks no street divides:</span>
+                    <span>{partition.undividable_blocks}</span>
+                  </div>
+                )}
                 {!!partition.oversized_superblocks && (
                   <div className="info-row warning">
                     <span>Over the size limit:</span>

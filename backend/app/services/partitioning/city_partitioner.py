@@ -192,6 +192,9 @@ class SuperblockCell:
     boundary_edges: list[tuple[int, int, int]]  # (u, v, key)
     interior_edges: list[tuple[int, int, int]]
     entry_nodes: list[int]
+    # Set when every street split, residential ones included, was tried and
+    # each left a piece too small.
+    no_street_split: bool = False
 
 
 MIN_COMPLETE_COVERAGE_PERCENT = 99.5
@@ -1223,6 +1226,7 @@ class CityPartitioner:
                 if best is not None:
                     break
             if best is None:
+                cell.no_street_split = may_use_minor
                 return [cell]
             polygons, edge, chain = best
             # The street the cell was split on is now a boundary road of both
@@ -1254,6 +1258,7 @@ class CityPartitioner:
                 a, b, _k = self._middle_section(chain)
                 self._quiet_split_streets.add((min(a, b), max(a, b)))
             return pieces
+        cell.no_street_split = may_use_minor
         return [cell]
 
     def _middle_section(self, chain: list[tuple[int, int, int]]) -> tuple[int, int, int]:
@@ -1710,7 +1715,7 @@ class CityPartitioner:
                 if cell.area_hectares > self.max_area_ha:
                     superblock.street_area_hectares = round(self._street_area_hectares(cell), 2)
                 superblock.size_status = self._size_status(
-                    cell.area_hectares, superblock.street_area_hectares
+                    cell.area_hectares, superblock.street_area_hectares, cell.no_street_split
                 )
                 self.superblocks.append(superblock)
                 self._superblock_cells[superblock.id] = cell
@@ -2355,7 +2360,10 @@ class CityPartitioner:
         return reach.intersection(self._project(cell.polygon)).area / 10000
 
     def _size_status(
-        self, area_hectares: float, street_area_hectares: float | None = None
+        self,
+        area_hectares: float,
+        street_area_hectares: float | None = None,
+        no_street_split: bool = False,
     ) -> SizeStatus:
         if area_hectares > self.max_area_ha:
             if (
@@ -2363,6 +2371,8 @@ class CityPartitioner:
                 and street_area_hectares < OPEN_LAND_STREET_SHARE * area_hectares
             ):
                 return SizeStatus.MOSTLY_OPEN_LAND
+            if no_street_split:
+                return SizeStatus.UNDIVIDABLE_BLOCK
             return SizeStatus.OVER_MAXIMUM
         if area_hectares < self.min_area_ha:
             return SizeStatus.UNDER_MINIMUM
@@ -3303,6 +3313,12 @@ class CityPartitioner:
                 1
                 for sb in self.superblocks
                 if sb.cell_kind == CellKind.SUPERBLOCK and sb.size_status == SizeStatus.OVER_MAXIMUM
+            ),
+            undividable_blocks=sum(
+                1
+                for sb in self.superblocks
+                if sb.cell_kind == CellKind.SUPERBLOCK
+                and sb.size_status == SizeStatus.UNDIVIDABLE_BLOCK
             ),
             stranded_junctions=self.stranded_junctions,
             access_changes_reopened=self.reopened_for_access,

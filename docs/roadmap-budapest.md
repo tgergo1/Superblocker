@@ -6,6 +6,7 @@ Rules: free tools and open data only; every feature ships with tests; screening 
 
 ## Done
 
+- [x] Undividable blocks reported as such: a cell over the maximum where every street split, residential ones included, leaves a piece too small now has the size status "undividable block" instead of "over the maximum", and the summary counts them apart. On Budapest all 43 oversized superblocks are undividable blocks (median 24 ha); none is left simply over the limit.
 - [x] No junction left without car access: pockets ringed by several filters, which the access repair could not reopen one change at a time, now get destination-only gates on the changes around and inside them until residents can drive in and out. On Budapest junctions cut off fall from 128 to 0, with 76 more gates (457 in all).
 - [x] Destination-only gates on crossings: a crossing between neighbouring superblocks where every filter would cut a street off now gets a "kivéve célforgalom" gate instead of staying open. On Budapest direct crossings fall from 148 to 6 and all crossing routes from 214 to 54, with 381 gates in total and no junction newly cut off.
 - [x] Destination-only gates for the last through routes: where every cut that would close a superblock's through route also strands streets, the closing design goes in and those cuts become camera-enforced "kivéve célforgalom" (except destination traffic) gates. Residents, deliveries and visitors still drive in. Access checks now route as a resident. On Budapest all 2,598 superblocks pass validation (was 2,555), with 77 gates and no junction newly cut off.
@@ -52,7 +53,7 @@ Rules: free tools and open data only; every feature ships with tests; screening 
 
 Superblock creation comes first; impact, health and data work support it.
 
-1. **Cells still over the maximum.** 43 superblocks stay over 20 ha (median 24 ha) and 5 under 6 ha. The large ones hold only 1 to 16 interior streets, and every split along a street, main or residential, leaves a sliver under 1.2 ha: they are big blocks (estates, works, institutions), not cells a street plan can divide. Next: report them as such rather than as a failure, and check the 5 small ones for a merge.
+1. **Cells under the minimum.** 5 superblocks are under 6 ha (median 4.9 ha). Check whether a merge with a neighbour across a quiet split street is possible.
 2. **Health, next step.** Calibrate the NO2 share against OKIR stations. Resident weighting is done. The gap between people-weighted and per-superblock results came from outer districts left as single cells of 1,000-12,000 ha (no main road to split on) holding about 30% of residents; those now split along residential streets. Remaining: about 5,300 ha of motorway-only or hillside cells, and the 20-100 ha suburban cells that keep their residential streets inside.
 3. **Crossings and diverted traffic.** 54 routes still cross superblocks, mostly through stretches of main road the plan leaves quiet; check them one by one. 860 minor streets carry diverted traffic in the screening; check how much of it is short same-sector loops.
 4. **Data importers.** OpenFreeMap vector basemap.
