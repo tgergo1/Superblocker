@@ -6,8 +6,11 @@ import { RouteValidator } from './components/Routing/RouteValidator';
 import { PlanningWorkbench } from './components/Planning/PlanningWorkbench';
 import { TrafficImpactPanel } from './components/Impact/TrafficImpactPanel';
 import { PilotPlanPanel } from './components/Pilot/PilotPlanPanel';
+import { CapacitySimulatorPanel } from './components/Simulation/CapacitySimulatorPanel';
 import { useSearch } from './hooks/useSearch';
 import { usePartition } from './hooks/usePartition';
+import { useCapacitySimulation } from './hooks/useCapacitySimulation';
+import type { SimulationMapView } from './types/simulation';
 import type {
   BoundingBox,
   ViewState,
@@ -88,6 +91,11 @@ function App() {
     reset: resetPartition,
   } = usePartition(bbox, selectedPlace?.boundary ?? null);
 
+  const simulation = useCapacitySimulation(partition);
+  const [showSimulation, setShowSimulation] = useState(true);
+  const [simulationView, setSimulationView] = useState<SimulationMapView>('change');
+  const simulationOnMap = showSimulation && simulation.result ? simulation.result.links : null;
+
   const activeStreetNetwork = partitionData?.street_network ?? null;
   const trafficImpact = partition?.traffic_impact ?? null;
   const selectedEmergency = selectedEnforcedSuperblock
@@ -152,7 +160,7 @@ function App() {
           streetNetwork={activeStreetNetwork}
           initialViewState={viewState}
           onViewStateChange={setViewState}
-          colorBy={showImpact && trafficImpact ? 'impact' : 'hierarchy'}
+          colorBy={showImpact && trafficImpact && !simulationOnMap ? 'impact' : 'hierarchy'}
           impactScenario={impactScenario}
           partition={partition}
           showPartition={!!partition}
@@ -168,6 +176,8 @@ function App() {
           emptyStateMessage="Run the automated analysis to extract closed cells from the complete selected road network and move cross-traffic to boundary roads."
           hideLegends={routeValidatorExpanded}
           showPilotRanking={showPilotRanking}
+          simulationLinks={simulationOnMap}
+          simulationView={simulationView}
         />
 
         <div className="app-overlay">
@@ -226,6 +236,20 @@ function App() {
                 onShowOnMapChange={setShowImpact}
                 scenario={impactScenario}
                 onScenarioChange={setImpactScenario}
+              />
+            )}
+            {partition && (
+              <CapacitySimulatorPanel
+                result={simulation.result}
+                isRunning={simulation.isRunning}
+                progress={simulation.progress}
+                error={simulation.error}
+                onRun={simulation.run}
+                onCancel={simulation.cancel}
+                showOnMap={showSimulation}
+                onShowOnMapChange={setShowSimulation}
+                mapView={simulationView}
+                onMapViewChange={setSimulationView}
               />
             )}
             {partition?.pilot_plan && partition.pilot_plan.candidates.length > 0 && (

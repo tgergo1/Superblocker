@@ -16,6 +16,11 @@ import type {
   TrafficObservation,
 } from '../types';
 import type { MultiPolygon, Polygon } from 'geojson';
+import type {
+  CapacitySimulationResult,
+  CapacitySimulationSettings,
+  SimulationProgress,
+} from '../types/simulation';
 
 export const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
@@ -433,6 +438,31 @@ export async function exportSimulation(
     { headers: adminHeaders(adminKey) },
   );
   return response.data;
+}
+
+export async function simulateCapacityWithProgress(
+  partition: CityPartition,
+  settings: CapacitySimulationSettings = {},
+  onProgress?: (progress: SimulationProgress) => void,
+  signal?: AbortSignal,
+): Promise<CapacitySimulationResult> {
+  let result: CapacitySimulationResult | undefined;
+  await streamPost(
+    '/simulation/capacity/stream',
+    { partition, settings },
+    (event) => {
+      if (event.type === 'progress') {
+        onProgress?.(event as unknown as SimulationProgress);
+      } else if (event.type === 'complete') {
+        result = event.result as unknown as CapacitySimulationResult;
+        return true;
+      }
+      return false;
+    },
+    signal,
+  );
+  if (!result) throw new Error('The simulation finished without a result');
+  return result;
 }
 
 export default api;

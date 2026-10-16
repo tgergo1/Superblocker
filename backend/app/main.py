@@ -4,7 +4,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import analysis, cache, evidence, jobs, planning, registry, search
+from app.api.routes import (
+    analysis,
+    cache,
+    evidence,
+    jobs,
+    planning,
+    registry,
+    search,
+    simulation,
+)
 from app.core.config import get_settings
 from app.services.jobs.partition_runner import get_partition_job_runner
 from app.services.nominatim_service import close_nominatim_client
@@ -52,6 +61,7 @@ app.include_router(registry.router, prefix=settings.api_v1_prefix, tags=["regist
 app.include_router(jobs.router, prefix=settings.api_v1_prefix, tags=["jobs"])
 app.include_router(planning.router, prefix=settings.api_v1_prefix, tags=["planning"])
 app.include_router(evidence.router, prefix=settings.api_v1_prefix, tags=["evidence"])
+app.include_router(simulation.router, prefix=settings.api_v1_prefix, tags=["simulation"])
 
 
 @app.get("/")
