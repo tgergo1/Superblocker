@@ -2022,7 +2022,7 @@ class CityPartitioner:
                 "would leave streets without car access."
             ).strip(),
         }
-        if item.modification_type != ModificationType.ONE_WAY:
+        if item.modification_type != ModificationType.ONE_WAY and item.filter_type != "bus_gate":
             update |= {
                 "modification_type": ModificationType.MODAL_FILTER,
                 "filter_type": "camera_gate",
@@ -2149,7 +2149,19 @@ class CityPartitioner:
                         sealed += 1
                         break
                     else:
-                        break
+                        # Every filter here cuts a street off: let residents through.
+                        u, v = candidates[0]
+                        for a, b in ((u, v), (v, u)):
+                            if planned.has_edge(a, b):
+                                for key in list(planned[a][b]):
+                                    planned.remove_edge(a, b, key)
+                        target = owner[(u, v)]
+                        target.modifications.append(
+                            self._destination_gate(self._crossing_filter(u, v))
+                        )
+                        target.modal_filter_count += 1
+                        sealed += 1
+                        self.destination_gates += 1
         self.crossings_sealed = sealed
         if sealed:
             by_id = {sb.id: sb for sb in self.superblocks}

@@ -622,11 +622,11 @@ def test_repair_reopens_a_filter_that_strands_a_street():
     assert partitioner.stranded_junctions == 0
 
 
-def test_crossing_from_one_superblock_into_the_next_is_sealed():
+def _two_superblocks_meeting_at_a_junction(main_link=True):
     import networkx as nx
     from shapely.geometry import box
 
-    from app.models.schemas import EnforcedSuperblock, ModificationType
+    from app.models.schemas import EnforcedSuperblock
     from app.services.partitioning.city_partitioner import SuperblockCell
 
     graph = nx.MultiDiGraph()
@@ -648,6 +648,8 @@ def test_crossing_from_one_superblock_into_the_next_is_sealed():
         (4, 5, "residential"),
     )
     for u, v, highway in streets:
+        if highway == "primary" and not main_link:
+            continue
         graph.add_edge(u, v, 0, highway=highway, length=200.0)
         graph.add_edge(v, u, 0, highway=highway, length=200.0)
     partitioner = CityPartitioner(
@@ -681,13 +683,34 @@ def test_crossing_from_one_superblock_into_the_next_is_sealed():
             interior_edges=[e for u, v in interior for e in ((u, v, 0), (v, u, 0))],
             entry_nodes=[],
         )
+    return partitioner
+
+
+def test_crossing_from_one_superblock_into_the_next_is_sealed():
+    from app.models.schemas import ModificationType
+
+    partitioner = _two_superblocks_meeting_at_a_junction()
     partitioner._seal_crossings()
     west, east = partitioner.superblocks
     assert partitioner.crossings_sealed == 1
     assert west.modifications == []
     assert [(m.u, m.v) for m in east.modifications] == [(3, 4)]
     assert east.modifications[0].modification_type == ModificationType.MODAL_FILTER
+    assert east.modifications[0].filter_type != "camera_gate"
     assert east.modal_filter_count == 1
+
+
+def test_crossing_that_is_the_only_way_in_gets_a_destination_gate():
+    from app.models.schemas import VehicleClass
+
+    # Without the main road between them, the crossing is the only link.
+    partitioner = _two_superblocks_meeting_at_a_junction(main_link=False)
+    partitioner._seal_crossings()
+    _west, east = partitioner.superblocks
+    assert partitioner.destination_gates == 1
+    (gate,) = east.modifications
+    assert gate.filter_type == "camera_gate"
+    assert VehicleClass.PERMIT in gate.allowed_vehicle_classes
 
 
 def test_cut_that_would_strand_a_street_becomes_a_destination_gate():
