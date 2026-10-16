@@ -98,6 +98,10 @@ class ConstraintEnforcer:
             num_sectors: Number of angular sectors (default 4 for N/E/S/W-like)
         """
         self.graph = interior_graph.copy()
+        self._base_graph = self.graph
+        # One-way direction scores depend only on the unmodified interior graph,
+        # so each street's best direction is computed once per enforcer.
+        self._direction_cache: dict[tuple[int, int], str] = {}
         self.boundary = boundary_polygon
         self.entry_nodes = set(entry_node_ids)
         self.num_sectors = num_sectors
@@ -714,6 +718,14 @@ class ConstraintEnforcer:
         else:
             return "modal_filter", None
 
+    @staticmethod
+    def _prefers_one_way(edge_data: dict) -> bool:
+        """Higher-hierarchy streets get one-way changes rather than filters."""
+        highway = edge_data.get("highway", "residential")
+        if isinstance(highway, list):
+            highway = highway[0]
+        return HIERARCHY_MAP.get(highway, 6) <= 5
+
     def _should_use_street_cut(self, u: int, v: int, edge_data: dict) -> bool:
         """Choose full closure for minor connector streets that best serve as cuts."""
         highway = edge_data.get("highway", "residential")
@@ -740,32 +752,31 @@ class ConstraintEnforcer:
         if not self.sectors:
             return "u_to_v"
 
+        cacheable = self.graph is getattr(self, "_base_graph", None)
+        cache = getattr(self, "_direction_cache", {})
+        if cacheable and (u, v) in cache:
+            return cache[(u, v)]
+
         best_direction = "u_to_v"
         best_score = float("-inf")
 
         for direction in ["u_to_v", "v_to_u"]:
-            # Create test graph with this edge made one-way
-            test_graph = self.graph.copy()
-
-            if direction == "u_to_v":
-                # Remove v->u edges
-                if test_graph.has_edge(v, u):
-                    edges_to_remove = list(test_graph[v][u].keys())
-                    for k in edges_to_remove:
-                        test_graph.remove_edge(v, u, k)
-            else:
-                # Remove u->v edges
-                if test_graph.has_edge(u, v):
-                    edges_to_remove = list(test_graph[u][v].keys())
-                    for k in edges_to_remove:
-                        test_graph.remove_edge(u, v, k)
-
-            score = self._evaluate_direction_score(test_graph)
+            # Hide the opposite direction in a view instead of copying the
+            # whole graph per candidate, which dominated repairs in large cells.
+            source, target = (v, u) if direction == "u_to_v" else (u, v)
+            hidden = (
+                [(source, target, key) for key in self.graph[source][target]]
+                if self.graph.has_edge(source, target)
+                else []
+            )
+            score = self._evaluate_direction_score(nx.restricted_view(self.graph, [], hidden))
 
             if score > best_score:
                 best_score = score
                 best_direction = direction
 
+        if cacheable:
+            cache[(u, v)] = best_direction
         return best_direction
 
     def _evaluate_direction_score(self, graph: nx.MultiDiGraph) -> float:
@@ -995,6 +1006,14 @@ class ConstraintEnforcer:
                     continue
 
                 for key, edge_data in self.graph[from_node][to_node].items():
+                    cost = self._edge_cut_cost(edge_data)
+                    if self._prefers_one_way(edge_data):
+                        cost += 0.5
+                    # Only a candidate that would win needs its (costly)
+                    # modification type and one-way direction.
+                    if cost >= best_cost:
+                        continue
+
                     mod_type, direction = self._determine_modification_type(
                         from_node,
                         to_node,
@@ -1010,10 +1029,6 @@ class ConstraintEnforcer:
                     )
                     if signature in existing_edges:
                         continue
-
-                    cost = self._edge_cut_cost(edge_data)
-                    if mod_type == "one_way":
-                        cost += 0.5
 
                     if cost < best_cost:
                         best_cost = cost

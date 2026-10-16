@@ -189,3 +189,28 @@ def test_duplicate_reverse_filters_become_one_physical_action():
     assert len(deduplicated) == 1
     assert deduplicated[0].u == 1
     assert deduplicated[0].v == 2
+
+
+def test_one_way_direction_leaves_graph_untouched_and_is_cached():
+    """Direction scoring must not mutate the graph other loops are iterating."""
+    enforcer = build_enforcer(build_graph("tertiary"))
+    before = sorted(enforcer.graph.edges(keys=True))
+
+    direction = enforcer._compute_optimal_one_way_direction(1, 2)
+
+    assert direction in {"u_to_v", "v_to_u"}
+    assert sorted(enforcer.graph.edges(keys=True)) == before
+    assert enforcer._direction_cache[(1, 2)] == direction
+
+
+def test_enforcement_on_tertiary_interior_completes():
+    """Higher-hierarchy interiors run the one-way scoring path without raising."""
+    enforcer = ConstraintEnforcer(
+        interior_graph=build_graph("tertiary"),
+        boundary_polygon=Polygon([(-2, -2), (2, -2), (2, 2), (-2, 2)]),
+        entry_node_ids=[1, 3],
+        num_sectors=4,
+    )
+    modifications, remaining = enforcer.enforce_constraints()
+    assert modifications
+    assert remaining == []
