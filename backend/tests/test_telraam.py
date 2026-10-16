@@ -13,7 +13,7 @@ from app.services.importers.telraam import (
 
 REPORT = {
     "report": [
-        # Morning peak, sensor saw 80% of the hour: 400 / 0.8 = 500 vph.
+        # Morning peak; the API has already corrected the counts for uptime.
         {"segment_id": 9000001, "date": "2026-10-13T07:00:00.000Z", "interval": "hourly",
          "uptime": 0.8, "car": 360, "heavy": 40, "bike": 50, "pedestrian": 80},
         # Higher raw count, but the sensor was mostly blind: dropped.
@@ -23,16 +23,28 @@ REPORT = {
          "uptime": 1.0, "car": 300, "heavy": 20},
         {"segment_id": 9000002, "date": "2026-10-13T07:00:00.000Z", "interval": "hourly",
          "uptime": 0.9, "car": 90, "heavy": 0},
+        # A camera that was not counting.
+        {"segment_id": 9000003, "date": "2026-10-13T07:00:00.000Z", "interval": "hourly",
+         "uptime": 0, "car": 50, "heavy": 0},
     ]
 }  # fmt: skip
 
 
-def test_peak_hour_scales_by_uptime_and_skips_blind_hours():
+def test_peak_hour_skips_blind_hours_without_rescaling():
     peaks = peak_hours(REPORT)
 
-    assert peaks[9000001].volume_vph == 500
+    assert peaks[9000001].volume_vph == 400
     assert peaks[9000001].hour_start == "2026-10-13T07:00:00.000Z"
-    assert peaks[9000002].volume_vph == 100
+    assert peaks[9000002].volume_vph == 90
+    assert 9000003 not in peak_hours(REPORT, min_uptime=0)
+
+
+def test_segments_on_one_way_give_one_observation_with_the_busiest_peak():
+    observations = import_telraam_observations(REPORT, {9000001: 123, 9000002: 123})
+
+    assert len(observations) == 1
+    assert observations[0].volume_vph == 400
+    assert observations[0].dataset_id == "telraam-segments-9000001,9000002"
 
 
 def test_observations_carry_source_interval_and_confidence():
@@ -41,7 +53,7 @@ def test_observations_carry_source_interval_and_confidence():
     assert len(observations) == 1
     observation = observations[0]
     assert observation.osm_id == 123
-    assert observation.volume_vph == 500
+    assert observation.volume_vph == 400
     assert observation.source == TELRAAM_SOURCE
     assert observation.interval_end.startswith("2026-10-13T08:00:00")
     assert observation.confidence == pytest.approx(0.8)

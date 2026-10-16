@@ -3,12 +3,14 @@
 Telraam (https://telraam.net) publishes hourly counts of cars, heavy vehicles,
 bikes and pedestrians from window-mounted sensors under CC BY 4.0. A sensor
 counts only while it can see the street, so each hour carries an ``uptime``
-share; counts are scaled up by it, and hours below ``min_uptime`` are dropped.
+share. The API already corrects counts for downtime, so uptime only filters
+out unreliable hours (below ``min_uptime``) and sets the confidence.
 
 Telraam segments are its own road pieces, not OpenStreetMap ways, so they are
 matched to the nearest OSM street first. Each segment then yields one
 observation: its busiest valid hour of motor traffic, which is the peak-hour
-volume the traffic estimate uses.
+volume the traffic estimate uses. Where several segments fall on one OSM way,
+the way keeps the busiest of them.
 """
 
 from __future__ import annotations
@@ -69,10 +71,10 @@ def peak_hours(
         if record.get("interval", "hourly") != "hourly":
             continue
         uptime = float(record.get("uptime") or 0)
-        if uptime < min_uptime:
+        # Zero uptime means the camera was not counting at all.
+        if uptime <= 0 or uptime < min_uptime:
             continue
-        motor = float(record.get("car") or 0) + float(record.get("heavy") or 0)
-        volume = round(motor / uptime)
+        volume = round(float(record.get("car") or 0) + float(record.get("heavy") or 0))
         segment = int(record["segment_id"])
         current = peaks.get(segment)
         if current is None or volume > current.volume_vph:
@@ -98,25 +100,30 @@ def import_telraam_observations(
     segment_osm_ids: dict[int, int],
     min_uptime: float = DEFAULT_MIN_UPTIME,
 ) -> list[TrafficObservation]:
-    """One peak-hour observation per matched Telraam segment."""
-    observations: list[TrafficObservation] = []
+    """One peak-hour observation per OSM way with a matched Telraam segment."""
+    by_way: dict[int, list[TelraamPeakHour]] = {}
     for segment, peak in sorted(peak_hours(report, min_uptime).items()):
         osm_id = segment_osm_ids.get(segment)
-        if osm_id is None:
-            continue
+        if osm_id is not None:
+            by_way.setdefault(osm_id, []).append(peak)
+
+    observations: list[TrafficObservation] = []
+    for osm_id, peaks in sorted(by_way.items()):
+        peak = max(peaks, key=lambda item: (item.volume_vph, -item.segment_id))
+        segments = ",".join(str(item.segment_id) for item in peaks)
         observations.append(
             TrafficObservation(
                 osm_id=osm_id,
                 volume_vph=peak.volume_vph,
                 source=TELRAAM_SOURCE,
                 observed_at=peak.hour_start,
-                observation_id=f"telraam-{segment}-{peak.hour_start}",
+                observation_id=f"telraam-{peak.segment_id}-{peak.hour_start}",
                 interval_start=peak.hour_start,
                 interval_end=_hour_end(peak.hour_start),
                 direction="both",
                 vehicle_class=VehicleClass.ALL_MOTOR,
                 confidence=round(min(1.0, peak.uptime), 3),
-                dataset_id=f"telraam-segment-{segment}",
+                dataset_id=f"telraam-segments-{segments}"[:200],
             )
         )
     return observations

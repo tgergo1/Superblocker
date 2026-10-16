@@ -119,7 +119,7 @@ Traffic CSV must contain `osm_id,volume_vph,source,observed_at`. JSON may contai
 
 Measured data must match at least 80% of physical road length before it can satisfy the implementation gate. Sparse observations still drive the measured-volume arterial mode, but the returned readiness blockers state the actual coverage shortfall.
 
-Telraam citizen counts (CC BY 4.0) can stand in for authority counts where those are missing. `POST /api/v1/evidence/import/telraam` (admin key) takes an hourly report from the Telraam API and returns traffic observations, one per segment, for its busiest hour of cars and heavy vehicles. Counts are scaled up by the sensor's uptime, and hours with less than 50% uptime are dropped. Segments are tied to OSM ways by a `segment_id,osm_id` CSV, or matched to the nearest street within 25 m from the Telraam segments GeoJSON and a bounding box. Credit Telraam wherever the results are shown.
+Telraam citizen counts (CC BY 4.0) can stand in for authority counts where those are missing. `POST /api/v1/evidence/import/telraam` (admin key) takes an hourly report from the Telraam API and returns traffic observations, one per segment, for its busiest hour of cars and heavy vehicles. Telraam already corrects counts for sensor downtime; hours with less than 50% uptime are dropped, and a way covered by several segments keeps the busiest. Segments are tied to OSM ways by a `segment_id,osm_id` CSV, or matched to the nearest street within 25 m from the Telraam segments GeoJSON and a bounding box. Credit Telraam wherever the results are shown.
 
 Reference files: [`examples/traffic-observations.csv`](examples/traffic-observations.csv) and [`examples/access-targets.geojson`](examples/access-targets.geojson).
 
