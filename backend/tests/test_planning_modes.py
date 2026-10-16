@@ -631,3 +631,23 @@ def test_split_follows_a_street_that_changes_tag_along_its_length():
     assert len(pieces) == 2
     for edge in [(0, 1, 0), (1, 2, 0), (2, 3, 0), (3, 4, 0)]:
         assert edge in partitioner.arterial_edges
+
+
+def test_motorways_count_as_corridors_in_road_coverage():
+    import networkx as nx
+    from shapely.geometry import Polygon
+
+    graph = nx.MultiDiGraph()
+    for node, x in ((1, 0.0), (2, 0.01), (3, 0.02)):
+        graph.add_node(node, x=x, y=0.0)
+    graph.add_edge(1, 2, 0, highway="motorway", length=800.0)
+    graph.add_edge(2, 3, 0, highway="residential", length=800.0)
+    partitioner = CityPartitioner(
+        graph, BoundingBox(north=0.011, south=-0.001, east=0.021, west=-0.001)
+    )
+    eligible, accounted, percent, _ids = partitioner._calculate_eligible_road_coverage(
+        Polygon(), Polygon()
+    )
+    assert eligible == pytest.approx(1.6)
+    assert accounted == pytest.approx(0.8)
+    assert percent == pytest.approx(50.0)
