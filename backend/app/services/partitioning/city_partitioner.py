@@ -614,6 +614,7 @@ class CityPartitioner:
         self._keep_open: set[tuple[int, int]] = set()
         self._superblock_index: dict[str, int] = {}
         self.stranded_junctions = 0
+        self.destination_gates = 0
         # Cells with no streets inside are not superblocks; they are only counted.
         self.non_street_cells = 0
 
@@ -664,6 +665,7 @@ class CityPartitioner:
                     break
         finally:
             self.num_sectors = sectors
+        self._gate_unresolved()
         self._seal_crossings()
         self._report_progress("constraints", 95, f"Created {len(self.superblocks)} superblocks")
 
@@ -1910,26 +1912,126 @@ class CityPartitioner:
             redesigned = self._enforce_cell_constraints(cell, index)
             if redesigned is None or not redesigned.constraint_validated:
                 continue
-            for field_name in ("cell_kind", "size_status", "street_area_hectares"):
-                setattr(redesigned, field_name, getattr(superblock, field_name))
-            redesigned.id = superblock.id
-            self.superblocks[position] = redesigned
+            self._install_redesign(position, redesigned)
             redesigned_any = True
-            for impact_input in self._impact_inputs:
-                if impact_input.superblock_id == superblock.id:
-                    shared = [
-                        item
-                        for item in impact_input.modifications
-                        if item in self._split_filters.values()
-                        and item not in superblock.modifications
-                    ]
-                    impact_input.modifications = list(redesigned.modifications) + shared
-                    impact_input.entry_sectors = {
-                        entry.node_id: entry.sector for entry in redesigned.entry_points
-                    }
         if redesigned_any:
             self._repair_access()
         return redesigned_any
+
+    def _install_redesign(self, position: int, redesigned: EnforcedSuperblock) -> None:
+        superblock = self.superblocks[position]
+        for field_name in ("cell_kind", "size_status", "street_area_hectares"):
+            setattr(redesigned, field_name, getattr(superblock, field_name))
+        redesigned.id = superblock.id
+        self.superblocks[position] = redesigned
+        for impact_input in self._impact_inputs:
+            if impact_input.superblock_id == superblock.id:
+                shared = [
+                    item
+                    for item in impact_input.modifications
+                    if item in self._split_filters.values() and item not in superblock.modifications
+                ]
+                impact_input.modifications = list(redesigned.modifications) + shared
+                impact_input.entry_sectors = {
+                    entry.node_id: entry.sector for entry in redesigned.entry_points
+                }
+
+    def _gate_unresolved(self) -> None:
+        """Close the last through routes with destination-only gates.
+
+        Some superblocks keep a through route because every cut that closes it
+        strands streets: the access repair reopens the cut, the solver puts it
+        back. There the closing design goes in anyway, and each cut that would
+        leave a street without access becomes a camera-enforced
+        "except destination traffic" gate (célforgalom): residents, deliveries
+        and visitors still drive in, through traffic does not.
+        """
+        if not self._keep_open:
+            return
+        changes = [item for sb in self.superblocks for item in sb.modifications]
+        access = TurnGraphBuilder(self.graph)._prepare_graph(VehicleClass.PERMIT, changes)
+        core = max(nx.strongly_connected_components(access), key=len)
+        for position, superblock in enumerate(self.superblocks):
+            if superblock.constraint_validated:
+                continue
+            cell = self._superblock_cells[superblock.id]
+            if not any(
+                (min(u, v), max(u, v)) in self._keep_open for u, v, _key in cell.interior_edges
+            ):
+                continue
+            redesigned = self._enforce_cell_constraints(cell, self._superblock_index[superblock.id])
+            if redesigned is None or not redesigned.constraint_validated:
+                continue
+            shared = list(self._split_filters.values())
+            for item in superblock.modifications:
+                if item in shared:
+                    continue
+                for a, b, key, data in self._closed_edges(item, access, present=False):
+                    access.add_edge(a, b, key=key, **data)
+            gated = []
+            for item in redesigned.modifications:
+                closed = self._closed_edges(item, access, present=True)
+                for a, b, key, _data in closed:
+                    access.remove_edge(a, b, key)
+                if all(
+                    not (a in core and b in core) or nx.has_path(access, a, b)
+                    for a, b, _key, _data in closed
+                ):
+                    gated.append(item)
+                    continue
+                for a, b, key, data in closed:
+                    access.add_edge(a, b, key=key, **data)
+                gated.append(self._destination_gate(item))
+                self.destination_gates += 1
+            redesigned.modifications = gated
+            self._install_redesign(position, redesigned)
+
+    def _closed_edges(
+        self, item: StreetModification, graph, *, present: bool
+    ) -> list[tuple[int, int, int, dict]]:
+        """Directed source edges ``item`` closes to residents' cars.
+
+        Only those that are (``present``) or are not in ``graph`` are returned.
+        """
+        if VehicleClass.PERMIT in item.allowed_vehicle_classes:
+            return []
+        if item.modification_type == ModificationType.ONE_WAY:
+            pairs = [(item.v, item.u)] if item.direction == "u_to_v" else [(item.u, item.v)]
+        elif item.modification_type in (
+            ModificationType.MODAL_FILTER,
+            ModificationType.FULL_CLOSURE,
+        ):
+            pairs = [(item.u, item.v), (item.v, item.u)]
+        else:
+            return []
+        return [
+            (a, b, key, data)
+            for a, b in pairs
+            if self.graph.has_edge(a, b) and graph.has_edge(a, b) == present
+            for key, data in self.graph[a][b].items()
+        ]
+
+    @staticmethod
+    def _destination_gate(item: StreetModification) -> StreetModification:
+        classes = list(item.allowed_vehicle_classes)
+        classes += [c for c in (VehicleClass.PERMIT, VehicleClass.EMERGENCY) if c not in classes]
+        update = {
+            "allowed_vehicle_classes": classes,
+            "rationale": (
+                f"{item.rationale or ''} Destination traffic only: every full closure here "
+                "would leave streets without car access."
+            ).strip(),
+        }
+        if item.modification_type != ModificationType.ONE_WAY:
+            update |= {
+                "modification_type": ModificationType.MODAL_FILTER,
+                "filter_type": "camera_gate",
+                "construction_treatment": (
+                    "'Kivéve célforgalom' sign with an enforcement camera: residents, "
+                    "deliveries and visitors pass; through traffic is fined"
+                ),
+            }
+        return item.model_copy(update=update)
 
     def _seal_crossings(self) -> None:
         """Close routes that cross from one superblock straight into the next.
@@ -1946,8 +2048,11 @@ class CityPartitioner:
         if not self.superblocks:
             return
         changes = [item for sb in self.superblocks for item in sb.modifications]
-        planned = TurnGraphBuilder(self.graph)._prepare_graph(VehicleClass.CAR, changes)
-        core = max(nx.strongly_connected_components(planned), key=len)
+        builder = TurnGraphBuilder(self.graph)
+        planned = builder._prepare_graph(VehicleClass.CAR, changes)
+        # Access is judged for residents, who may pass destination-only gates.
+        access = builder._prepare_graph(VehicleClass.PERMIT, changes)
+        core = max(nx.strongly_connected_components(access), key=len)
         owner: dict[tuple[int, int], EnforcedSuperblock] = {}
         for superblock in self.superblocks:
             for u, v, _key in self._superblock_cells[superblock.id].interior_edges:
@@ -1970,23 +2075,29 @@ class CityPartitioner:
                     yield nxt
 
         def still_connected(u: int, v: int) -> bool:
-            removed = [
-                (a, b, key, data)
-                for a, b in ((u, v), (v, u))
-                if planned.has_edge(a, b)
-                for key, data in list(planned[a][b].items())
-            ]
-            for a, b, key, _data in removed:
-                planned.remove_edge(a, b, key)
+            removed = {
+                graph: [
+                    (a, b, key, data)
+                    for a, b in ((u, v), (v, u))
+                    if graph.has_edge(a, b)
+                    for key, data in list(graph[a][b].items())
+                ]
+                for graph in (planned, access)
+            }
+            for a, b, key, _data in removed[access]:
+                access.remove_edge(a, b, key)
             # The street stays strongly connected exactly when its two ends can
             # still reach each other both ways without it.
             ok = not (u in core and v in core) or (
-                nx.has_path(planned, u, v) and nx.has_path(planned, v, u)
+                nx.has_path(access, u, v) and nx.has_path(access, v, u)
             )
             if not ok:
-                for a, b, key, data in removed:
-                    planned.add_edge(a, b, key=key, **data)
-            return ok
+                for a, b, key, data in removed[access]:
+                    access.add_edge(a, b, key=key, **data)
+                return False
+            for a, b, key, _data in removed[planned]:
+                planned.remove_edge(a, b, key)
+            return True
 
         def leak_from(start: int, home: str) -> list[int] | None:
             parent = {start: None}
@@ -3091,6 +3202,8 @@ class CityPartitioner:
             ),
             stranded_junctions=self.stranded_junctions,
             access_changes_reopened=self.reopened_for_access,
+            crossings_sealed=self.crossings_sealed,
+            destination_gates=self.destination_gates,
             undersized_superblocks=sum(
                 1
                 for sb in self.superblocks

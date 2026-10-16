@@ -690,6 +690,88 @@ def test_crossing_from_one_superblock_into_the_next_is_sealed():
     assert east.modal_filter_count == 1
 
 
+def test_cut_that_would_strand_a_street_becomes_a_destination_gate():
+    import networkx as nx
+    from shapely.geometry import box
+
+    from app.models.schemas import (
+        EnforcedSuperblock,
+        ModificationType,
+        StreetModification,
+        VehicleClass,
+    )
+    from app.services.partitioning.city_partitioner import SuperblockCell
+
+    graph = nx.MultiDiGraph()
+    for node, x, y in (
+        (1, 0.0, 0.0),
+        (2, 0.002, 0.0),
+        (3, 0.004, 0.0),
+        (5, 0.006, 0.0),
+        (6, 0.003, 0.004),
+        (7, 0.002, 0.002),
+    ):
+        graph.add_node(node, x=x, y=y)
+    streets = (
+        (1, 6, "primary"),
+        (6, 5, "primary"),
+        (1, 2, "residential"),
+        (2, 3, "residential"),
+        (3, 5, "residential"),
+        (2, 7, "residential"),
+    )
+    for u, v, highway in streets:
+        graph.add_edge(u, v, 0, highway=highway, length=200.0)
+        graph.add_edge(v, u, 0, highway=highway, length=200.0)
+    partitioner = CityPartitioner(
+        graph, BoundingBox(north=0.011, south=-0.001, east=0.021, west=-0.001)
+    )
+
+    def superblock(changes, validated):
+        return EnforcedSuperblock(
+            id="sb",
+            geometry={},
+            area_hectares=10.0,
+            num_sectors=4,
+            boundary_roads=[],
+            entry_points=[],
+            modifications=changes,
+            constraint_validated=validated,
+            interior_roads_count=4,
+            modal_filter_count=len(changes),
+            one_way_conversion_count=0,
+            street_cut_count=0,
+        )
+
+    def cut(u, v):
+        return StreetModification(
+            u=u, v=v, osm_id=1, modification_type=ModificationType.MODAL_FILTER
+        )
+
+    partitioner.superblocks = [superblock([], False)]
+    partitioner._superblock_index["sb"] = 0
+    partitioner._superblock_cells["sb"] = SuperblockCell(
+        polygon=box(0, 0, 0.01, 0.01),
+        area_hectares=10.0,
+        boundary_edges=[],
+        interior_edges=[(1, 2, 0), (2, 3, 0), (3, 5, 0), (2, 7, 0)],
+        entry_nodes=[1, 5],
+    )
+    partitioner._keep_open = {(2, 7)}
+    # The only closing design cuts the through street and the spur to 7.
+    partitioner._enforce_cell_constraints = lambda cell, index: superblock(
+        [cut(2, 3), cut(2, 7)], True
+    )
+    partitioner._gate_unresolved()
+    (result,) = partitioner.superblocks
+    through, spur = result.modifications
+    assert result.constraint_validated
+    assert partitioner.destination_gates == 1
+    assert through.filter_type is None
+    assert spur.filter_type == "camera_gate"
+    assert VehicleClass.PERMIT in spur.allowed_vehicle_classes
+
+
 def test_split_follows_a_street_that_changes_tag_along_its_length():
     partitioner, cell = _dogleg_cell()
     # Dob utca turns into a living street halfway along.
