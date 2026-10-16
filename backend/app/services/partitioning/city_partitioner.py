@@ -1803,7 +1803,8 @@ class CityPartitioner:
                     changes.append(item)
         if not changes:
             return
-        planned = TurnGraphBuilder(self.graph)._prepare_graph(VehicleClass.CAR, changes)
+        # Access is for residents, who may pass destination-only gates.
+        planned = TurnGraphBuilder(self.graph)._prepare_graph(VehicleClass.PERMIT, changes)
         baseline_core = max(nx.strongly_connected_components(self.graph), key=len)
         core = max(nx.strongly_connected_components(planned), key=len)
         stranded = baseline_core - core
@@ -1865,13 +1866,30 @@ class CityPartitioner:
             if len(reopened) == before:
                 break
         self.stranded_junctions = len(stranded - core)
+        # A split street with its filter reopened would carry through traffic
+        # between two main roads; it gets a destination-only gate instead.
+        gates = {
+            id(item): self._destination_gate(item)
+            for item in changes
+            if id(item) in reopened and id(item) in quiet
+        }
+        reopened -= gates.keys()
+        if gates:
+            self.destination_gates += len(gates)
+            self._split_filters = {
+                street: gates.get(id(item), item) for street, item in self._split_filters.items()
+            }
+            for superblock in self.superblocks:
+                superblock.modifications = [
+                    gates.get(id(item), item) for item in superblock.modifications
+                ]
+            for impact_input in self._impact_inputs:
+                impact_input.modifications = [
+                    gates.get(id(item), item) for item in impact_input.modifications
+                ]
         if not reopened:
             return
         self.reopened_for_access += len(reopened)
-        for item_id in reopened:
-            self._split_filters = {
-                street: item for street, item in self._split_filters.items() if id(item) != item_id
-            }
         self._keep_open |= {
             (min(owner_item.u, owner_item.v), max(owner_item.u, owner_item.v))
             for owner_item in changes

@@ -853,6 +853,64 @@ def test_pocket_ringed_by_filters_gets_one_destination_gate():
     assert kept is filters[1]
 
 
+def test_repair_gates_a_split_street_filter_instead_of_reopening_it():
+    import networkx as nx
+    from shapely.geometry import box
+
+    from app.models.schemas import (
+        EnforcedSuperblock,
+        ModificationType,
+        StreetModification,
+        VehicleClass,
+    )
+    from app.services.partitioning.city_partitioner import SuperblockCell
+
+    graph = nx.MultiDiGraph()
+    for node, x in ((1, 0.0), (2, 0.002), (3, 0.004), (4, 0.006)):
+        graph.add_node(node, x=x, y=0.0)
+    for u, v, highway in ((1, 2, "primary"), (2, 3, "residential"), (3, 4, "residential")):
+        graph.add_edge(u, v, 0, highway=highway, length=200.0)
+        graph.add_edge(v, u, 0, highway=highway, length=200.0)
+    partitioner = CityPartitioner(
+        graph, BoundingBox(north=0.011, south=-0.001, east=0.021, west=-0.001)
+    )
+    split_filter = StreetModification(
+        u=2, v=3, osm_id=1, modification_type=ModificationType.MODAL_FILTER
+    )
+    # The filter sits on a residential street two superblocks were split along.
+    partitioner._split_filters[(2, 3)] = split_filter
+    superblock = EnforcedSuperblock(
+        id="sb",
+        geometry={},
+        area_hectares=10.0,
+        num_sectors=4,
+        boundary_roads=[],
+        entry_points=[],
+        modifications=[split_filter],
+        constraint_validated=True,
+        interior_roads_count=2,
+        modal_filter_count=1,
+        one_way_conversion_count=0,
+        street_cut_count=0,
+    )
+    partitioner.superblocks = [superblock]
+    partitioner._superblock_cells["sb"] = SuperblockCell(
+        polygon=box(0, 0, 0.01, 0.01),
+        area_hectares=10.0,
+        boundary_edges=[],
+        interior_edges=[(3, 4, 0), (4, 3, 0)],
+        entry_nodes=[2],
+    )
+    partitioner._repair_access()
+    (gate,) = superblock.modifications
+    assert gate.filter_type == "camera_gate"
+    assert VehicleClass.PERMIT in gate.allowed_vehicle_classes
+    assert partitioner._split_filters[(2, 3)] is gate
+    assert partitioner.reopened_for_access == 0
+    assert partitioner.destination_gates == 1
+    assert partitioner.stranded_junctions == 0
+
+
 def test_split_follows_a_street_that_changes_tag_along_its_length():
     partitioner, cell = _dogleg_cell()
     # Dob utca turns into a living street halfway along.
