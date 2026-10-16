@@ -872,3 +872,36 @@ def test_motorways_count_as_corridors_in_road_coverage():
     assert eligible == pytest.approx(1.6)
     assert accounted == pytest.approx(0.8)
     assert percent == pytest.approx(50.0)
+
+
+def test_block_that_no_street_divides_is_reported_as_such():
+    import networkx as nx
+    from shapely.geometry import box
+
+    from app.models.schemas import SizeStatus
+    from app.services.partitioning.city_partitioner import SuperblockCell
+
+    graph = nx.MultiDiGraph()
+    # One residential street, 22 m inside the edge of a 25 ha block.
+    graph.add_node(1, x=0.0002, y=0.0)
+    graph.add_node(2, x=0.0002, y=0.005)
+    graph.add_edge(1, 2, 0, highway="residential", length=555.0)
+    graph.add_edge(2, 1, 0, highway="residential", length=555.0)
+    partitioner = CityPartitioner(
+        graph,
+        BoundingBox(north=0.011, south=-0.001, east=0.021, west=-0.001),
+        min_area_ha=6,
+        max_area_ha=20,
+    )
+    polygon = box(0.0, 0.0, 0.004, 0.005)
+    cell = SuperblockCell(
+        polygon=polygon,
+        area_hectares=partitioner._calculate_area_hectares(polygon),
+        boundary_edges=[],
+        interior_edges=[(1, 2, 0), (2, 1, 0)],
+        entry_nodes=[1, 2],
+    )
+    assert partitioner._split_cell(cell) == [cell]
+    assert cell.no_street_split
+    status = partitioner._size_status(cell.area_hectares, cell.area_hectares, cell.no_street_split)
+    assert status == SizeStatus.UNDIVIDABLE_BLOCK

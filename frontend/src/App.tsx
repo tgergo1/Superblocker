@@ -318,6 +318,8 @@ function App() {
                 {selectedEnforcedSuperblock.area_hectares.toFixed(1)} ha
                 {selectedEnforcedSuperblock.size_status === 'over_maximum' && ' (over the size limit)'}
                 {selectedEnforcedSuperblock.size_status === 'under_minimum' && ' (under the minimum size)'}
+                {selectedEnforcedSuperblock.size_status === 'undividable_block' &&
+                  ' (over the size limit, but no street divides it without leaving a sliver)'}
                 {selectedEnforcedSuperblock.size_status === 'mostly_open_land' &&
                   ` (mostly open land; streets reach ${(selectedEnforcedSuperblock.street_area_hectares ?? 0).toFixed(0)} ha)`}
               </span>
