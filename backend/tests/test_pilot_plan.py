@@ -6,7 +6,9 @@ from app.models.schemas import (
     ModificationType,
     StreetModification,
     SuperblockTrafficImpact,
+    SuperblockTransitAccess,
     TrafficImpactEstimate,
+    TransitAccessSummary,
 )
 from app.services.design.pilot_plan import PilotPlanner, build_cost, trial_cost
 from app.services.impact.boundary_impact import SuperblockImpactInput
@@ -85,3 +87,36 @@ def test_top_n_limits_candidates():
     summary = PilotPlanner(top_n=3).plan(blocks)
     assert len(summary.candidates) == 3
     assert summary.total_trial_cost_eur == 12_500
+
+
+def test_poor_transit_access_lowers_the_rank():
+    blocks = [block("served", 1), block("remote", 1)]
+    impact = TrafficImpactEstimate(
+        superblocks=[traffic("served", 300, 50), traffic("remote", 300, 50)]
+    )
+    transit = TransitAccessSummary(
+        checked=True,
+        superblocks=[
+            SuperblockTransitAccess(superblock_id="served", covered_share=0.9),
+            SuperblockTransitAccess(superblock_id="remote", covered_share=0.2),
+        ],
+    )
+    without = PilotPlanner().plan(blocks, impact)
+    assert without.candidates[0].score == without.candidates[1].score
+
+    summary = PilotPlanner().plan(blocks, impact, transit_access=transit)
+    served, remote = summary.candidates
+    assert (served.superblock_id, remote.superblock_id) == ("served", "remote")
+    assert remote.score == pytest.approx(served.score * 0.85, abs=0.1)
+    assert (served.transit_covered_share, remote.transit_covered_share) == (0.9, 0.2)
+    assert "public transport stop" in summary.limitations[-1]
+
+
+def test_unchecked_transit_access_changes_nothing():
+    blocks = [block("a", 1)]
+    impact = TrafficImpactEstimate(superblocks=[traffic("a", 300, 50)])
+    baseline = PilotPlanner().plan(blocks, impact).candidates[0]
+    summary = PilotPlanner().plan(blocks, impact, transit_access=TransitAccessSummary())
+    assert summary.candidates[0].score == baseline.score
+    assert summary.candidates[0].transit_covered_share is None
+    assert "public transport" not in summary.limitations[-1]

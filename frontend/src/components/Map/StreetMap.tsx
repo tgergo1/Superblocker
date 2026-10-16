@@ -183,6 +183,9 @@ const SUPERBLOCK_COLORS: [number, number, number, number][] = [
 ];
 
 const MUTED_ROAD_COLOR: [number, number, number, number] = [148, 163, 184, 120];
+const POOR_TRANSIT_COLOR: [number, number, number, number] = [147, 51, 234, 220]; // Purple
+// Matches POORLY_SERVED_SHARE in the backend transit access check.
+const POORLY_SERVED_SHARE = 0.5;
 
 // Route colors
 const ROUTE_ARTERIAL_COLOR: [number, number, number, number] = [59, 130, 246, 255]; // Blue
@@ -299,6 +302,17 @@ export function StreetMap({
     });
     return map;
   }, [showModalFilters, showPartition, partition]);
+
+  // Superblocks where less than half the streets are a short walk from a stop.
+  const poorTransitIds = useMemo(() => {
+    const ids = new Set<string>();
+    const access = partition?.transit_access;
+    if (!access?.checked) return ids;
+    access.superblocks.forEach(item => {
+      if (item.covered_share < POORLY_SERVED_SHARE) ids.add(item.superblock_id);
+    });
+    return ids;
+  }, [partition]);
 
   const impactByOsmId = useMemo(() => {
     const map = new Map<number, BoundaryRoadImpact>();
@@ -426,6 +440,8 @@ export function StreetMap({
           pickable: true,
           stroked: true,
           filled: true,
+          // Outline widths are screen pixels so they stay visible at city zoom.
+          lineWidthUnits: 'pixels',
           getPolygon: (d: EnforcedSuperblock) => d.geometry.coordinates,
           getFillColor: (d: EnforcedSuperblock) => {
             if (selectedEnforcedSuperblock?.id === d.id) {
@@ -442,16 +458,18 @@ export function StreetMap({
           getLineColor: (d: EnforcedSuperblock) =>
             selectedEnforcedSuperblock?.id === d.id
               ? [37, 99, 235, 235]
-              : [51, 65, 85, 92],
+              : poorTransitIds.has(d.id)
+                ? POOR_TRANSIT_COLOR
+                : [51, 65, 85, 92],
           getLineWidth: (d: EnforcedSuperblock) =>
-            selectedEnforcedSuperblock?.id === d.id ? 3 : 1,
+            selectedEnforcedSuperblock?.id === d.id ? 3 : poorTransitIds.has(d.id) ? 2.5 : 1,
           onClick: (info: { object?: EnforcedSuperblock }) => {
             if (info.object) onEnforcedSuperblockClick?.(info.object);
           },
           updateTriggers: {
             getFillColor: [selectedEnforcedSuperblock?.id],
-            getLineColor: [selectedEnforcedSuperblock?.id],
-            getLineWidth: [selectedEnforcedSuperblock?.id],
+            getLineColor: [selectedEnforcedSuperblock?.id, poorTransitIds],
+            getLineWidth: [selectedEnforcedSuperblock?.id, poorTransitIds],
           },
         })
       );
@@ -852,7 +870,10 @@ export function StreetMap({
             `${Math.round(item.displaced_peak_vph)} veh/h of through traffic removed; trial with ` +
             `${item.trial_measures} removable measures for about €${Math.round(item.trial_cost_eur / 1000)}k; ` +
             `interior injury risk −${item.interior_injury_reduction_low_percent.toFixed(0)} to ` +
-            `−${item.interior_injury_reduction_high_percent.toFixed(0)}% at 30 km/h.`,
+            `−${item.interior_injury_reduction_high_percent.toFixed(0)}% at 30 km/h.` +
+            (item.transit_covered_share != null && item.transit_covered_share < POORLY_SERVED_SHARE
+              ? ` Only ${Math.round(item.transit_covered_share * 100)}% of its streets are a short walk from a stop, so add a stop or crossing first.`
+              : ''),
         }));
       if (badges.length > 0) {
         result.push(
@@ -914,7 +935,7 @@ export function StreetMap({
     }
 
     return result;
-  }, [analysisBoundary, streetNetwork, superblocks, showSuperblocks, colorBy, impactScenario, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute, modifiedStreets, getStreetModification, showDetailedPlanSigns, boundaryRoadWidth, showPilotRanking]);
+  }, [analysisBoundary, streetNetwork, superblocks, showSuperblocks, colorBy, impactScenario, getLineColor, getLineWidth, hoveredSuperblock, selectedSuperblock, onSuperblockClick, partition, showPartition, showEntryPoints, selectedEnforcedSuperblock, onEnforcedSuperblockClick, route, showRoute, modifiedStreets, getStreetModification, showDetailedPlanSigns, boundaryRoadWidth, showPilotRanking, poorTransitIds]);
 
   // Store overlay reference
   const overlayRef = useRef<MapboxOverlay | null>(null);
@@ -1365,6 +1386,14 @@ export function StreetMap({
                 <span className="plan-area-status invalid" />
                 <span className="legend-label">Modeled cross-sector path remains</span>
               </div>
+              {poorTransitIds.size > 0 && (
+                <div className="legend-item">
+                  <span className="plan-area-status poor-transit" />
+                  <span className="legend-label">
+                    Purple outline: under half the streets within {partition.transit_access?.walk_threshold_m.toFixed(0)} m of a stop
+                  </span>
+                </div>
+              )}
               {showEntryPoints && (
                 <>
                   <div className="legend-section-title">Entry and return direction</div>

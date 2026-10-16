@@ -818,6 +818,11 @@
   background: rgba(239, 68, 68, 0.48);
 }
 
+.plan-area-status.poor-transit {
+  background: transparent;
+  border: 2.5px solid rgb(147, 51, 234);
+}
+
 /* Enhanced legend with direction icons */
 .legend-direction {
   display: flex;
