@@ -323,12 +323,23 @@ class ContextFacility(BaseModel):
     coordinates: Coordinates
 
 
+class TransitStop(BaseModel):
+    """A public transport stop or station entrance people walk to."""
+
+    stop_id: str = Field(..., min_length=1, max_length=100)
+    mode: Literal["bus", "tram", "rail", "subway", "ferry", "other"] = "other"
+    name: str | None = Field(default=None, max_length=300)
+    coordinates: Coordinates
+
+
 class OsmContext(BaseModel):
     """Transit and facility layers loaded with the street network."""
 
     source: str = Field(default="OpenStreetMap contributors (ODbL)", max_length=300)
     transit_routes: list[TransitRoute] = Field(default_factory=list, max_length=10_000)
     facilities: list[ContextFacility] = Field(default_factory=list, max_length=50_000)
+    transit_stops: list[TransitStop] = Field(default_factory=list, max_length=100_000)
+    stop_source: str | None = Field(default=None, max_length=300)
     limitations: list[str] = Field(default_factory=list)
 
     def transit_way_ids(self) -> set[int]:
@@ -933,6 +944,34 @@ class SuperblockHealth(BaseModel):
     interior_no2_change_percent_high: float
 
 
+class SuperblockTransitAccess(BaseModel):
+    """How well one superblock's streets reach public transport on foot."""
+
+    superblock_id: str
+    covered_share: float = Field(..., ge=0, le=1)
+    worst_walk_m: float | None = Field(default=None, ge=0)
+    stops_nearby: int = Field(default=0, ge=0)
+    nearest_stop: str | None = Field(default=None, max_length=300)
+
+
+class TransitAccessSummary(BaseModel):
+    """Walking access from superblock interiors to stops on and around them.
+
+    Superblocks move cars to the boundary roads, so they work when people can
+    walk to a stop there instead. Poorly served ones need a stop added or
+    better crossings before a trial.
+    """
+
+    checked: bool = False
+    source: str | None = Field(default=None, max_length=300)
+    stops_used: int = Field(default=0, ge=0)
+    walk_threshold_m: float = Field(default=400.0, gt=0)
+    mean_covered_share: float = Field(default=0.0, ge=0, le=1)
+    superblocks_poorly_served: int = Field(default=0, ge=0)
+    superblocks: list[SuperblockTransitAccess] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
 class HealthEstimate(BaseModel):
     """Screening estimate of noise and NO2 changes inside and around superblocks."""
 
@@ -1517,6 +1556,7 @@ class CityPartition(BaseModel):
     school_streets: SchoolStreetSummary | None = None
     pilot_plan: PilotPlanSummary | None = None
     health: HealthEstimate | None = None
+    transit_access: TransitAccessSummary | None = None
     osm_context: OsmContext | None = None
     evidence: AnalysisEvidence = Field(
         default_factory=lambda: AnalysisEvidence(

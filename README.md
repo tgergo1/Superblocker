@@ -221,6 +221,10 @@ Copy [`backend/.env.example`](backend/.env.example) and [`frontend/.env.example`
 
 City-scale runs against the public Overpass API are slow and rate-limited. Point `OSM_EXTRACT_PATH` at a free OpenStreetMap extract and street networks load from that file instead. Good sources are Geofabrik's [Hungary extract](https://download.geofabrik.de/europe/hungary.html) or a smaller [BBBike Budapest](https://download.bbbike.org/osm/bbbike/Budapest/) cut. The loader keeps the same roads as OSMnx's `drive` filter inside the requested area, so plans match an Overpass download. Context layers (schools, stations, transit routes) still come from Overpass. With Docker Compose, mount the file into the backend container and set the variable to its path there.
 
+### Walking access to public transport
+
+Every plan reports how far residents walk from each superblock's streets to a bus, tram, metro or train stop, using a 400 m threshold. Superblocks where less than half of the interior street length is within reach are flagged as poorly served, since moving cars to the boundary only works when people can take transit there instead. Stops come from OpenStreetMap by default. Set `GTFS_PATH` to a GTFS feed (the zip or its `stops.txt`), such as BKK's free [Budapest feed](https://go.bkk.hu/api/static/v1/public-gtfs/budapest_gtfs.zip), to use the operator's full list of platforms and metro entrances instead.
+
 ## API
 
 All application endpoints are under `/api/v1`:

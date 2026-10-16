@@ -82,6 +82,7 @@ from app.services.impact.boundary_impact import (
 )
 from app.services.impact.emergency_access import EmergencyAccessChecker
 from app.services.impact.health import HealthEstimator
+from app.services.impact.transit_access import TransitAccessChecker
 from app.services.network.turn_graph import TurnGraphBuilder
 from app.services.partitioning.fast_centrality import sampled_edge_betweenness
 
@@ -1929,6 +1930,17 @@ class CityPartitioner:
             except Exception as error:  # Screening output must not block the plan.
                 logger.warning("Health estimate failed: %s", error)
 
+        transit_access = None
+        if self.osm_context is not None and self._impact_inputs:
+            try:
+                transit_access = TransitAccessChecker(
+                    self.graph,
+                    self.osm_context.transit_stops,
+                    self.osm_context.stop_source,
+                ).check(self._impact_inputs)
+            except Exception as error:  # Screening output must not block the plan.
+                logger.warning("Transit access check failed: %s", error)
+
         pilot_plan = None
         if self._impact_inputs:
             try:
@@ -2098,6 +2110,7 @@ class CityPartitioner:
             school_streets=school_streets,
             pilot_plan=pilot_plan,
             health=health,
+            transit_access=transit_access,
             osm_context=self.osm_context,
             evidence=evidence,
             readiness=readiness,

@@ -598,6 +598,15 @@ export function PartitionControls({
               Screening estimate.
             </div>
           )}
+          {partition.transit_access?.checked && (
+            <div className="transit-summary" title={partition.transit_access.limitations.join(' ')}>
+              {Math.round(partition.transit_access.mean_covered_share * 100)}% of superblock streets are
+              within {partition.transit_access.walk_threshold_m.toFixed(0)} m walk of a stop
+              {partition.transit_access.superblocks_poorly_served > 0
+                ? `; ${partition.transit_access.superblocks_poorly_served} superblocks are poorly served and need a stop or crossing first.`
+                : '; every superblock is well served.'}
+            </div>
+          )}
           {partition.school_streets && partition.school_streets.facilities_loaded > 0 && (
             <div className="school-summary">
               {partition.school_streets.interior_school_streets} school streets inside superblocks

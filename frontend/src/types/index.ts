@@ -278,6 +278,25 @@ export interface HealthEstimate {
   limitations: string[];
 }
 
+export interface SuperblockTransitAccess {
+  superblock_id: string;
+  covered_share: number;
+  worst_walk_m: number | null;
+  stops_nearby: number;
+  nearest_stop: string | null;
+}
+
+export interface TransitAccessSummary {
+  checked: boolean;
+  source: string | null;
+  stops_used: number;
+  walk_threshold_m: number;
+  mean_covered_share: number;
+  superblocks_poorly_served: number;
+  superblocks: SuperblockTransitAccess[];
+  limitations: string[];
+}
+
 export interface PublicSpaceSummary {
   settings: { reallocation_share: number; max_plazas_per_superblock: number };
   calmed_street_km: number;
@@ -586,6 +605,7 @@ export interface CityPartition {
   school_streets?: SchoolStreetSummary | null;
   pilot_plan?: PilotPlanSummary | null;
   health?: HealthEstimate | null;
+  transit_access?: TransitAccessSummary | null;
   evidence: AnalysisEvidence;
   readiness: PlanReadiness;
   total_area_hectares: number;
