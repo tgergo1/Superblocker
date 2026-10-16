@@ -371,3 +371,46 @@ def test_split_lines_reach_past_the_cell_boundary():
     assert not cell.contains(line)
     pieces = partitioner._split_polygon_with_line(cell, line)
     assert pieces is not None and len(pieces) == 2
+
+
+def test_splits_prefer_compact_pieces_over_long_slivers():
+    from shapely.geometry import box
+
+    partitioner, _cell = _residential_cell(0.02)
+    square = box(0.0, 0.0, 0.01, 0.01)
+    sliver = box(0.0, 0.0, 0.01, 0.0008)
+    assert partitioner._compactness(square) > 0.6
+    assert partitioner._compactness(sliver) < 0.25
+
+
+def test_even_splits_are_chosen_by_how_compact_the_pieces_are():
+    import networkx as nx
+    from shapely.geometry import box
+
+    from app.services.partitioning import city_partitioner as module
+
+    graph = nx.MultiDiGraph()
+    # Both streets halve the cell; the east-west one leaves two 4:1 strips,
+    # the north-south one two squares.
+    graph.add_node(1, x=0.0, y=0.005)
+    graph.add_node(2, x=0.02, y=0.005)
+    graph.add_node(3, x=0.01, y=0.0)
+    graph.add_node(4, x=0.01, y=0.01)
+    graph.add_edge(1, 2, 0, highway="primary", length=2200.0)
+    graph.add_edge(3, 4, 0, highway="primary", length=1100.0)
+    partitioner = CityPartitioner(
+        graph,
+        BoundingBox(north=0.011, south=-0.001, east=0.021, west=-0.001),
+        min_area_ha=6,
+        max_area_ha=20,
+    )
+    polygon = box(0.0, 0.0, 0.02, 0.01)
+    cell = module.SuperblockCell(
+        polygon=polygon,
+        area_hectares=partitioner._calculate_area_hectares(polygon),
+        boundary_edges=[],
+        interior_edges=[(1, 2, 0), (3, 4, 0)],
+        entry_nodes=[],
+    )
+    _pieces, edge, _chain = partitioner._best_split(cell, [(1, 2, 0), (3, 4, 0)])
+    assert edge == (3, 4, 0)
