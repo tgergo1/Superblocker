@@ -204,6 +204,60 @@ export interface SuperblockPublicSpace {
   plaza_candidates: Coordinates[];
 }
 
+export interface SchoolStreet {
+  facility_osm_type: 'node' | 'way' | 'relation';
+  facility_osm_id: number;
+  kind: 'school' | 'kindergarten';
+  name?: string | null;
+  coordinates: Coordinates;
+  setting: 'interior' | 'boundary' | 'unassigned';
+  superblock_id?: string | null;
+  street_name?: string | null;
+  osm_id?: number | null;
+  distance_m: number;
+  street_path: Coordinates[];
+  on_transit_route: boolean;
+  time_windows: string[];
+  treatment: string;
+}
+
+export interface SchoolStreetSummary {
+  facilities_loaded: number;
+  interior_school_streets: number;
+  boundary_frontages: number;
+  unassigned: number;
+  schools: SchoolStreet[];
+  limitations: string[];
+}
+
+export interface PilotCandidate {
+  superblock_id: string;
+  rank: number;
+  score: number;
+  trial_measures: number;
+  trial_cost_eur: number;
+  build_cost_eur: number;
+  displaced_peak_vph: number;
+  interior_injury_reduction_low_percent: number;
+  interior_injury_reduction_high_percent: number;
+  school_streets: number;
+  reclaimable_m2: number;
+  mean_detour_seconds: number;
+  emergency_delay_seconds?: number | null;
+  centroid_lat?: number | null;
+  centroid_lon?: number | null;
+}
+
+export interface PilotPlanSummary {
+  total_trial_cost_eur: number;
+  total_build_cost_eur: number;
+  top_trial_cost_eur: number;
+  mean_injury_reduction_low_percent: number;
+  mean_injury_reduction_high_percent: number;
+  candidates: PilotCandidate[];
+  limitations: string[];
+}
+
 export interface PublicSpaceSummary {
   settings: { reallocation_share: number; max_plazas_per_superblock: number };
   calmed_street_km: number;
@@ -509,6 +563,8 @@ export interface CityPartition {
   filter_design?: FilterDesignSummary;
   emergency_access?: EmergencyAccessSummary;
   public_space?: PublicSpaceSummary | null;
+  school_streets?: SchoolStreetSummary | null;
+  pilot_plan?: PilotPlanSummary | null;
   evidence: AnalysisEvidence;
   readiness: PlanReadiness;
   total_area_hectares: number;

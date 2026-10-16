@@ -38,6 +38,7 @@ export interface PartitionParameters {
   targetSizeHectares: number;
   minAreaHectares: number;
   maxAreaHectares: number;
+  keepResidentialInside?: boolean;
 }
 
 export interface DetailedPartitionProgress extends PartitionProgress {
@@ -55,6 +56,7 @@ export function usePartition(
     targetSizeHectares: 12,
     minAreaHectares: 6,
     maxAreaHectares: 20,
+    keepResidentialInside: false,
   });
 
   const startTimeRef = useRef<number | null>(null);
@@ -134,6 +136,7 @@ export function usePartition(
         max_area_hectares: parameters.maxAreaHectares,
         // Four cardinal entry/return sectors are a product invariant.
         num_sectors: 4,
+        minor_road_boundaries: parameters.keepResidentialInside ? 'avoid' : 'allow',
       };
 
       return partitionCityWithProgress(request, (p) => {

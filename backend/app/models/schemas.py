@@ -836,6 +836,84 @@ class PublicSpaceSummary(BaseModel):
     limitations: list[str] = Field(default_factory=list)
 
 
+class SchoolStreetSettings(BaseModel):
+    """How school and kindergarten frontages are matched and treated."""
+
+    max_frontage_distance_m: float = Field(default=120.0, gt=0, le=500)
+    school_time_windows: list[str] = Field(
+        default_factory=lambda: ["Mo-Fr 07:30-08:30", "Mo-Fr 15:30-16:30"], max_length=10
+    )
+    kindergarten_time_windows: list[str] = Field(
+        default_factory=lambda: ["Mo-Fr 07:00-08:30", "Mo-Fr 16:00-17:30"], max_length=10
+    )
+
+
+class SchoolStreet(BaseModel):
+    """The street in front of one school, and what the plan proposes there."""
+
+    facility_osm_type: Literal["node", "way", "relation"]
+    facility_osm_id: int
+    kind: Literal["school", "kindergarten"]
+    name: str | None = Field(default=None, max_length=300)
+    coordinates: Coordinates
+    setting: Literal["interior", "boundary", "unassigned"]
+    superblock_id: str | None = None
+    street_name: str | None = Field(default=None, max_length=300)
+    osm_id: int | None = None
+    u: int | None = None
+    v: int | None = None
+    key: int | None = None
+    distance_m: float = Field(default=0.0, ge=0)
+    street_path: list[Coordinates] = Field(default_factory=list, max_length=2000)
+    on_transit_route: bool = False
+    time_windows: list[str] = Field(default_factory=list, max_length=10)
+    treatment: str = Field(default="", max_length=600)
+
+
+class SchoolStreetSummary(BaseModel):
+    """Timed school streets inside superblocks and main-road school frontages."""
+
+    settings: SchoolStreetSettings = Field(default_factory=SchoolStreetSettings)
+    facilities_loaded: int = 0
+    interior_school_streets: int = 0
+    boundary_frontages: int = 0
+    unassigned: int = 0
+    schools: list[SchoolStreet] = Field(default_factory=list, max_length=20_000)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class PilotCandidate(BaseModel):
+    """One superblock ranked for a reversible trial."""
+
+    superblock_id: str
+    rank: int = Field(default=0, ge=0)
+    score: float = Field(ge=0)
+    trial_measures: int = Field(ge=0)
+    trial_cost_eur: float = Field(ge=0)
+    build_cost_eur: float = Field(ge=0)
+    displaced_peak_vph: float = Field(ge=0)
+    interior_injury_reduction_low_percent: float
+    interior_injury_reduction_high_percent: float
+    school_streets: int = Field(default=0, ge=0)
+    reclaimable_m2: float = Field(default=0.0, ge=0)
+    mean_detour_seconds: float = Field(default=0.0, ge=0)
+    emergency_delay_seconds: float | None = Field(default=None, ge=0)
+    centroid_lat: float | None = None
+    centroid_lon: float | None = None
+
+
+class PilotPlanSummary(BaseModel):
+    """Where to start: superblocks ranked for a trial-then-build rollout."""
+
+    total_trial_cost_eur: float = Field(default=0.0, ge=0)
+    total_build_cost_eur: float = Field(default=0.0, ge=0)
+    top_trial_cost_eur: float = Field(default=0.0, ge=0)
+    mean_injury_reduction_low_percent: float = 0.0
+    mean_injury_reduction_high_percent: float = 0.0
+    candidates: list[PilotCandidate] = Field(default_factory=list, max_length=1000)
+    limitations: list[str] = Field(default_factory=list)
+
+
 class EvaporationScenario(BaseModel):
     """Share of displaced through traffic assumed to disappear rather than reroute."""
 
@@ -1402,6 +1480,8 @@ class CityPartition(BaseModel):
     filter_design: FilterDesignSummary = Field(default_factory=FilterDesignSummary)
     emergency_access: EmergencyAccessSummary = Field(default_factory=EmergencyAccessSummary)
     public_space: PublicSpaceSummary | None = None
+    school_streets: SchoolStreetSummary | None = None
+    pilot_plan: PilotPlanSummary | None = None
     osm_context: OsmContext | None = None
     evidence: AnalysisEvidence = Field(
         default_factory=lambda: AnalysisEvidence(
@@ -1471,6 +1551,10 @@ class PartitionRequest(BaseModel):
     traffic_impact_settings: TrafficImpactSettings = Field(default_factory=TrafficImpactSettings)
     filter_design_settings: FilterDesignSettings = Field(default_factory=FilterDesignSettings)
     public_space_settings: PublicSpaceSettings = Field(default_factory=PublicSpaceSettings)
+    school_street_settings: SchoolStreetSettings = Field(default_factory=SchoolStreetSettings)
+    # "avoid" keeps busy residential and living streets inside cells instead of
+    # promoting them to boundary roads on centrality alone.
+    minor_road_boundaries: Literal["allow", "avoid"] = "allow"
     osm_context: OsmContext | None = None
     fetch_osm_context: bool = True
     target_size_hectares: float = Field(default=12.0, ge=4.0, le=50.0)

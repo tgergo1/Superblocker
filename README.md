@@ -48,6 +48,36 @@ In the app, the **Where does the traffic go?** panel switches scenarios, ranks t
 
 ![Budapest traffic impact](docs/screenshots/budapest-traffic-impact.png)
 
+## Street design layers
+
+Each run also loads OpenStreetMap bus, trolleybus and tram routes, fire and ambulance stations, schools and kindergartens in one cached Overpass query, and uses them to shape the plan:
+
+- **Bus gates.** A filter on a public-transport route becomes a camera-enforced bus gate that buses and emergency vehicles pass; other filters become emergency bollards.
+- **Emergency response.** Response time from the nearest station to the farthest interior node of each superblock, before and after, with and without the exemptions.
+- **School streets.** A school inside a superblock gets a timed closure of its street at drop-off and pick-up, with residents and emergency vehicles exempt. A school on a boundary road gets a crossing and 30 km/h instead, because closing that road would push its traffic into the superblock.
+- **Reclaimed space.** Calmed street length, the carriageway area that could become public space, and junctions whose every leg is calmed as candidate plazas.
+
+All four are screening outputs: they inform the plan but do not count toward the implementation gate.
+
+## Where to start
+
+Cities that built superblocks well started small: a reversible trial with planters, removable bollards and signs, then permanent works where the trial succeeded. The **Where to start** panel ranks every superblock for such a trial and puts numbered badges on the map. Clicking a row zooms to that superblock.
+
+- Measures are split into a trial stage and a build stage, with indicative central European unit costs. Explicit engineering estimates replace them when present.
+- Interior injury risk is given as a range. It combines the through traffic removed with a 30 km/h limit, using the speed power model (injury crashes scale with roughly the square of mean speed).
+- The ranking weighs, by percentile:
+  - interior traffic cut: 25%;
+  - through traffic removed: 15%;
+  - reclaimable space: 15%;
+  - street density, as a proxy for where people live: 15%;
+  - school streets: 15%;
+  - safety: 15%.
+- It is lowered for long detours and for superblocks whose emergency response gets more than a minute slower.
+
+On the offline Budapest graph, the top ten trials cost about €160k. The whole-city trial costs €7.6M and the permanent build €24.8M.
+
+![Budapest pilot ranking](docs/screenshots/budapest-pilot-ranking.png)
+
 ## Budapest verification run
 
 Observed in the local app on 2026-08-31 with the default 12 ha target, 6 ha minimum, 20 ha maximum, four entry sectors, the exact Nominatim administrative polygon, and no external traffic/access evidence:

@@ -8,17 +8,18 @@ Rules: free tools and open data only; every feature ships with tests; screening 
 
 - [x] Import the local planning stack (registry, jobs, planning, evidence, SUMO adapter, optimizer, engineering compiler, approvals, workbench).
 - [x] Boundary-road impact estimate with evaporation scenarios, map view and ranked road list.
+- [x] Bus and tram aware filters: filters on OSM bus, trolleybus and tram routes become camera bus gates; other filters become emergency bollards.
+- [x] Emergency response check from OSM fire and ambulance stations, before and after, with and without exemptions.
+- [x] Reclaimed space: calmed street km, carriageway m² and candidate plazas per superblock.
+- [x] Option to keep busy residential streets inside superblocks instead of making them boundary roads.
+- [x] School streets: timed closures in front of schools and kindergartens inside superblocks; crossing and 30 km/h treatment for schools on main roads.
+- [x] Pilot-first phasing and 30 km/h safety: trial and build costs per superblock, interior injury-risk range, and a "Where to start" ranking with map badges.
+- [x] Performance, first pass: compiled sampled centrality and cached path searches take a Budapest run from about 93 s to 45 s.
 
 ## Next
 
-1. **Bus and tram aware filters.** Mark each filter as physical, camera gate or retractable bollard with the vehicle classes that pass (bus, taxi, emergency, refuse). Keep OSM bus routes (`route=bus|trolleybus|tram` relations) through cells via gates instead of cutting them.
-2. **Emergency response check.** Travel time from OSM fire and ambulance stations (`amenity=fire_station|ambulance_station`) to every superblock, before and after, honoring the exemption classes.
-3. **School streets.** Find schools in OSM (`amenity=school|kindergarten`) and propose timed closures on the street at each entrance.
-4. **Reclaimed space.** Square metres of carriageway freed per cell (filtered length × width from lanes), plus candidate plazas at filtered intersections and tree sites.
-5. **Minor-boundary repair.** Merge or re-split cells whose boundary includes residential streets that the impact screening shows taking diverted traffic.
-6. **Ghent-style sector mode** for the inner districts (V, VI, VII, VIII, IX): a few large sectors around the Kiskörút and Nagykörút, crossing only via the ring.
-7. **Interior speed and safety score.** Default 30 km/h inside cells, expected crash change shown as a range from the 40-city study.
-8. **Pilot then permanent phasing.** Split each plan into a cheap trial stage (paint, planters, one-way flips) and a build stage.
-9. **Health co-benefit estimate.** Clearly labelled NO2, noise and activity estimate per cell, outside the gate.
-10. **Data importers.** Telraam counts (CC BY 4.0) as traffic observations; GHS-POP residents per cell to rank candidates; BKK GTFS for stop access; Geofabrik extract loading instead of live Overpass; OpenFreeMap vector basemap.
-11. **Performance.** Constraint enforcement dominates city-scale runtime; profile and parallelise per cell.
+1. **Minor-boundary repair.** First step done: the "Keep busy residential streets inside superblocks" option stops residential and living streets becoming boundary roads on centrality alone. On the offline Budapest graph it removes diverted traffic from all 1,311 minor roads, lowers the worst boundary-road increase from 510% to 84% and calms 3,673 km of street instead of 3,277 km, but the median cell grows from 23 ha to 42 ha. Next: split those large cells along low-traffic residential streets with filters, so cells stay near the target size.
+2. **Ghent-style sector mode** for the inner districts (V, VI, VII, VIII, IX): a few large sectors around the Kiskörút and Nagykörút, crossing only via the ring.
+3. **Health co-benefit estimate.** Clearly labelled NO2, noise and activity estimate per cell, outside the gate.
+4. **Data importers.** Telraam counts (CC BY 4.0) as traffic observations; GHS-POP residents per cell to rank candidates; BKK GTFS for stop access; Geofabrik extract loading instead of live Overpass; OpenFreeMap vector basemap.
+5. **Performance.** Constraint enforcement and cell optimisation still take most of the 45 s; parallelise per cell.

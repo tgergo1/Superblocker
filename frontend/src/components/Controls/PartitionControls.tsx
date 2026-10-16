@@ -125,6 +125,7 @@ export interface PartitionParameters {
   targetSizeHectares: number;
   minAreaHectares: number;
   maxAreaHectares: number;
+  keepResidentialInside?: boolean;
 }
 
 interface PartitionControlsProps {
@@ -568,7 +569,14 @@ export function PartitionControls({
             <div className="public-space-summary">
               {partition.public_space.calmed_street_km.toFixed(0)} km of streets calmed;{' '}
               {(partition.public_space.reclaimable_m2 / 10_000).toFixed(1)} ha could become public space,
-              with {partition.public_space.plaza_candidates} candidate plazas (green squares on the map).
+              with {partition.public_space.plaza_candidates} candidate plazas (green dots on the map).
+            </div>
+          )}
+          {partition.school_streets && partition.school_streets.facilities_loaded > 0 && (
+            <div className="school-summary">
+              {partition.school_streets.interior_school_streets} school streets inside superblocks
+              (orange S, closed at drop-off and pick-up); {partition.school_streets.boundary_frontages}{' '}
+              schools on main roads need safe crossings (white S).
             </div>
           )}
           {partition.emergency_access?.checked && (
@@ -748,6 +756,19 @@ export function PartitionControls({
               className="param-slider"
             />
           </div>
+
+          <label className="checkbox-label" htmlFor="partition-keep-residential">
+            <input
+              type="checkbox"
+              id="partition-keep-residential"
+              checked={parameters.keepResidentialInside ?? false}
+              onChange={(e) => onParametersChange({ ...parameters, keepResidentialInside: e.target.checked })}
+            />
+            <span>Keep busy residential streets inside superblocks</span>
+          </label>
+          <span className="param-hint">
+            Larger cells, but no diverted traffic on residential streets.
+          </span>
 
           <span className="settings-note">
             Directional sectors and cross-traffic blocking are always enforced.

@@ -443,6 +443,9 @@ class ConstraintEnforcer:
         in sector A to an entry point in sector B where A != B.
         """
         violations = []
+        # One breadth-first search per entry node replaces a has_path plus a
+        # shortest_path call for every directed entry pair.
+        self._paths_from: dict[int, dict[int, list[int]]] = {}
 
         # Check all pairs of entry points from different sectors
         sectors = self.sectors
@@ -483,25 +486,34 @@ class ConstraintEnforcer:
         violations: list[ConstraintViolation] = []
 
         for source, source_sector, target, target_sector in directed_pairs:
-            try:
-                if not nx.has_path(self.graph, source, target):
-                    continue
-
-                path = nx.shortest_path(self.graph, source, target)
-                path_edges = list(itertools.pairwise(path))
-
-                violations.append(
-                    ConstraintViolation(
-                        from_entry=self._node_to_entry_point(source, source_sector),
-                        to_entry=self._node_to_entry_point(target, target_sector),
-                        path_exists=True,
-                        path_edges=path_edges,
-                    )
-                )
-            except nx.NetworkXError:
+            path = self._shortest_path_from(source, target)
+            if path is None:
                 continue
+            path_edges = list(itertools.pairwise(path))
+            violations.append(
+                ConstraintViolation(
+                    from_entry=self._node_to_entry_point(source, source_sector),
+                    to_entry=self._node_to_entry_point(target, target_sector),
+                    path_exists=True,
+                    path_edges=path_edges,
+                )
+            )
 
         return violations
+
+    def _shortest_path_from(self, source: int, target: int) -> list[int] | None:
+        """Return a fewest-edges path, reusing one search per source node."""
+        cache = getattr(self, "_paths_from", None)
+        if cache is None:
+            cache = self._paths_from = {}
+        paths = cache.get(source)
+        if paths is None:
+            if source not in self.graph:
+                paths = {}
+            else:
+                paths = nx.single_source_shortest_path(self.graph, source)
+            cache[source] = paths
+        return paths.get(target)
 
     def _node_to_entry_point(self, node_id: int, sector: int) -> EntryPoint:
         """Convert a node ID to an EntryPoint object."""

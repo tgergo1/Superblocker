@@ -169,6 +169,8 @@ def test_partition_regular_stream_and_route_with_supplied_partition(client, monk
         _fetch_context=False,
         _filter_design_settings=None,
         _public_space_settings=None,
+        _school_street_settings=None,
+        _minor_road_boundaries="allow",
     ):
         progress_queue.put(
             {

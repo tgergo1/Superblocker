@@ -525,6 +525,8 @@ def run_partition_sync(
     fetch_context: bool = False,
     filter_design_settings=None,
     public_space_settings=None,
+    school_street_settings=None,
+    minor_road_boundaries="allow",
 ):
     """
     Run city partitioning synchronously in a thread.
@@ -630,6 +632,8 @@ def run_partition_sync(
             osm_context=osm_context,
             filter_design_settings=filter_design_settings,
             public_space_settings=public_space_settings,
+            school_street_settings=school_street_settings,
+            minor_boundary_policy=minor_road_boundaries,
             progress_callback=progress_callback,
         )
 
@@ -721,6 +725,8 @@ async def partition_city(
             request.fetch_osm_context,
             request.filter_design_settings,
             request.public_space_settings,
+            request.school_street_settings,
+            request.minor_road_boundaries,
         )
 
         partition = result["partition"]
@@ -797,6 +803,8 @@ async def partition_city_stream(
             request.fetch_osm_context,
             request.filter_design_settings,
             request.public_space_settings,
+            request.school_street_settings,
+            request.minor_road_boundaries,
         )
         logger.info("Partition streaming started")
 
