@@ -244,6 +244,7 @@ export interface PilotCandidate {
   reclaimable_m2: number;
   mean_detour_seconds: number;
   emergency_delay_seconds?: number | null;
+  residents?: number | null;
   centroid_lat?: number | null;
   centroid_lon?: number | null;
 }
@@ -293,7 +294,17 @@ export interface TransitAccessSummary {
   walk_threshold_m: number;
   mean_covered_share: number;
   superblocks_poorly_served: number;
+  residents_poorly_served?: number | null;
   superblocks: SuperblockTransitAccess[];
+  limitations: string[];
+}
+
+export interface PopulationSummary {
+  source: string;
+  residents_in_area: number;
+  residents_in_superblocks: number;
+  share_in_superblocks: number;
+  superblocks: { superblock_id: string; residents: number; residents_per_ha: number }[];
   limitations: string[];
 }
 
@@ -606,6 +617,7 @@ export interface CityPartition {
   pilot_plan?: PilotPlanSummary | null;
   health?: HealthEstimate | null;
   transit_access?: TransitAccessSummary | null;
+  population?: PopulationSummary | null;
   evidence: AnalysisEvidence;
   readiness: PlanReadiness;
   total_area_hectares: number;

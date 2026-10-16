@@ -109,7 +109,13 @@ class PilotPlanner:
         emergency_access: EmergencyAccessSummary | None = None,
         centroids: dict[str, tuple[float, float]] | None = None,
         areas_ha: dict[str, float] | None = None,
+        residents: dict[str, float] | None = None,
     ) -> PilotPlanSummary:
+        """Rank superblocks for a trial.
+
+        With ``residents`` from a population grid, residents per hectare
+        replaces calmed street length per hectare as the density measure.
+        """
         blocks = list(superblocks)
         centroids = centroids or {}
         areas_ha = areas_ha or {}
@@ -170,6 +176,15 @@ class PilotPlanner:
             for b in blocks
         }
         n_reduction = _normalized(reduction_share)
+        if residents:
+            density = {
+                b.superblock_id: (
+                    residents.get(b.superblock_id, 0.0) / areas_ha[b.superblock_id]
+                    if areas_ha.get(b.superblock_id, 0) > 0
+                    else 0.0
+                )
+                for b in blocks
+            }
         n_density = _normalized(density)
         n_displaced = _normalized(displaced)
         n_reclaim = _normalized(reclaim)
@@ -210,6 +225,7 @@ class PilotPlanner:
                     reclaimable_m2=round(reclaim[sid]),
                     mean_detour_seconds=round(detour[sid], 1),
                     emergency_delay_seconds=round(delay, 1) if sid in emergency_delay else None,
+                    residents=round(residents[sid]) if residents and sid in residents else None,
                     centroid_lat=lat,
                     centroid_lon=lon,
                 )
@@ -239,7 +255,9 @@ class PilotPlanner:
                 "Injury change combines removed through traffic with a 30 km/h limit using "
                 "the speed power model; it is a relative range, not a crash forecast.",
                 "The ranking weighs the interior traffic cut (25%), traffic removed, "
-                "reclaimable space, street density, school streets and safety (15% each) "
-                "by percentile, and is lowered for long detours or slower emergency response.",
+                "reclaimable space, "
+                + ("residents per hectare" if residents else "street density")
+                + ", school streets and safety (15% each) by percentile, and is lowered "
+                "for long detours or slower emergency response.",
             ],
         )

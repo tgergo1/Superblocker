@@ -909,6 +909,7 @@ class PilotCandidate(BaseModel):
     reclaimable_m2: float = Field(default=0.0, ge=0)
     mean_detour_seconds: float = Field(default=0.0, ge=0)
     emergency_delay_seconds: float | None = Field(default=None, ge=0)
+    residents: float | None = Field(default=None, ge=0)
     centroid_lat: float | None = None
     centroid_lon: float | None = None
 
@@ -944,6 +945,25 @@ class SuperblockHealth(BaseModel):
     interior_no2_change_percent_high: float
 
 
+class SuperblockPopulation(BaseModel):
+    """Residents counted inside one superblock from a population grid."""
+
+    superblock_id: str
+    residents: float = Field(..., ge=0)
+    residents_per_ha: float = Field(..., ge=0)
+
+
+class PopulationSummary(BaseModel):
+    """How many people the plan's superblocks serve."""
+
+    source: str = Field(..., max_length=300)
+    residents_in_area: float = Field(default=0.0, ge=0)
+    residents_in_superblocks: float = Field(default=0.0, ge=0)
+    share_in_superblocks: float = Field(default=0.0, ge=0, le=1)
+    superblocks: list[SuperblockPopulation] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
 class SuperblockTransitAccess(BaseModel):
     """How well one superblock's streets reach public transport on foot."""
 
@@ -968,6 +988,7 @@ class TransitAccessSummary(BaseModel):
     walk_threshold_m: float = Field(default=400.0, gt=0)
     mean_covered_share: float = Field(default=0.0, ge=0, le=1)
     superblocks_poorly_served: int = Field(default=0, ge=0)
+    residents_poorly_served: float | None = Field(default=None, ge=0)
     superblocks: list[SuperblockTransitAccess] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
 
@@ -1557,6 +1578,7 @@ class CityPartition(BaseModel):
     pilot_plan: PilotPlanSummary | None = None
     health: HealthEstimate | None = None
     transit_access: TransitAccessSummary | None = None
+    population: PopulationSummary | None = None
     osm_context: OsmContext | None = None
     evidence: AnalysisEvidence = Field(
         default_factory=lambda: AnalysisEvidence(

@@ -88,6 +88,7 @@ export function PilotPlanPanel({ plan, showOnMap, onShowOnMapChange, onSelect }:
                     <small>
                       Injury risk −{item.interior_injury_reduction_low_percent.toFixed(0)} to −
                       {item.interior_injury_reduction_high_percent.toFixed(0)}%
+                      {item.residents ? ` · ${Math.round(item.residents).toLocaleString('en')} residents` : ''}
                       {item.school_streets > 0 ? ` · ${item.school_streets} school street${item.school_streets > 1 ? 's' : ''}` : ''}
                       {item.reclaimable_m2 >= 1000 ? ` · ${(item.reclaimable_m2 / 10_000).toFixed(1)} ha for people` : ''}
                     </small>

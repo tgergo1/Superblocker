@@ -82,7 +82,8 @@ from app.services.impact.boundary_impact import (
 )
 from app.services.impact.emergency_access import EmergencyAccessChecker
 from app.services.impact.health import HealthEstimator
-from app.services.impact.transit_access import TransitAccessChecker
+from app.services.impact.transit_access import POORLY_SERVED_SHARE, TransitAccessChecker
+from app.services.importers.population import PopulationGrid, summarize_population
 from app.services.network.turn_graph import TurnGraphBuilder
 from app.services.partitioning.fast_centrality import sampled_edge_betweenness
 
@@ -459,6 +460,7 @@ class CityPartitioner:
         assignment_settings: AssignmentSettings | None = None,
         traffic_impact_settings: TrafficImpactSettings | None = None,
         osm_context: OsmContext | None = None,
+        population: PopulationGrid | None = None,
         filter_design_settings: FilterDesignSettings | None = None,
         public_space_settings: PublicSpaceSettings | None = None,
         school_street_settings: SchoolStreetSettings | None = None,
@@ -522,6 +524,7 @@ class CityPartitioner:
         self.traffic_impact_settings = traffic_impact_settings or TrafficImpactSettings()
         self._impact_inputs: list[SuperblockImpactInput] = []
         self.osm_context = osm_context
+        self.population_grid = population
         self.public_space_settings = public_space_settings or PublicSpaceSettings()
         self.school_street_settings = school_street_settings or SchoolStreetSettings()
         self.minor_boundary_policy = minor_boundary_policy
@@ -1941,15 +1944,40 @@ class CityPartitioner:
             except Exception as error:  # Screening output must not block the plan.
                 logger.warning("Transit access check failed: %s", error)
 
+        polygons = {}
+        centroids = {}
+        areas = {}
+        for superblock in self.superblocks:
+            try:
+                polygon = shape(superblock.geometry)
+            except Exception as error:  # Screening output must not block the plan.
+                logger.warning("Superblock %s has no usable geometry: %s", superblock.id, error)
+                continue
+            polygons[superblock.id] = polygon
+            centre = polygon.centroid
+            centroids[superblock.id] = (centre.y, centre.x)
+            areas[superblock.id] = superblock.area_hectares
+
+        population = None
+        residents: dict[str, float] = {}
+        if self.population_grid is not None and polygons:
+            try:
+                population = summarize_population(self.population_grid, polygons, areas, self.bbox)
+                residents = {item.superblock_id: item.residents for item in population.superblocks}
+            except Exception as error:  # Screening output must not block the plan.
+                logger.warning("Population count failed: %s", error)
+        if transit_access is not None and transit_access.checked and residents:
+            transit_access.residents_poorly_served = round(
+                sum(
+                    residents.get(item.superblock_id, 0.0)
+                    for item in transit_access.superblocks
+                    if item.covered_share < POORLY_SERVED_SHARE
+                )
+            )
+
         pilot_plan = None
         if self._impact_inputs:
             try:
-                centroids = {}
-                areas = {}
-                for superblock in self.superblocks:
-                    centre = shape(superblock.geometry).centroid
-                    centroids[superblock.id] = (centre.y, centre.x)
-                    areas[superblock.id] = superblock.area_hectares
                 pilot_plan = PilotPlanner().plan(
                     self._impact_inputs,
                     traffic_impact,
@@ -1958,6 +1986,7 @@ class CityPartitioner:
                     emergency_access,
                     centroids,
                     areas,
+                    residents,
                 )
             except Exception as error:  # Screening output must not block the plan.
                 logger.warning("Pilot planning failed: %s", error)
@@ -2111,6 +2140,7 @@ class CityPartitioner:
             pilot_plan=pilot_plan,
             health=health,
             transit_access=transit_access,
+            population=population,
             osm_context=self.osm_context,
             evidence=evidence,
             readiness=readiness,
