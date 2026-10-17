@@ -15,6 +15,7 @@ from app.api.routes.analysis import _sse_data, analysis_executor, partition_stor
 from app.core.workload import guard_expensive_request
 from app.models.simulation import CapacitySimulationRequest, CapacitySimulationResult
 from app.services.importers.open_data import (
+    load_configured_air_quality_stations,
     load_configured_jobs,
     load_configured_turn_restrictions,
 )
@@ -50,6 +51,7 @@ def _run(graph, request: CapacitySimulationRequest, progress=None) -> CapacitySi
         residents=load_configured_population(bbox),
         jobs=load_configured_jobs(bbox),
         turn_restrictions=load_configured_turn_restrictions(graph),
+        stations=load_configured_air_quality_stations(),
     ).run()
 
 

@@ -279,3 +279,48 @@ def test_elastic_demand_drops_trips_when_the_plan_slows_them():
     assert elastic.planned_elastic.trips < planned.trips
     assert elastic.planned_elastic.vehicle_km < planned.vehicle_km
     assert elastic.elastic_vehicle_km_change_percent < elastic.vehicle_km_change_percent
+
+
+def test_external_share_counts_each_trip_once():
+    simulator = CapacitySimulator(grid_city(5), settings=CapacitySimulationSettings())
+    simulator._production = np.array([0.5, 0.5])
+    simulator._attraction = np.array([0.2, 0.8])
+    simulator._gateway_weights = np.array([1.0])
+    simulator._external_share = 0.15
+    minutes = np.array([[0.0, 5.0, 3.0], [5.0, 0.0, 4.0], [3.0, 4.0, 0.0]])
+    shares = simulator._gravity_shares(minutes)
+    assert shares.sum() == pytest.approx(1.0)
+    external = shares[2, :].sum() + shares[:, 2].sum()
+    assert external == pytest.approx(0.15)
+    assert shares[2, 2] == 0.0
+
+
+def test_simulation_models_air_and_noise_with_stations_and_residents():
+    from app.services.importers.open_data import AirQualityStation
+
+    graph = grid_city()
+    lon = 19.0 + np.arange(1, 12, 2) * STEP * 1.48
+    lat = 47.5 + np.arange(1, 12, 2) * STEP
+    mesh_lon, mesh_lat = np.meshgrid(lon, lat)
+    residents = PopulationGrid(
+        lon=mesh_lon.ravel(), lat=mesh_lat.ravel(), residents=np.full(mesh_lon.size, 100.0)
+    )
+    stations = [
+        AirQualityStation("a", lon[0], lat[0], 20.0),
+        AirQualityStation("b", lon[2], lat[2], 26.0),
+        AirQualityStation("c", lon[4], lat[3], 23.0),
+        AirQualityStation("d", lon[5], lat[5], 18.0),
+    ]
+    settings = CapacitySimulationSettings(zone_size_m=250, demand_levels=[1.0])
+    result = CapacitySimulator(
+        graph,
+        modifications=superblock_filters(graph),
+        settings=settings,
+        residents=residents,
+        stations=stations,
+    ).run()
+    environment = result.environment
+    assert environment is not None
+    assert set(environment.scenarios) == {"today", "plan", "plan_with_response"}
+    assert environment.residents == pytest.approx(3600.0)
+    assert len(environment.stations) == 4
