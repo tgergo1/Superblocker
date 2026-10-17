@@ -2,7 +2,8 @@
 
 Writes plain files into an output folder; point the settings at them:
 
-    POPULATION_PATH=<out>/population.tif         Meta HRSL, 30 m (CC BY 4.0)
+    POPULATION_PATH=<out>/population.tif         Meta HRSL, 30 m (CC BY 4.0); set
+    POPULATION_SOURCE="Meta High Resolution Settlement Layer (CC BY 4.0)" 
     JOBS_PATH=<out>/jobs.csv                     estimated from Overture places and buildings
     FACILITIES_PATH=<out>/facilities.csv         Overture places
     TURN_RESTRICTIONS_PATH=<out>/turn_restrictions.json   OSM rules via Overture

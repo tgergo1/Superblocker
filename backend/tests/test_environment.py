@@ -56,7 +56,10 @@ def test_model_calibrates_to_stations_and_counts_exposure():
     assert result.r_squared > 0.8
     assert result.background_no2 > 0
     today, plan, response = (result.scenarios[k] for k in ("today", "plan", "plan_with_response"))
-    assert plan.nox_kg < today.nox_kg and response.nox_kg < plan.nox_kg
+    assert (
+        plan.nox_kg_per_hour < today.nox_kg_per_hour
+        and response.nox_kg_per_hour < plan.nox_kg_per_hour
+    )
     assert plan.population_weighted_no2 < today.population_weighted_no2
     assert result.noise_better_residents["plan"] == pytest.approx(200.0)
     assert result.no2_worse_residents["plan"] == pytest.approx(0.0)

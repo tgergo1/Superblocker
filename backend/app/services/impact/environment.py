@@ -7,11 +7,12 @@ counts residents by the levels at their homes.
 NO2. Each street emits NOx in proportion to its peak-hour volume times a
 speed-dependent emission factor (a fleet average for cars plus a heavy
 vehicle share by road type). Emissions are spread with two kernels: a
-near-road one (exponential, ~60 m) for the steep gradient next to busy roads,
-and an urban-scale one (~2 km) for the city's build-up. Annual mean NO2 at
+near-road one (exponential, ~30 m) for the steep gradient next to busy roads,
+and an urban-scale one (~4 km) for the city's build-up. Annual mean NO2 at
 measuring stations is then fitted as ``background + a * near + b * urban``
 with non-negative least squares, so the model reproduces measured air rather
-than an assumed share of traffic. The plan's NO2 is the same fit applied to
+than an assumed share of traffic. The two decay lengths were chosen by
+leave-one-out error on Budapest's ten stations (2025). The plan's NO2 is the same fit applied to
 the plan's emissions. Chemistry is treated as linear, which overstates small
 changes slightly in high-NOx streets where NO2 is ozone-limited.
 
@@ -63,12 +64,15 @@ SCENARIOS = ("today", "plan", "plan_with_response")
 @dataclass(frozen=True)
 class EnvironmentSettings:
     cell_m: float = 20.0
-    near_decay_m: float = 60.0
+    near_decay_m: float = 30.0
     near_radius_m: float = 400.0
-    urban_decay_m: float = 2_000.0
+    urban_decay_m: float = 4_000.0
     urban_cell_m: float = 200.0
-    urban_radius_m: float = 8_000.0
+    urban_radius_m: float = 16_000.0
     noise_min_distance_m: float = 10.0
+    # Sound from everything but road traffic (people, trams, plant, distant
+    # roads), so a street going from 2 to 20 cars an hour is not a 10 dB change.
+    ambient_db: float = 45.0
     noise_radius_m: float = 300.0
     sample_step_m: float = 10.0
 
@@ -136,7 +140,7 @@ class StationFit:
 class ScenarioExposure:
     name: str
     vehicle_km: float
-    nox_kg: float
+    nox_kg_per_hour: float
     population_weighted_no2: float
     residents_no2_over_40: float
     residents_no2_over_20: float
@@ -297,7 +301,7 @@ class EnvironmentModel:
         totals: dict[str, tuple[float, float]] = {}
         for scenario in scenarios:
             volume, speed = np.array([_flows(link, scenario) for link in self.links]).T
-            # g per hour per metre of street.
+            # g per hour per metre of street; totals in kg per hour.
             emission = volume * nox_g_per_km(speed, heavy) / 1000.0
             emitted = _rasterize(rows, cols, emission[owner] * sample_length, (grid.ny, grid.nx))
             near = fftconvolve(emitted, near_kernel, mode="same")
@@ -352,7 +356,9 @@ class EnvironmentModel:
                 : grid.ny, : grid.nx
             ]
             no2_fields[scenario] = background + a_near * near + a_urban * urban_fine
-            noise_fields[scenario] = 10.0 * np.log10(np.maximum(intensity, 1.0))
+            noise_fields[scenario] = 10.0 * np.log10(
+                intensity + 10.0 ** (settings.ambient_db / 10.0)
+            )
 
         result = EnvironmentResult(
             background_no2=background,
@@ -384,9 +390,7 @@ class EnvironmentModel:
         grid = result.grid
         if self.population is None or self.population.residents.size == 0 or grid is None:
             for scenario, (vkm, nox) in totals.items():
-                result.scenarios[scenario] = ScenarioExposure(
-                    scenario, vkm, nox / 1000.0, *([0.0] * 8)
-                )
+                result.scenarios[scenario] = ScenarioExposure(scenario, vkm, nox, *([0.0] * 8))
             result.limitations.append("No population grid: exposure counts are zero.")
             return
         row, col = grid.index(self.population.lon, self.population.lat)
@@ -401,7 +405,7 @@ class EnvironmentModel:
             result.scenarios[scenario] = ScenarioExposure(
                 name=scenario,
                 vehicle_km=vkm,
-                nox_kg=nox / 1000.0,
+                nox_kg_per_hour=nox,
                 population_weighted_no2=float(np.average(no2, weights=people)),
                 residents_no2_over_40=float(people[no2 > 40].sum()),
                 residents_no2_over_20=float(people[no2 > 20].sum()),
