@@ -41,6 +41,10 @@ from app.models.schemas import (
 from app.services.assurance.approvals import verify_approval_artifact, verify_evidence_artifact
 from app.services.context.osm_context import fetch_osm_context
 from app.services.detection.superblock_analyzer import SuperblockAnalyzer
+from app.services.importers.open_data import (
+    enrich_context,
+    load_configured_turn_restrictions,
+)
 from app.services.importers.population import load_configured_population
 from app.services.network.conflation import NetworkConflator
 from app.services.osm_service import (
@@ -616,6 +620,12 @@ def run_partition_sync(
         traffic_evidence = apply_traffic_observations_to_graph(graph, traffic_observations)
         if osm_context is None and fetch_context:
             osm_context = fetch_osm_context(bbox)
+        if fetch_context:
+            osm_context = enrich_context(osm_context, graph, bbox)
+        turn_restrictions = [
+            *(turn_restrictions or []),
+            *load_configured_turn_restrictions(graph),
+        ]
         population = load_configured_population(bbox)
 
         # Create partitioner

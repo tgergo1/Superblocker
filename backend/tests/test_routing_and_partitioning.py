@@ -525,3 +525,26 @@ def test_parallel_edge_reporting_uses_shortest_edge():
     router = SuperblockRouter(graph, partition)
     segments = router._path_to_segments([1, 5], graph=graph)
     assert segments[0].length_m == 5
+
+
+def test_motorways_inside_a_cell_are_never_modified():
+    graph = partition_graph()
+    for _u, _v, data in graph.edges(data=True):
+        if data["osmid"] in {201, 202}:
+            data["highway"] = "motorway"
+    bbox = BoundingBox(north=0.002, south=0, east=0.002, west=0)
+    result = CityPartitioner(
+        graph,
+        bbox,
+        target_size_ha=5,
+        min_area_ha=0.5,
+        max_area_ha=20,
+        arterial_road_types={"primary"},
+        enforce_constraints=True,
+    ).partition()
+    modified = {
+        modification.osm_id
+        for superblock in result.superblocks
+        for modification in superblock.modifications
+    }
+    assert not modified & {201, 202}

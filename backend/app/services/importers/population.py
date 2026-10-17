@@ -122,14 +122,17 @@ def read_population_raster(
         return _from_points(lon, lat, values.data[rows, cols], source)
 
 
-def read_population(path: str | Path, bbox: BoundingBox) -> PopulationGrid:
+def read_population(
+    path: str | Path, bbox: BoundingBox, source: str | None = None
+) -> PopulationGrid:
     """A GeoTIFF or a ``lon,lat,population`` CSV, by file extension."""
     file = Path(path)
     if not file.is_file():
         raise FileNotFoundError(f"Population grid not found: {file}")
+    source = source or GHS_POP_SOURCE
     if file.suffix.lower() in {".csv", ".txt"}:
-        return read_population_csv(file.read_text(encoding="utf-8-sig"))
-    return read_population_raster(file, bbox)
+        return read_population_csv(file.read_text(encoding="utf-8-sig"), source)
+    return read_population_raster(file, bbox, source)
 
 
 def residents_by_polygon(
@@ -196,11 +199,11 @@ def load_configured_population(bbox: BoundingBox) -> PopulationGrid | None:
     """The population grid named by ``POPULATION_PATH`` for ``bbox``; never raises."""
     from app.core.config import get_settings
 
-    path = get_settings().population_path
-    if not path:
+    settings = get_settings()
+    if not settings.population_path:
         return None
     try:
-        return read_population(path, bbox)
+        return read_population(settings.population_path, bbox, settings.population_source)
     except Exception as error:  # A broken grid must not block the plan.
         logger.warning("Population grid unavailable: %s", error)
         return None

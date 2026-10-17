@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     # Optional population grid: a GHS-POP GeoTIFF (any projection) or a
     # lon,lat,population CSV. When set, plans count residents per superblock.
     population_path: str | None = None
+    # How plans credit the grid, e.g. "Meta HRSL (CC BY 4.0)"; GHS-POP by default.
+    population_source: str | None = None
+    # Optional open data layers written by scripts/fetch_open_data.py: jobs
+    # (lon,lat,jobs CSV), facilities (kind,name,lon,lat CSV), turn restrictions
+    # (JSON) and measured NO2 at air quality stations (name,lon,lat,no2_ugm3 CSV).
+    jobs_path: str | None = None
+    facilities_path: str | None = None
+    turn_restrictions_path: str | None = None
+    air_quality_stations_path: str | None = None
 
 
 @lru_cache
