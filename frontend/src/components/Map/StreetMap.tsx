@@ -1123,6 +1123,12 @@ export function StreetMap({
                 : `${Math.round(hoveredSimulationLink.planned_vph)} veh/h (${Math.round(hoveredSimulationLink.planned_vc * 100)}% full)`}
             </span>
           </div>
+          {hoveredSimulationLink.planned_charged_vph != null && !hoveredSimulationLink.closed_in_plan && (
+            <div className="tooltip-row">
+              <span>Plan and entry charge:</span>
+              <span>{Math.round(hoveredSimulationLink.planned_charged_vph)} veh/h</span>
+            </div>
+          )}
           <div className="tooltip-row">
             <span>Capacity:</span>
             <span>{Math.round(hoveredSimulationLink.capacity_vph)} veh/h per direction</span>
@@ -1438,11 +1444,13 @@ export function StreetMap({
             <div className="legend-title">
               {simulationView === 'change'
                 ? 'Simulated peak-hour change'
-                : simulationView === 'with'
+                : simulationView === 'fee'
+                  ? 'Change with the plan and the entry charge'
+                  : simulationView === 'with'
                   ? 'Simulated load with the plan'
                   : 'Simulated load today'}
             </div>
-            {(simulationView === 'change' ? CHANGE_BANDS : LOAD_BANDS).map(band => (
+            {(simulationView === 'change' || simulationView === 'fee' ? CHANGE_BANDS : LOAD_BANDS).map(band => (
               <div key={band.label} className="legend-item">
                 <span className="legend-color" style={{ background: `rgb(${band.color[0]}, ${band.color[1]}, ${band.color[2]})` }} />
                 <span className="legend-label">{band.label}</span>

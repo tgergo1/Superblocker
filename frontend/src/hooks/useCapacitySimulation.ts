@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { simulateCapacityWithProgress } from '../services/api';
 import type { CityPartition } from '../types';
-import type { CapacitySimulationResult, SimulationProgress } from '../types/simulation';
+import { BUDAPEST_CORDON, BUDAPEST_CORDON_NAME } from '../data/budapestCordon';
+import type {
+  CapacitySimulationResult,
+  CapacitySimulationSettings,
+  SimulationProgress,
+} from '../types/simulation';
 
 export function useCapacitySimulation(partition: CityPartition | null) {
   const [result, setResult] = useState<CapacitySimulationResult | null>(null);
@@ -25,7 +30,7 @@ export function useCapacitySimulation(partition: CityPartition | null) {
   }, [partition, cancel]);
 
   const run = useCallback(
-    async (peakHourTrips: number | null) => {
+    async (peakHourTrips: number | null, entryCharge: number | null = null) => {
       if (!partition) return;
       controller.current?.abort();
       const abort = new AbortController();
@@ -34,9 +39,18 @@ export function useCapacitySimulation(partition: CityPartition | null) {
       setError(null);
       setProgress(null);
       try {
+        const settings: CapacitySimulationSettings = {};
+        if (peakHourTrips) settings.peak_hour_trips = peakHourTrips;
+        if (entryCharge) {
+          settings.entry_charge = {
+            name: BUDAPEST_CORDON_NAME,
+            cordon: BUDAPEST_CORDON,
+            charge: entryCharge,
+          };
+        }
         const simulation = await simulateCapacityWithProgress(
           partition,
-          peakHourTrips ? { peak_hour_trips: peakHourTrips } : {},
+          settings,
           setProgress,
           abort.signal,
         );

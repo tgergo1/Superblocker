@@ -9,6 +9,59 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from app.models.schemas import CityPartition
 
 
+class EntryChargeSettings(BaseModel):
+    """A charge on cars driving into a zone (a cordon or area toll).
+
+    Routes avoid the charge at ``value_of_time_per_hour``, so traffic through
+    the zone can go round it. Trips that still cross the cordon respond with a
+    constant elasticity on their generalised cost: trips scale with
+    ``((cost + charge) / cost) ** price_elasticity`` for the share of cars
+    that pay, where cost is the trip's time at the value of time plus its
+    running cost per km. ``docs/research/congestion-charging.md`` derives the
+    elasticity range from London, Stockholm, Gothenburg, Milan and New York.
+    """
+
+    name: str = Field(default="Inner-city entry charge", max_length=120)
+    # Closed ring of [lon, lat] points; the zone is everything inside it.
+    cordon: list[list[float]] = Field(min_length=4, max_length=20_000)
+    # Charged once per trip that drives into the zone, in ``currency``.
+    charge: float = Field(gt=0, le=1_000_000)
+    currency: str = Field(default="HUF", max_length=8)
+    # Share of cars entering that pay nothing (disabled badges, taxis,
+    # deliveries with permits, exempt vehicles); they neither reroute nor respond.
+    exempt_share: float = Field(default=0.2, ge=0, lt=1)
+    # Residents of the zone do not pay for driving back in.
+    residents_exempt: bool = True
+    value_of_time_per_hour: float = Field(default=3_000.0, gt=0)
+    running_cost_per_km: float = Field(default=60.0, ge=0)
+    # Gateway trips continue outside the simulated area; their cost counts
+    # this much more time and distance, so a charge is a smaller share of it.
+    external_access_minutes: float = Field(default=20.0, ge=0, le=300)
+    external_access_km: float = Field(default=15.0, ge=0, le=500)
+    price_elasticity: float = Field(default=-0.7, ge=-5, lt=0)
+    # Extra runs with the low and high ends of the elasticity range.
+    elasticity_range: tuple[float, float] | None = (-0.5, -1.2)
+    # Morning-peak share of a weekday's charged entries, and charging days a
+    # year, to turn the peak hour into an annual revenue estimate.
+    peak_hour_share_of_day: float = Field(default=0.12, gt=0, le=1)
+    charging_days_per_year: int = Field(default=250, ge=1, le=366)
+    # Main roads this close outside the cordon count as its ring road.
+    ring_band_m: float = Field(default=400.0, ge=0, le=5_000)
+    # Junctions this close to the cordon line count as outside it, so the
+    # boundary road is free to drive along and a ring drawn a little off the
+    # street does not charge at every other junction.
+    boundary_tolerance_m: float = Field(default=60.0, ge=0, le=1_000)
+
+    @field_validator("cordon")
+    @classmethod
+    def _valid_ring(cls, ring: list[list[float]]) -> list[list[float]]:
+        if any(len(point) < 2 for point in ring):
+            raise ValueError("cordon points must be [lon, lat]")
+        if ring[0][:2] != ring[-1][:2]:
+            ring = [*ring, ring[0]]
+        return ring
+
+
 class CapacitySimulationSettings(BaseModel):
     """Assumptions for the synthetic peak-hour demand and the assignment."""
 
@@ -65,6 +118,9 @@ class CapacitySimulationSettings(BaseModel):
     # 0 keeps demand fixed (the worst case for the plan).
     demand_elasticity: float = Field(default=-0.5, ge=-3, le=0)
     elastic_iterations: int = Field(default=4, ge=1, le=20)
+    # Optional charge for driving into a zone, tested on today's network and
+    # together with the plan; both runs let trips respond.
+    entry_charge: EntryChargeSettings | None = None
 
     @model_validator(mode="after")
     def _breakdown_above_calibration(self) -> CapacitySimulationSettings:
@@ -146,6 +202,12 @@ class SimulatedLink(BaseModel):
     baseline_speed_kph: float = Field(default=0.0, ge=0)
     planned_speed_kph: float = Field(default=0.0, ge=0)
     planned_elastic_speed_kph: float | None = Field(default=None, ge=0)
+    # With the entry charge (central elasticity), on today's network and with the plan.
+    charged_vph: float | None = Field(default=None, ge=0)
+    charged_speed_kph: float | None = Field(default=None, ge=0)
+    planned_charged_vph: float | None = Field(default=None, ge=0)
+    planned_charged_speed_kph: float | None = Field(default=None, ge=0)
+    inside_cordon: bool = False
 
 
 class EnvironmentScenario(BaseModel):
@@ -176,7 +238,8 @@ class EnvironmentStationFit(BaseModel):
 class EnvironmentSummary(BaseModel):
     """NO2 fitted to measuring stations and peak-hour noise, today and with the plan.
 
-    Scenarios are ``today``, ``plan`` (same trips) and ``plan_with_response``.
+    Scenarios are ``today``, ``plan`` (same trips) and ``plan_with_response``,
+    plus ``charge`` and ``plan_with_charge`` when an entry charge is tested.
     """
 
     background_no2: float
@@ -192,6 +255,63 @@ class EnvironmentSummary(BaseModel):
     no2_worse_residents: dict[str, float] = Field(default_factory=dict)
     noise_better_residents: dict[str, float] = Field(default_factory=dict)
     noise_worse_residents: dict[str, float] = Field(default_factory=dict)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class ChargeScenarioResult(BaseModel):
+    """One traffic state at today's demand once trips have responded."""
+
+    name: str
+    elasticity: float | None = None
+    trips: float = Field(ge=0)
+    # Against today's trips.
+    trips_not_made_share: float = 0.0
+    mean_trip_minutes: float = Field(ge=0)
+    mean_trip_minutes_change_percent: float = 0.0
+    vehicle_km: float = Field(ge=0)
+    vehicle_km_change_percent: float = 0.0
+    vehicle_hours: float = Field(ge=0)
+    vehicle_hours_change_percent: float = 0.0
+    # Cars driving into the zone in the peak hour, and the change against today.
+    cordon_entries: float = Field(ge=0)
+    cordon_entries_change_percent: float = 0.0
+    inside_vehicle_km: float = Field(ge=0)
+    inside_vehicle_km_change_percent: float = 0.0
+    outside_vehicle_km: float = Field(ge=0)
+    outside_vehicle_km_change_percent: float = 0.0
+    # Main roads within ``ring_band_m`` outside the cordon: where diverted
+    # through traffic goes.
+    ring_vehicle_km: float = Field(ge=0)
+    ring_vehicle_km_change_percent: float = 0.0
+    # Main-road kilometres carrying 10% (and at least 50 vehicles an hour) more
+    # than today, and residential street kilometres doing the same.
+    main_road_km_busier: float = Field(default=0.0, ge=0)
+    minor_street_km_busier: float = Field(default=0.0, ge=0)
+    main_road_km_quieter: float = Field(default=0.0, ge=0)
+    congested_km: float = Field(default=0.0, ge=0)
+    charged_entries: float = Field(default=0.0, ge=0)
+    revenue_per_peak_hour: float = Field(default=0.0, ge=0)
+    revenue_per_year: float = Field(default=0.0, ge=0)
+
+
+class EntryChargeSummary(BaseModel):
+    """The entry charge alone, the plan alone and both, against today."""
+
+    name: str
+    charge: float
+    currency: str
+    area_km2: float = Field(ge=0)
+    cordon_links: int = Field(ge=0)
+    zones_inside: int = Field(ge=0)
+    price_elasticity: float
+    elasticity_range: tuple[float, float] | None = None
+    value_of_time_per_hour: float
+    exempt_share: float
+    # Mean generalised cost of today's trips into the zone, and the charge as a share of it.
+    mean_entering_trip_cost: float = Field(default=0.0, ge=0)
+    # Keys: today, plan (trips respond), charge, plan_with_charge, and
+    # charge_low/charge_high/plan_with_charge_low/plan_with_charge_high for the range.
+    scenarios: dict[str, ChargeScenarioResult]
     limitations: list[str] = Field(default_factory=list)
 
 
@@ -232,5 +352,6 @@ class CapacitySimulationResult(BaseModel):
     links: list[SimulatedLink] = Field(default_factory=list)
     # Air and noise from this run's traffic, when stations and residents are given.
     environment: EnvironmentSummary | None = None
+    entry_charge: EntryChargeSummary | None = None
     limitations: list[str] = Field(default_factory=list)
     processing_time_seconds: float = Field(default=0.0, ge=0)

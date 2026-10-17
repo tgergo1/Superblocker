@@ -324,3 +324,109 @@ def test_simulation_models_air_and_noise_with_stations_and_residents():
     assert set(environment.scenarios) == {"today", "plan", "plan_with_response"}
     assert environment.residents == pytest.approx(3600.0)
     assert len(environment.stations) == 4
+
+
+def _centre_cordon(size: int = 13, inner: tuple[int, int] = (4, 8)):
+    """A square zone around the grid's middle cells, a little inside the main roads."""
+    low, high = inner
+    west = 19.0 + (low - 0.5) * STEP * 1.48
+    east = 19.0 + (high + 0.5) * STEP * 1.48
+    south = 47.5 + (low - 0.5) * STEP
+    north = 47.5 + (high + 0.5) * STEP
+    return [[west, south], [east, south], [east, north], [west, north], [west, south]]
+
+
+def test_entry_charge_cuts_entries_and_moves_through_traffic_round_the_zone():
+    from app.models.simulation import EntryChargeSettings
+
+    charge = EntryChargeSettings(
+        cordon=_centre_cordon(), charge=2_000, value_of_time_per_hour=3_000, ring_band_m=150
+    )
+    result = simulate(demand_levels=[1.0], entry_charge=charge)
+    summary = result.entry_charge
+    assert summary is not None
+    assert summary.cordon_links > 0 and summary.zones_inside > 0
+    assert 0.1 < summary.area_km2 < 1.0
+    scenarios = summary.scenarios
+    assert {"today", "plan", "charge", "plan_with_charge"} <= set(scenarios)
+    assert {"charge_low", "charge_high", "plan_with_charge_low", "plan_with_charge_high"} <= set(
+        scenarios
+    )
+    today, charged = scenarios["today"], scenarios["charge"]
+    assert charged.cordon_entries < today.cordon_entries
+    assert charged.cordon_entries_change_percent < 0
+    assert charged.trips < today.trips
+    assert charged.revenue_per_peak_hour > 0 and today.revenue_per_peak_hour == 0
+    # A stronger response takes more trips off the road.
+    assert scenarios["charge_high"].trips < charged.trips < scenarios["charge_low"].trips
+    # Together with the plan, fewer trips than the plan alone and fewer entries.
+    assert scenarios["plan_with_charge"].trips < scenarios["plan"].trips
+    assert scenarios["plan_with_charge"].cordon_entries < scenarios["plan"].cordon_entries
+    links = [link for link in result.links if link.charged_vph is not None]
+    assert links and any(link.inside_cordon for link in result.links)
+
+
+def test_residents_inside_the_zone_do_not_respond_to_the_charge():
+    from app.models.simulation import EntryChargeSettings
+
+    graph = grid_city()
+    charge = EntryChargeSettings(cordon=_centre_cordon(), charge=2_000)
+    simulator = CapacitySimulator(
+        graph,
+        settings=CapacitySimulationSettings(
+            zone_size_m=250, demand_levels=[1.0], entry_charge=charge
+        ),
+    )
+    simulator.run()
+    assert simulator._base_costs.shape[0] == simulator._base_costs.shape[1]
+    from app.services.simulation.capacity_simulator import _Assignment
+
+    zones = simulator._base_costs.shape[0]
+    crossings = np.ones((zones, zones))
+    assignment = _Assignment(
+        flows=np.zeros(1),
+        arc_flows=np.zeros(1),
+        times=np.zeros(1),
+        served=0.0,
+        blocked=0.0,
+        gap=0.0,
+        iterations=0,
+        crossings=crossings,
+    )
+    network = simulator._network
+    factor = simulator._charge_factor(network, assignment, -1.0)
+    inside = network.zone_inside
+    assert inside.any()
+    assert np.all(factor[inside] == 1.0)
+    assert np.all(factor[~inside] < 1.0)
+
+
+def test_a_road_on_the_cordon_line_is_free_to_drive_along():
+    from app.models.simulation import EntryChargeSettings
+
+    # The cordon is drawn about 10 m outside the main roads at rows and
+    # columns 4 and 8, as a hand-drawn ring around real streets would be.
+    cordon = _centre_cordon(inner=(4.4, 7.6))
+
+    def ring_links_charged(tolerance: float) -> int:
+        charge = EntryChargeSettings(cordon=cordon, charge=2_000, boundary_tolerance_m=tolerance)
+        simulator = CapacitySimulator(
+            grid_city(),
+            settings=CapacitySimulationSettings(zone_size_m=250, entry_charge=charge),
+        )
+        network = simulator._build_network()
+        simulator._mark_cordon(network)
+        col = np.rint((network.lon - 19.0) / (STEP * 1.48)).astype(int)
+        row = np.rint((network.lat - 47.5) / STEP).astype(int)
+        on_ring = (np.isin(col, (4, 8)) & (row >= 4) & (row <= 8)) | (
+            np.isin(row, (4, 8)) & (col >= 4) & (col <= 8)
+        )
+        links = network.links
+        along = on_ring[links.tail] & on_ring[links.head]
+        assert along.any() and network.link_entering.any()
+        return int((along & (network.link_inside | network.link_entering)).sum())
+
+    # Read literally, the ring road is inside the zone: driving onto it pays.
+    assert ring_links_charged(0.0) > 0
+    # Junctions on the line count as outside, so the ring road stays free.
+    assert ring_links_charged(30.0) == 0

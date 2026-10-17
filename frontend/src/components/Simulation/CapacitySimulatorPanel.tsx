@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type {
   CapacitySimulationResult,
+  EntryChargeSummary,
   SimulationLevelResult,
   SimulationMapView,
   SimulationProgress,
@@ -13,7 +14,9 @@ interface CapacitySimulatorPanelProps {
   isRunning: boolean;
   progress: SimulationProgress | null;
   error: string | null;
-  onRun: (peakHourTrips: number | null) => void;
+  onRun: (peakHourTrips: number | null, entryCharge: number | null) => void;
+  /** Whether the area reaches the Budapest entry charge zone. */
+  entryChargeAvailable?: boolean;
   onCancel: () => void;
   showOnMap: boolean;
   onShowOnMapChange: (value: boolean) => void;
@@ -123,6 +126,82 @@ function CapacityChart({ result }: { result: CapacitySimulationResult }) {
   );
 }
 
+const DEFAULT_CHARGE = 800;
+
+function formatMoney(value: number, currency: string): string {
+  if (value >= 1e9) return `${(value / 1e9).toFixed(1)} bn ${currency}`;
+  if (value >= 1e6) return `${(value / 1e6).toFixed(0)} m ${currency}`;
+  return `${Math.round(value).toLocaleString()} ${currency}`;
+}
+
+const CHARGE_ROWS: [string, string][] = [
+  ['plan', 'Superblocks'],
+  ['charge', 'Entry charge'],
+  ['plan_with_charge', 'Both'],
+];
+
+function EntryChargeResults({ summary }: { summary: EntryChargeSummary }) {
+  const both = summary.scenarios.plan_with_charge;
+  const low = summary.scenarios.plan_with_charge_low;
+  const high = summary.scenarios.plan_with_charge_high;
+  const rows = CHARGE_ROWS.filter(([key]) => summary.scenarios[key]);
+  if (summary.cordon_links === 0) {
+    return (
+      <p className="capacity-note">
+        The {summary.name.toLowerCase()} zone does not cross this area, so the charge changes nothing here.
+      </p>
+    );
+  }
+  return (
+    <div className="capacity-charge-results">
+      <div className="capacity-chart-title">
+        {summary.name}: {Math.round(summary.charge).toLocaleString()} {summary.currency} per entry
+      </div>
+      <table className="capacity-charge-table">
+        <thead>
+          <tr>
+            <th scope="col">Against today</th>
+            {rows.map(([key, label]) => (
+              <th key={key} scope="col">{label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {([
+            ['Cars entering the zone', 'cordon_entries_change_percent'],
+            ['Driving inside the zone', 'inside_vehicle_km_change_percent'],
+            ['Driving on the ring road', 'ring_vehicle_km_change_percent'],
+            ['Driving outside the zone', 'outside_vehicle_km_change_percent'],
+            ['Average car trip time', 'mean_trip_minutes_change_percent'],
+          ] as [string, keyof EntryChargeSummary['scenarios'][string]][]).map(([label, field]) => (
+            <tr key={field}>
+              <th scope="row">{label}</th>
+              {rows.map(([key]) => (
+                <td key={key}>{formatPercentChange(summary.scenarios[key][field] as number)}</td>
+              ))}
+            </tr>
+          ))}
+          <tr>
+            <th scope="row">Main roads &gt;10% busier</th>
+            {rows.map(([key]) => (
+              <td key={key}>{summary.scenarios[key].main_road_km_busier.toFixed(0)} km</td>
+            ))}
+          </tr>
+        </tbody>
+      </table>
+      {both && (
+        <p className="capacity-note">
+          Both together: entries {formatPercentChange(both.cordon_entries_change_percent)}
+          {low && high
+            ? ` (${formatPercentChange(low.cordon_entries_change_percent)} to ${formatPercentChange(high.cordon_entries_change_percent)} across elasticities ${summary.elasticity_range?.[0]} to ${summary.elasticity_range?.[1]})`
+            : ''}
+          , about {formatMoney(both.revenue_per_year, summary.currency)} a year from paying cars.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function CapacitySimulatorPanel({
   result,
   isRunning,
@@ -134,12 +213,18 @@ export function CapacitySimulatorPanel({
   onShowOnMapChange,
   mapView,
   onMapViewChange,
+  entryChargeAvailable = false,
 }: CapacitySimulatorPanelProps) {
   const [expanded, setExpanded] = useState(true);
   const [tripsInput, setTripsInput] = useState('');
+  const [chargeOn, setChargeOn] = useState(false);
+  const [chargeInput, setChargeInput] = useState(String(DEFAULT_CHARGE));
 
   const parsedTrips = Number(tripsInput.replace(/[\s,]/g, ''));
   const peakHourTrips = tripsInput.trim() && Number.isFinite(parsedTrips) && parsedTrips > 0 ? parsedTrips : null;
+  const parsedCharge = Number(chargeInput.replace(/[\s,]/g, ''));
+  const entryCharge =
+    entryChargeAvailable && chargeOn && Number.isFinite(parsedCharge) && parsedCharge > 0 ? parsedCharge : null;
   const baseToday = result ? atToday(result.baseline.levels) : undefined;
   const planToday = result ? atToday(result.planned.levels) : undefined;
   const maxLevel = result ? Math.max(...result.settings.demand_levels) : 0;
@@ -196,7 +281,34 @@ export function CapacitySimulatorPanel({
                   onChange={event => setTripsInput(event.target.value)}
                 />
               </label>
-              <button type="button" className="capacity-primary" onClick={() => onRun(peakHourTrips)}>
+              {entryChargeAvailable && (
+                <div className="capacity-charge">
+                  <label className="capacity-map-toggle">
+                    <input
+                      type="checkbox"
+                      checked={chargeOn}
+                      onChange={event => setChargeOn(event.target.checked)}
+                    />
+                    Add the inner-city entry charge (Hungária ring)
+                  </label>
+                  {chargeOn && (
+                    <label>
+                      Charge per entry (HUF)
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={chargeInput}
+                        onChange={event => setChargeInput(event.target.value)}
+                      />
+                    </label>
+                  )}
+                </div>
+              )}
+              <button
+                type="button"
+                className="capacity-primary"
+                onClick={() => onRun(peakHourTrips, entryCharge)}
+              >
                 {result ? 'Run again' : 'Run traffic simulation'}
               </button>
             </div>
@@ -253,6 +365,8 @@ export function CapacitySimulatorPanel({
                 </p>
               </div>
 
+              {result.entry_charge && <EntryChargeResults summary={result.entry_charge} />}
+
               {result.junctions_cut_off_by_plan > 0 && (
                 <p className="capacity-warning">
                   {result.junctions_cut_off_by_plan.toLocaleString()} junctions lose all car access in the
@@ -280,6 +394,7 @@ export function CapacitySimulatorPanel({
                     ['change', 'Change'],
                     ['without', 'Today'],
                     ['with', 'With plan'],
+                    ...(result.entry_charge ? [['fee', 'Plan + charge']] : []),
                   ] as [SimulationMapView, string][]).map(([value, label]) => (
                     <button
                       key={value}

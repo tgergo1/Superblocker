@@ -63,6 +63,8 @@ from app.models.schemas import (
 from app.models.simulation import (
     CapacitySimulationResult,
     CapacitySimulationSettings,
+    ChargeScenarioResult,
+    EntryChargeSummary,
     EnvironmentScenario,
     EnvironmentStationFit,
     EnvironmentSummary,
@@ -193,6 +195,10 @@ class _Arcs:
     enabled_base: np.ndarray
     enabled_plan: np.ndarray
     penalty_plan: np.ndarray
+    # Entry charge: seconds of value of time an arc into the zone costs, and
+    # 1.0 on those arcs (to count crossings).
+    toll: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    cordon: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
 
 @dataclass
@@ -206,6 +212,8 @@ class _Assignment:
     iterations: int
     # Zone-to-zone travel minutes on the final routes (penalties excluded).
     skims: np.ndarray | None = None
+    # Zone-to-zone count of charged entries into the cordon on those routes.
+    crossings: np.ndarray | None = None
 
 
 @dataclass
@@ -228,6 +236,14 @@ class _Network:
     movements: int = 0
     restrictions_applied: int = 0
     signalised: int = 0
+    # Zone of each connector junction.
+    connector_zones: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    # Entry charge geometry: links inside, links entering, main roads on the
+    # ring outside it, zones inside.
+    link_inside: np.ndarray | None = None
+    link_entering: np.ndarray | None = None
+    link_ring: np.ndarray | None = None
+    zone_inside: np.ndarray | None = None
 
 
 class CapacitySimulator:
@@ -274,6 +290,8 @@ class CapacitySimulator:
         settings = self.settings
         self._report("Building the street network", 0.0)
         network = self._build_network()
+        self._mark_cordon(network)
+        self._network = network
         links = network.links
         self._report("Building demand", 0.05)
         reference_seconds, base_trips, calibrated = self._build_demand(network)
@@ -348,6 +366,18 @@ class CapacitySimulator:
                 else 0.0
             )
 
+        charge_summary: EntryChargeSummary | None = None
+        charged: dict[str, _Assignment] = {}
+        if settings.entry_charge is not None:
+            charge_summary, charged = self._charge_scenarios(
+                network,
+                base_trips,
+                detail["without_superblocks"],
+                elastic_assignment,
+                trips if elastic else base_trips,
+                lambda message: self._report(message, 0.95),
+            )
+
         capacity_change = None
         if baseline.capacity_multiplier and planned.capacity_multiplier is not None:
             capacity_change = (
@@ -402,7 +432,9 @@ class CapacitySimulator:
                 detail["with_superblocks"],
                 elastic_assignment,
                 boundary_ids,
+                charged=charged,
             ),
+            entry_charge=charge_summary,
             limitations=self._limitations(calibrated, baseline, planned),
         )
         result.environment = self._environment(
@@ -411,6 +443,7 @@ class CapacitySimulator:
             detail["with_superblocks"],
             elastic_assignment,
             boundary_ids,
+            charged,
         )
         result.processing_time_seconds = time.monotonic() - started
         self._report("Simulation complete", 1.0)
@@ -577,6 +610,7 @@ class CapacitySimulator:
             movements=int(m_from.size),
             restrictions_applied=restricted,
             signalised=signalised,
+            connector_zones=zones,
         )
 
     @staticmethod
@@ -1088,12 +1122,18 @@ class CapacitySimulator:
         baseline: _Assignment,
         planned: _Assignment,
         report: Callable[[int], None],
+        plan: bool = True,
+        charge: bool = False,
+        price_elasticity: float | None = None,
     ) -> tuple[_Assignment, float]:
-        """Planned equilibrium once zone-to-zone trips respond to their new travel times.
+        """Equilibrium once zone-to-zone trips respond to their new travel times.
 
-        Trips between zones i and j become T0 * (t_plan / t_today) ** e, with
-        the times taken on the planned network's own equilibrium. The demand
-        and the assignment are iterated with averaging until they agree.
+        Trips between zones i and j become T0 * (t_new / t_today) ** e, with
+        the times taken on the new state's own equilibrium (``planned``, the
+        first guess). With the entry charge, trips whose route pays it are
+        further scaled by the charge's share of their cost (``_charge_factor``).
+        The demand and the assignment are iterated with averaging until they
+        agree.
         """
         settings = self.settings
         reference = network.demand * base_trips
@@ -1109,20 +1149,289 @@ class CapacitySimulator:
                     1.0,
                 )
                 target = reference * np.power(np.maximum(ratio, 1e-3), settings.demand_elasticity)
+                if charge and current.crossings is not None and price_elasticity is not None:
+                    target = target * self._charge_factor(network, current, price_elasticity)
                 target = np.where(np.isfinite(current.skims), target, 0.0)
                 demand = demand + (target - demand) / (round_number + 1)
                 # The demand changed shape, so the old flows are no feasible start.
-                current = self._equilibrium(network, True, demand, None, skims=True)
+                current = self._equilibrium(network, plan, demand, None, skims=True, charge=charge)
         return current, float(demand.sum())
+
+    # ------------------------------------------------------------ entry charge
+
+    def _mark_cordon(self, network: _Network) -> None:
+        """Find the links inside, into and around the charged zone."""
+        charge = self.settings.entry_charge
+        if charge is None:
+            return
+        from shapely import contains_xy
+        from shapely.geometry import Polygon
+
+        polygon = Polygon([(float(p[0]), float(p[1])) for p in charge.cordon])
+        if not polygon.is_valid:
+            polygon = polygon.buffer(0)
+        lat0 = math.radians(float(network.lat.mean()))
+        scale = METRES_PER_DEGREE_LON * math.cos(lat0) / METRES_PER_DEGREE_LAT
+        # Distance in metres from each junction to the cordon line, in a
+        # locally metric frame (longitude scaled to latitude metres).
+        from shapely import distance as shapely_distance
+        from shapely import points
+        from shapely.affinity import scale as shapely_scale
+
+        boundary = shapely_scale(polygon.exterior, xfact=scale, yfact=1.0, origin=(0, 0))
+        node_distance = (
+            shapely_distance(boundary, points(network.lon * scale, network.lat))
+            * METRES_PER_DEGREE_LAT
+        )
+        # Junctions on the cordon line count as outside, so the boundary road
+        # itself stays free to drive along, as London's Inner Ring Road and
+        # Stockholm's Essingeleden do. Without this, a ring road drawn a few
+        # metres either side of the line would pay at every other junction.
+        node_inside = contains_xy(polygon, network.lon, network.lat)
+        node_inside &= node_distance > charge.boundary_tolerance_m
+        links = network.links
+        inside = node_inside[links.tail] & node_inside[links.head]
+        entering = ~node_inside[links.tail] & node_inside[links.head]
+        near = node_distance <= charge.ring_band_m
+        ring = links.is_main & ~node_inside[links.tail] & ~node_inside[links.head]
+        ring &= near[links.tail] & near[links.head]
+
+        connector_inside = node_inside[network.connectors]
+        zone_inside = np.zeros(network.zone_count, dtype=bool)
+        counts = np.bincount(network.connector_zones, minlength=network.zone_count)
+        share = np.bincount(
+            network.connector_zones, weights=connector_inside, minlength=network.zone_count
+        ) / np.maximum(counts, 1)
+        zone_inside[: counts.size] = share > 0.5
+
+        arcs = network.arcs
+        into = np.where(arcs.link >= 0, entering[np.maximum(arcs.link, 0)], False)
+        seconds = charge.charge * (1.0 - charge.exempt_share) / charge.value_of_time_per_hour
+        arcs.cordon = into.astype(float)
+        arcs.toll = arcs.cordon * seconds * 3600.0
+        network.link_inside = inside
+        network.link_entering = entering
+        network.link_ring = ring
+        network.zone_inside = zone_inside
+        self._cordon_area_km2 = float(
+            shapely_scale(polygon, xfact=scale, yfact=1.0, origin=(0, 0)).area
+            * METRES_PER_DEGREE_LAT**2
+            / 1e6
+        )
+
+    def _trip_costs(self, network: _Network, baseline: _Assignment) -> np.ndarray:
+        """Today's generalised cost of every zone pair, in the charge's currency."""
+        charge = self.settings.entry_charge
+        assert charge is not None
+        loaded = self._all_or_nothing(
+            network, False, baseline.times, np.zeros_like(network.demand), distances=True
+        )
+        minutes = np.where(np.isfinite(baseline.skims), baseline.skims, 0.0)
+        km = np.where(np.isfinite(loaded.distances), loaded.distances, 0.0)
+        inner = self._production.size
+        external = np.zeros(network.demand.shape, dtype=bool)
+        external[inner:, :] = True
+        external[:, inner:] = True
+        minutes = minutes + external * charge.external_access_minutes
+        km = km + external * charge.external_access_km
+        return charge.value_of_time_per_hour * minutes / 60.0 + charge.running_cost_per_km * km
+
+    def _charge_factor(
+        self, network: _Network, assignment: _Assignment, elasticity: float
+    ) -> np.ndarray:
+        """How many of each pair's trips are still made once the charge applies."""
+        charge = self.settings.entry_charge
+        assert charge is not None and assignment.crossings is not None
+        paying = assignment.crossings >= 0.5
+        if charge.residents_exempt and network.zone_inside is not None:
+            paying &= ~network.zone_inside[:, None]
+        cost = np.maximum(self._base_costs, 1.0)
+        response = np.power((cost + charge.charge) / cost, elasticity)
+        response = charge.exempt_share + (1.0 - charge.exempt_share) * response
+        return np.where(paying, response, 1.0)
+
+    def _charge_scenarios(
+        self,
+        network: _Network,
+        base_trips: float,
+        baseline: _Assignment,
+        plan_response: _Assignment | None,
+        plan_trips: float,
+        progress: Callable[[str], None],
+    ) -> tuple[EntryChargeSummary, dict[str, _Assignment]]:
+        """The charge alone and with the plan, each with trips responding."""
+        charge = self.settings.entry_charge
+        assert charge is not None and network.link_inside is not None
+        assert baseline.crossings is not None
+        self._today_flows = baseline.flows
+        self._base_costs = self._trip_costs(network, baseline)
+        reference = network.demand * base_trips
+        entering = baseline.crossings >= 0.5
+        if charge.residents_exempt and network.zone_inside is not None:
+            entering &= ~network.zone_inside[:, None]
+        weights = reference * entering
+        mean_cost = (
+            float((self._base_costs * weights).sum() / weights.sum()) if weights.sum() > 0 else 0.0
+        )
+
+        elasticities = {"": charge.price_elasticity}
+        if charge.elasticity_range is not None:
+            low, high = charge.elasticity_range
+            elasticities.update({"_low": low, "_high": high})
+        states: dict[str, _Assignment] = {}
+        trips: dict[str, float] = {}
+        used: dict[str, float] = {}
+        for suffix, elasticity in elasticities.items():
+            for name, plan in (("charge", False), ("plan_with_charge", True)):
+                key = name + suffix
+                used[key] = elasticity
+                start = self._equilibrium(network, plan, reference, None, skims=True, charge=True)
+                states[key], trips[key] = self._elastic(
+                    network,
+                    base_trips,
+                    baseline,
+                    start,
+                    lambda k, key=key: progress(f"Entry charge: {key} (round {k})"),
+                    plan=plan,
+                    charge=True,
+                    price_elasticity=elasticity,
+                )
+
+        scenarios = {"today": self._charge_result("today", baseline, base_trips, None, network)}
+        scenarios["today"].revenue_per_peak_hour = 0.0
+        if plan_response is not None:
+            scenarios["plan"] = self._charge_result(
+                "plan", plan_response, plan_trips, None, network, scenarios["today"], base_trips
+            )
+        for key, state in states.items():
+            scenarios[key] = self._charge_result(
+                key, state, trips[key], used[key], network, scenarios["today"], base_trips, True
+            )
+        summary = EntryChargeSummary(
+            name=charge.name,
+            charge=charge.charge,
+            currency=charge.currency,
+            area_km2=self._cordon_area_km2,
+            cordon_links=int(network.link_entering.sum()),
+            zones_inside=int(network.zone_inside.sum()),
+            price_elasticity=charge.price_elasticity,
+            elasticity_range=charge.elasticity_range,
+            value_of_time_per_hour=charge.value_of_time_per_hour,
+            exempt_share=charge.exempt_share,
+            mean_entering_trip_cost=mean_cost,
+            scenarios=scenarios,
+            limitations=self._charge_limitations(),
+        )
+        return summary, {"charge": states["charge"], "plan_with_charge": states["plan_with_charge"]}
+
+    def _charge_result(
+        self,
+        name: str,
+        assignment: _Assignment,
+        trips: float,
+        elasticity: float | None,
+        network: _Network,
+        today: ChargeScenarioResult | None = None,
+        base_trips: float | None = None,
+        charged: bool = False,
+    ) -> ChargeScenarioResult:
+        charge = self.settings.entry_charge
+        assert charge is not None
+        links = network.links
+        flows = assignment.flows
+        km = links.length_m / 1000.0
+        level = self._level_result(1.0, trips, assignment, network)
+        entries = float(flows[network.link_entering].sum())
+        inside = float((flows * km)[network.link_inside].sum())
+        outside = float((flows * km)[~network.link_inside].sum())
+        ring = float((flows * km)[network.link_ring].sum())
+        result = ChargeScenarioResult(
+            name=name,
+            elasticity=elasticity,
+            trips=trips,
+            mean_trip_minutes=level.mean_trip_minutes,
+            vehicle_km=level.vehicle_km,
+            vehicle_hours=level.vehicle_hours,
+            cordon_entries=entries,
+            inside_vehicle_km=inside,
+            outside_vehicle_km=outside,
+            ring_vehicle_km=ring,
+            congested_km=level.congested_km,
+        )
+        if charged:
+            result.charged_entries = entries * (1.0 - charge.exempt_share)
+            result.revenue_per_peak_hour = result.charged_entries * charge.charge
+            result.revenue_per_year = (
+                result.revenue_per_peak_hour
+                / charge.peak_hour_share_of_day
+                * charge.charging_days_per_year
+            )
+        if today is not None:
+            result.trips_not_made_share = max(0.0, 1.0 - trips / max(base_trips or 0.0, 1e-9))
+            for field_name in (
+                "mean_trip_minutes",
+                "vehicle_km",
+                "vehicle_hours",
+                "cordon_entries",
+                "inside_vehicle_km",
+                "outside_vehicle_km",
+                "ring_vehicle_km",
+            ):
+                setattr(
+                    result,
+                    f"{field_name}_change_percent",
+                    _change(getattr(today, field_name), getattr(result, field_name)),
+                )
+            before = self._today_flows
+            # Both directions of a street count once per direction-link.
+            grown = (flows > before * 1.1) & (flows - before >= 50.0)
+            fallen = (flows < before / 1.1) & (before - flows >= 50.0)
+            result.main_road_km_busier = float(km[grown & links.is_main].sum())
+            result.minor_street_km_busier = float(km[grown & ~links.is_main].sum())
+            result.main_road_km_quieter = float(km[fallen & links.is_main].sum())
+        return result
+
+    def _charge_limitations(self) -> list[str]:
+        charge = self.settings.entry_charge
+        assert charge is not None
+        notes = [
+            f"Routes weigh the charge at {charge.value_of_time_per_hour:,.0f} "
+            f"{charge.currency} an hour of time, averaged over paying and exempt cars "
+            f"({charge.exempt_share:.0%} exempt).",
+            "Trips that pay respond with a constant elasticity on their generalised cost "
+            f"({charge.price_elasticity:g}"
+            + (
+                f", range {charge.elasticity_range[0]:g} to {charge.elasticity_range[1]:g}"
+                if charge.elasticity_range
+                else ""
+            )
+            + "), transferred from measured cordon schemes; trips not made switch to "
+            "transit, walking, cycling, another time or another destination, which is "
+            "not modelled further.",
+            "The charge is paid once per peak-hour trip into the zone; a daily charge "
+            "paid once for several trips would weigh less per trip.",
+        ]
+        if charge.residents_exempt:
+            notes.append("Trips starting inside the zone do not pay.")
+        return notes
 
     # -------------------------------------------------------------- assignment
 
-    def _arc_costs(self, network: _Network, plan: bool, link_times: np.ndarray) -> np.ndarray:
+    def _arc_costs(
+        self, network: _Network, plan: bool, link_times: np.ndarray, charge: bool = False
+    ) -> np.ndarray:
         arcs = network.arcs
         costs = np.where(arcs.link >= 0, link_times[np.maximum(arcs.link, 0)], 0.0) + arcs.delay
-        if plan:
-            costs = costs + arcs.penalty_plan
-        return np.maximum(costs, 1e-3)
+        return np.maximum(costs + self._steering(network, plan, charge), 1e-3)
+
+    @staticmethod
+    def _steering(network: _Network, plan: bool, charge: bool) -> np.ndarray | float:
+        """Route costs that are not time: gate penalties and the entry charge."""
+        arcs = network.arcs
+        extra: np.ndarray | float = arcs.penalty_plan if plan else 0.0
+        if charge and arcs.toll.size:
+            extra = extra + arcs.toll
+        return extra
 
     @dataclass
     class _Loaded:
@@ -1132,6 +1441,8 @@ class CapacitySimulator:
         served: float
         blocked: float
         skims: np.ndarray | None
+        crossings: np.ndarray | None = None
+        distances: np.ndarray | None = None
 
     def _all_or_nothing(
         self,
@@ -1140,12 +1451,14 @@ class CapacitySimulator:
         link_times: np.ndarray,
         demand: np.ndarray,
         skims: bool = False,
+        charge: bool = False,
+        distances: bool = False,
     ) -> _Loaded:
         """Load every trip on its current shortest path."""
         arcs = network.arcs
         size = network.node_count
         enabled = arcs.enabled_plan if plan else arcs.enabled_base
-        costs = self._arc_costs(network, plan, link_times)
+        costs = self._arc_costs(network, plan, link_times, charge)
         arc_ids = np.nonzero(enabled)[0]
         matrix = csr_matrix(
             (costs[arc_ids], (arcs.tail[arc_ids], arcs.head[arc_ids])), shape=(size, size)
@@ -1153,15 +1466,33 @@ class CapacitySimulator:
         keys = arcs.tail[arc_ids] * size + arcs.head[arc_ids]
         key_order = np.argsort(keys)
         sorted_keys = keys[key_order]
-        penalised = None
-        if plan and skims and network.arcs.penalty_plan.any():
-            # Penalty paid on the way to each routing node, to report real times.
-            penalised = np.zeros(size)
+        steering = self._steering(network, plan, charge)
+        # Penalties and charges paid on the way to each routing node are taken
+        # off, to report real times.
+        penalised = (
+            steering if skims and isinstance(steering, np.ndarray) and steering.any() else None
+        )
+        counting = skims and arcs.cordon.size > 0
+        lengths = (
+            np.where(arcs.link >= 0, network.links.length_m[np.maximum(arcs.link, 0)], 0.0)
+            if distances
+            else None
+        )
+
+        def path_sums(predecessors: np.ndarray, values: np.ndarray) -> np.ndarray:
+            return _tree_path_sums(
+                predecessors,
+                lambda parent, child: _lookup(
+                    sorted_keys, key_order, arc_ids, size, parent, child, values
+                ),
+            )[:, sinks]
 
         arc_flows = np.zeros(arcs.tail.size)
         cost = served = blocked = 0.0
         sinks = network.sinks
         skim = np.full((network.zone_count, network.zone_count), np.inf) if skims else None
+        crossings = np.zeros((network.zone_count,) * 2) if counting else None
+        distance = np.full((network.zone_count,) * 2, np.inf) if distances else None
         for start in range(0, network.zone_count, ORIGIN_BATCH):
             zones = np.arange(start, min(start + ORIGIN_BATCH, network.zone_count))
             distances, predecessors = dijkstra(
@@ -1172,20 +1503,14 @@ class CapacitySimulator:
             if skim is not None:
                 real = to_sinks
                 if penalised is not None:
-                    paid = _tree_path_sums(
-                        predecessors,
-                        lambda parent, child: _lookup(
-                            sorted_keys,
-                            key_order,
-                            arc_ids,
-                            size,
-                            parent,
-                            child,
-                            network.arcs.penalty_plan,
-                        ),
-                    )[:, sinks]
-                    real = to_sinks - paid
+                    real = to_sinks - path_sums(predecessors, penalised)
                 skim[zones] = real / 60.0
+            if crossings is not None:
+                crossings[zones] = path_sums(predecessors, arcs.cordon)
+            if distance is not None:
+                distance[zones] = np.where(
+                    np.isfinite(to_sinks), path_sums(predecessors, lengths) / 1000.0, np.inf
+                )
             reach = np.isfinite(to_sinks)
             blocked += float(trips[~reach].sum())
             trips = np.where(reach, trips, 0.0)
@@ -1208,6 +1533,8 @@ class CapacitySimulator:
             served=served,
             blocked=blocked,
             skims=skim,
+            crossings=crossings,
+            distances=distance,
         )
 
     @staticmethod
@@ -1230,14 +1557,15 @@ class CapacitySimulator:
         start: tuple[np.ndarray, np.ndarray] | None,
         max_iterations: int | None = None,
         skims: bool = False,
+        charge: bool = False,
     ) -> _Assignment:
         """Frank-Wolfe user equilibrium with an exact line search."""
         settings = self.settings
         links = network.links
         arcs = network.arcs
-        constant = arcs.delay + (arcs.penalty_plan if plan else 0.0)
+        constant = arcs.delay + self._steering(network, plan, charge)
         if start is None:
-            loaded = self._all_or_nothing(network, plan, links.free_time, demand)
+            loaded = self._all_or_nothing(network, plan, links.free_time, demand, charge=charge)
             flows, arc_flows = loaded.flows, loaded.arc_flows
         else:
             enabled = arcs.enabled_plan if plan else arcs.enabled_base
@@ -1251,7 +1579,7 @@ class CapacitySimulator:
         for iteration in range(1, limit + 1):
             iterations = iteration
             times = self._bpr(links, flows)
-            target = self._all_or_nothing(network, plan, times, demand)
+            target = self._all_or_nothing(network, plan, times, demand, charge=charge)
             served, blocked = target.served, target.blocked
             total = float((flows * times).sum() + (arc_flows * constant).sum())
             gap = max(0.0, (total - target.cost) / total) if total > 0 else 0.0
@@ -1265,9 +1593,10 @@ class CapacitySimulator:
             flows = flows + step * direction
             arc_flows = arc_flows + step * arc_direction
         times = self._bpr(links, flows)
-        skim = None
+        skim = crossing = None
         if skims:
-            skim = self._all_or_nothing(network, plan, times, demand, skims=True).skims
+            final = self._all_or_nothing(network, plan, times, demand, skims=True, charge=charge)
+            skim, crossing = final.skims, final.crossings
         return _Assignment(
             flows=flows,
             arc_flows=arc_flows,
@@ -1277,6 +1606,7 @@ class CapacitySimulator:
             gap=gap,
             iterations=iterations,
             skims=skim,
+            crossings=crossing,
         )
 
     def _line_search(
@@ -1361,17 +1691,21 @@ class CapacitySimulator:
         planned: _Assignment,
         elastic: _Assignment | None,
         boundary_ids: set[int],
+        charged: Mapping[str, _Assignment] | None = None,
     ) -> EnvironmentSummary | None:
         """Air and noise over every street that carries traffic in any state."""
         if len(self.stations) < 3 or self.residents is None:
             return None
-        from app.services.impact.environment import EnvironmentModel
+        from app.services.impact.environment import SCENARIOS, EnvironmentModel
 
         self._report("Modelling air and noise", 0.97)
         every = self.settings.model_copy(update={"max_map_links": 200_000, "min_map_volume_vph": 0})
-        links = self._map_links(network, baseline, planned, elastic, boundary_ids, every)
+        links = self._map_links(
+            network, baseline, planned, elastic, boundary_ids, every, charged=charged
+        )
+        scenarios = SCENARIOS + (tuple(charged) if charged else ())
         try:
-            outcome = EnvironmentModel(links, self.stations, self.residents).run()
+            outcome = EnvironmentModel(links, self.stations, self.residents).run(scenarios)
         except ValueError as error:
             logger.warning("Air and noise model skipped: %s", error)
             return None
@@ -1403,8 +1737,12 @@ class CapacitySimulator:
         elastic: _Assignment | None,
         boundary_ids: set[int],
         settings: CapacitySimulationSettings | None = None,
+        charged: Mapping[str, _Assignment] | None = None,
     ) -> list[SimulatedLink]:
         settings = settings or self.settings
+        charged = charged or {}
+        with_charge = charged.get("charge")
+        plan_charge = charged.get("plan_with_charge")
         if settings.max_map_links == 0:
             return []
         links = network.links
@@ -1426,12 +1764,25 @@ class CapacitySimulator:
             base_volume = float(baseline.flows[members].sum())
             plan_volume = float(planned.flows[members].sum())
             elastic_volume = float(elastic.flows[members].sum()) if elastic is not None else None
+            charge_volume = (
+                float(with_charge.flows[members].sum()) if with_charge is not None else None
+            )
+            plan_charge_volume = (
+                float(plan_charge.flows[members].sum()) if plan_charge is not None else None
+            )
             closed = all(
                 links.enabled_base[link] and not links.enabled_plan[link] for link in members
             )
             gated = any(links.gated[link] for link in members)
             if (
-                max(base_volume, plan_volume, elastic_volume or 0.0) < settings.min_map_volume_vph
+                max(
+                    base_volume,
+                    plan_volume,
+                    elastic_volume or 0.0,
+                    charge_volume or 0.0,
+                    plan_charge_volume or 0.0,
+                )
+                < settings.min_map_volume_vph
                 and not closed
                 and not gated
             ):
@@ -1469,6 +1820,25 @@ class CapacitySimulator:
                             round(speed(members, elastic.times, elastic.flows), 1)
                             if elastic is not None
                             else None
+                        ),
+                        charged_vph=(
+                            round(charge_volume, 1) if charge_volume is not None else None
+                        ),
+                        charged_speed_kph=(
+                            round(speed(members, with_charge.times, with_charge.flows), 1)
+                            if with_charge is not None
+                            else None
+                        ),
+                        planned_charged_vph=(
+                            round(plan_charge_volume, 1) if plan_charge_volume is not None else None
+                        ),
+                        planned_charged_speed_kph=(
+                            round(speed(members, plan_charge.times, plan_charge.flows), 1)
+                            if plan_charge is not None
+                            else None
+                        ),
+                        inside_cordon=bool(
+                            network.link_inside is not None and network.link_inside[members].all()
                         ),
                     ),
                 )
