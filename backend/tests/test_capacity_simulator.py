@@ -2,8 +2,14 @@ import networkx as nx
 import numpy as np
 import pytest
 
-from app.models.schemas import ModificationType, StreetModification
+from app.models.schemas import (
+    ModificationType,
+    StreetModification,
+    TurnRestriction,
+    VehicleClass,
+)
 from app.models.simulation import CapacitySimulationSettings
+from app.services.importers.population import PopulationGrid
 from app.services.simulation.capacity_simulator import CapacitySimulator, _tree_loads
 
 STEP = 0.0009  # about 100 m
@@ -188,3 +194,88 @@ def test_capacity_endpoints_return_the_comparison(api_client):
 
     payload["settings"]["demand_levels"] = [-1]
     assert api_client.post("/api/v1/simulation/capacity", json=payload).status_code == 422
+
+
+def _base_and_plan(result):
+    return result.baseline.levels[0], result.planned.levels[0]
+
+
+def test_camera_gates_stay_open_to_destination_traffic():
+    graph = grid_city()
+    gates = [
+        modification.model_copy(
+            update={
+                "filter_type": "camera_gate",
+                "allowed_vehicle_classes": [VehicleClass.PERMIT, VehicleClass.EMERGENCY],
+            }
+        )
+        for modification in superblock_filters(graph)
+    ]
+    settings = CapacitySimulationSettings(zone_size_m=250, demand_levels=[1.0])
+    walls = CapacitySimulator(
+        graph, modifications=superblock_filters(graph), settings=settings
+    ).run()
+    open_gates = CapacitySimulator(graph, modifications=gates, settings=settings).run()
+
+    assert open_gates.destination_gates > 0 and walls.destination_gates == 0
+    assert open_gates.links_closed_by_plan == 0
+    gated = [link for link in open_gates.links if link.gated_in_plan]
+    assert gated and not any(link.closed_in_plan for link in gated)
+    # Through traffic avoids the gates: they carry far less than today.
+    assert sum(link.planned_vph for link in gated) < 0.5 * sum(link.baseline_vph for link in gated)
+    _base, planned = _base_and_plan(open_gates)
+    assert planned.blocked_trips == pytest.approx(0.0)
+
+
+def test_turn_restrictions_remove_movements():
+    graph = grid_city(9)
+    centre = 4 * 9 + 4
+    rules = []
+    for _u, _v, data in graph.in_edges(centre, data=True):
+        for _c, _w, out in graph.out_edges(centre, data=True):
+            if out["osmid"] != data["osmid"]:
+                rules.append(
+                    TurnRestriction(
+                        restriction_id=f"{data['osmid']}-{out['osmid']}",
+                        from_osm_id=data["osmid"],
+                        via_node_id=centre,
+                        to_osm_id=out["osmid"],
+                        kind="no_turn",
+                        source="test",
+                    )
+                )
+    settings = CapacitySimulationSettings(zone_size_m=200, demand_levels=[1.0])
+    free = CapacitySimulator(graph, settings=settings).run()
+    restricted = CapacitySimulator(graph, settings=settings, turn_restrictions=rules).run()
+    assert free.turn_restrictions_applied == 0
+    assert restricted.turn_restrictions_applied == len(rules)
+    assert restricted.movements == free.movements - len(rules)
+
+
+def test_trips_follow_residents_and_jobs_and_enter_through_gateways():
+    graph = grid_city()
+    # Primary roads along the edges make gateways.
+    for _u, _v, data in graph.edges(data=True):
+        if data["highway"] == "secondary":
+            data["highway"] = "primary"
+    lon = np.array([19.0 + 1 * STEP * 1.48, 19.0 + 11 * STEP * 1.48])
+    lat = np.array([47.5 + 1 * STEP, 47.5 + 11 * STEP])
+    residents = PopulationGrid(lon=lon[:1], lat=lat[:1], residents=np.array([5_000.0]), source="t")
+    jobs = PopulationGrid(lon=lon[1:], lat=lat[1:], residents=np.array([3_000.0]), source="j")
+    settings = CapacitySimulationSettings(zone_size_m=250, demand_levels=[1.0])
+    result = CapacitySimulator(graph, settings=settings, residents=residents, jobs=jobs).run()
+    assert result.demand_source == "residents (t) and jobs (j)"
+    assert result.gateway_count > 0
+    assert result.external_trip_share == pytest.approx(settings.external_trip_share)
+
+
+def test_elastic_demand_drops_trips_when_the_plan_slows_them():
+    fixed = simulate(demand_levels=[1.0], demand_elasticity=0.0)
+    elastic = simulate(demand_levels=[1.0], demand_elasticity=-0.5)
+    assert fixed.planned_elastic is None and fixed.trips_not_made_share is None
+    assert elastic.planned_elastic is not None
+    assert 0.0 < elastic.trips_not_made_share < 0.5
+    _base, planned = _base_and_plan(elastic)
+    assert elastic.planned_elastic.trips < planned.trips
+    assert elastic.planned_elastic.vehicle_km < planned.vehicle_km
+    assert elastic.elastic_vehicle_km_change_percent < elastic.vehicle_km_change_percent

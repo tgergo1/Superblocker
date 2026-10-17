@@ -14,6 +14,11 @@ from fastapi.responses import StreamingResponse
 from app.api.routes.analysis import _sse_data, analysis_executor, partition_store
 from app.core.workload import guard_expensive_request
 from app.models.simulation import CapacitySimulationRequest, CapacitySimulationResult
+from app.services.importers.open_data import (
+    load_configured_jobs,
+    load_configured_turn_restrictions,
+)
+from app.services.importers.population import load_configured_population
 from app.services.osm_service import get_street_network_graph
 from app.services.simulation.capacity_simulator import CapacitySimulator
 
@@ -36,11 +41,15 @@ async def _graph_for(request: CapacitySimulationRequest):
 
 
 def _run(graph, request: CapacitySimulationRequest, progress=None) -> CapacitySimulationResult:
+    bbox = request.partition.bbox
     return CapacitySimulator(
         graph,
         partition=request.partition,
         settings=request.settings,
         progress=progress,
+        residents=load_configured_population(bbox),
+        jobs=load_configured_jobs(bbox),
+        turn_restrictions=load_configured_turn_restrictions(graph),
     ).run()
 
 

@@ -143,6 +143,13 @@ LIVING_STREET_SPLIT_HIERARCHIES = frozenset({7})
 STREET_REACH_M = 100.0
 MAX_ACCESS_REPAIR_ROUNDS = 10
 THROUGH_CORRIDOR_HIGHWAYS = frozenset({"motorway", "motorway_link", "trunk", "trunk_link"})
+
+
+def _highway_of(data) -> str | None:
+    highway = data.get("highway")
+    return highway[0] if isinstance(highway, list) else highway
+
+
 MAX_REDESIGN_ROUNDS = 3
 MAX_CROSSING_SEALS_PER_ENTRY = 30
 MIN_SECTORS = 2
@@ -614,6 +621,7 @@ class CityPartitioner:
         self._superblock_cells: dict[str, SuperblockCell] = {}
         self._main_road_nodes: set[int] = set()
         self._main_road_edges: set[tuple[int, int, int]] = set()
+        self._corridor_edges: set[tuple[int, int, int]] = set()
         self.crossings_sealed = 0
         self._live_nodes: set[int] | None = None
         self.reopened_for_access = 0
@@ -642,8 +650,15 @@ class CityPartitioner:
         # Step 2: Identify arterial network
         self._report_progress("arterials", 25, "Identifying arterial roads...")
         self._identify_arterials()
-        self._main_road_edges = set(self.arterial_edges)
-        self._main_road_nodes = {node for edge in self.arterial_edges for node in edge[:2]}
+        # Motorways and trunk roads are through corridors: never a street to
+        # filter, close or turn one-way, and a junction with one is an entry.
+        self._corridor_edges = {
+            (u, v, key)
+            for u, v, key, data in self.graph.edges(keys=True, data=True)
+            if _highway_of(data) in THROUGH_CORRIDOR_HIGHWAYS
+        }
+        self._main_road_edges = set(self.arterial_edges) | self._corridor_edges
+        self._main_road_nodes = {node for edge in self._main_road_edges for node in edge[:2]}
         self._report_progress("arterials", 40, f"Found {len(self.arterial_edges)} arterial edges")
 
         # Step 3: Create cells by polygonizing arterials
@@ -982,7 +997,7 @@ class CityPartitioner:
                 if not keep:
                     continue
                 u, v, key, _geom = self._edge_records[int(index)]
-                if (u, v, key) in self.arterial_edges:
+                if (u, v, key) in self.arterial_edges or (u, v, key) in self._corridor_edges:
                     boundary_edges.append((u, v, key))
                 elif centre:
                     interior_edges.append((u, v, key))
@@ -1011,7 +1026,7 @@ class CityPartitioner:
             if polygon.contains(geom) or ring.intersects(geom):
                 edge_tuple = (u, v, key)
 
-                if edge_tuple in self.arterial_edges:
+                if edge_tuple in self.arterial_edges or edge_tuple in self._corridor_edges:
                     boundary_edges.append(edge_tuple)
                 elif polygon.contains(geom.centroid):
                     interior_edges.append(edge_tuple)

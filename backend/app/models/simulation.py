@@ -35,8 +35,36 @@ class CapacitySimulationSettings(BaseModel):
     # long as on today's empty streets.
     breakdown_travel_time_index: float = Field(default=2.0, gt=1, le=10)
     congested_volume_capacity_ratio: float = Field(default=0.9, gt=0, le=5)
-    max_map_links: int = Field(default=6_000, ge=0, le=50_000)
+    max_map_links: int = Field(default=6_000, ge=0, le=200_000)
     min_map_volume_vph: float = Field(default=20.0, ge=0)
+    # Junctions. Routes are found movement by movement, so OSM turn
+    # restrictions apply, U-turns are only allowed at dead ends, and every
+    # movement pays a fixed delay that depends on how the junction is
+    # controlled: traffic signals (OSM highway=traffic_signals) or priority
+    # (the lower road class gives way). The delays are typical averages for
+    # urban junctions, not measured at each one.
+    turn_model: bool = True
+    signal_delay_straight_s: float = Field(default=15.0, ge=0, le=300)
+    signal_delay_right_s: float = Field(default=12.0, ge=0, le=300)
+    signal_delay_left_s: float = Field(default=25.0, ge=0, le=300)
+    give_way_delay_s: float = Field(default=6.0, ge=0, le=300)
+    give_way_left_extra_s: float = Field(default=6.0, ge=0, le=300)
+    priority_left_delay_s: float = Field(default=3.0, ge=0, le=300)
+    dead_end_u_turn_s: float = Field(default=20.0, ge=0, le=300)
+    # Destination-only ("kivéve célforgalom") gates stay open to cars in the
+    # plan, but a route through one costs this much extra, so through traffic
+    # avoids them while trips to and from the streets behind still use them.
+    # The penalty steers routes only; it is not counted in reported trip times.
+    gate_penalty_s: float = Field(default=600.0, ge=0, le=7_200)
+    # Share of peak car trips that start or end outside the simulated area and
+    # enter or leave on its motorways, trunk and primary roads.
+    external_trip_share: float = Field(default=0.15, ge=0, le=0.8)
+    gateway_band_m: float = Field(default=600.0, ge=50, le=5_000)
+    # How car trips between two zones respond to the plan's change in their
+    # travel time: trips scale with (time with plan / time today) ** elasticity.
+    # 0 keeps demand fixed (the worst case for the plan).
+    demand_elasticity: float = Field(default=-0.5, ge=-3, le=0)
+    elastic_iterations: int = Field(default=4, ge=1, le=20)
 
     @model_validator(mode="after")
     def _breakdown_above_calibration(self) -> CapacitySimulationSettings:
@@ -109,7 +137,15 @@ class SimulatedLink(BaseModel):
     baseline_vc: float = Field(ge=0)
     planned_vc: float = Field(ge=0)
     closed_in_plan: bool = False
+    gated_in_plan: bool = False
     is_boundary_road: bool = False
+    planned_elastic_vph: float | None = Field(default=None, ge=0)
+    lanes: float = Field(default=1.0, gt=0)
+    length_m: float = Field(default=0.0, ge=0)
+    free_speed_kph: float = Field(default=0.0, ge=0)
+    baseline_speed_kph: float = Field(default=0.0, ge=0)
+    planned_speed_kph: float = Field(default=0.0, ge=0)
+    planned_elastic_speed_kph: float | None = Field(default=None, ge=0)
 
 
 class CapacitySimulationResult(BaseModel):
@@ -132,6 +168,20 @@ class CapacitySimulationResult(BaseModel):
     mean_trip_minutes_change_percent: float = 0.0
     vehicle_km_change_percent: float = 0.0
     vehicle_hours_change_percent: float = 0.0
+    # The plan at today's demand once trips respond to the change in travel
+    # time (``settings.demand_elasticity``); ``None`` when demand is fixed.
+    planned_elastic: SimulationLevelResult | None = None
+    trips_not_made_share: float | None = Field(default=None, ge=0, le=1)
+    elastic_mean_trip_minutes_change_percent: float | None = None
+    elastic_vehicle_km_change_percent: float | None = None
+    demand_source: str = "street length"
+    external_trip_share: float = Field(default=0.0, ge=0, le=1)
+    gateway_count: int = Field(default=0, ge=0)
+    turn_model: bool = False
+    movements: int = Field(default=0, ge=0)
+    turn_restrictions_applied: int = Field(default=0, ge=0)
+    signalised_junctions: int = Field(default=0, ge=0)
+    destination_gates: int = Field(default=0, ge=0)
     links: list[SimulatedLink] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
     processing_time_seconds: float = Field(default=0.0, ge=0)

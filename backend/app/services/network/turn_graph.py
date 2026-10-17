@@ -221,6 +221,9 @@ class TurnGraphBuilder:
     ) -> None:
         self.source_graph = graph
         self.restrictions = list(restrictions)
+        self._rules_by_via: dict[int, list[TurnRestriction]] = {}
+        for rule in self.restrictions:
+            self._rules_by_via.setdefault(rule.via_node_id, []).append(rule)
 
     def build(
         self,
@@ -374,9 +377,8 @@ class TurnGraphBuilder:
         via_node = incoming_ref[1]
         matching_from = [
             rule
-            for rule in self.restrictions
+            for rule in self._rules_by_via.get(via_node, ())
             if rule.from_osm_id in incoming_ids
-            and rule.via_node_id == via_node
             and _class_matches(rule, vehicle_class)
             and (
                 not rule.time_windows
