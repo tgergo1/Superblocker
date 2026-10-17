@@ -148,6 +148,53 @@ class SimulatedLink(BaseModel):
     planned_elastic_speed_kph: float | None = Field(default=None, ge=0)
 
 
+class EnvironmentScenario(BaseModel):
+    """Exhaust, air and noise at residents' homes in one traffic state."""
+
+    name: str
+    vehicle_km: float
+    nox_kg_per_hour: float
+    population_weighted_no2: float
+    residents_no2_over_40: float
+    residents_no2_over_20: float
+    residents_no2_over_10: float
+    population_weighted_noise_db: float
+    residents_noise_over_55: float
+    residents_noise_over_65: float
+    residents_noise_over_70: float
+
+
+class EnvironmentStationFit(BaseModel):
+    name: str
+    lon: float
+    lat: float
+    measured: float
+    modelled: float
+    left_out: float
+
+
+class EnvironmentSummary(BaseModel):
+    """NO2 fitted to measuring stations and peak-hour noise, today and with the plan.
+
+    Scenarios are ``today``, ``plan`` (same trips) and ``plan_with_response``.
+    """
+
+    background_no2: float
+    near_coefficient: float
+    urban_coefficient: float
+    r_squared: float
+    rmse: float
+    leave_one_out_rmse: float
+    residents: float
+    scenarios: dict[str, EnvironmentScenario]
+    stations: list[EnvironmentStationFit]
+    no2_better_residents: dict[str, float] = Field(default_factory=dict)
+    no2_worse_residents: dict[str, float] = Field(default_factory=dict)
+    noise_better_residents: dict[str, float] = Field(default_factory=dict)
+    noise_worse_residents: dict[str, float] = Field(default_factory=dict)
+    limitations: list[str] = Field(default_factory=list)
+
+
 class CapacitySimulationResult(BaseModel):
     """With and without superblocks: travel times, loads and network capacity."""
 
@@ -183,5 +230,7 @@ class CapacitySimulationResult(BaseModel):
     signalised_junctions: int = Field(default=0, ge=0)
     destination_gates: int = Field(default=0, ge=0)
     links: list[SimulatedLink] = Field(default_factory=list)
+    # Air and noise from this run's traffic, when stations and residents are given.
+    environment: EnvironmentSummary | None = None
     limitations: list[str] = Field(default_factory=list)
     processing_time_seconds: float = Field(default=0.0, ge=0)

@@ -63,11 +63,15 @@ from app.models.schemas import (
 from app.models.simulation import (
     CapacitySimulationResult,
     CapacitySimulationSettings,
+    EnvironmentScenario,
+    EnvironmentStationFit,
+    EnvironmentSummary,
     SimulatedLink,
     SimulationLevelResult,
     SimulationScenarioSummary,
 )
 from app.services.assignment.network_assignment import _edge_capacity_vph
+from app.services.importers.open_data import AirQualityStation
 from app.services.importers.population import PopulationGrid
 from app.services.network.turn_graph import (
     TurnGraphBuilder,
@@ -239,8 +243,11 @@ class CapacitySimulator:
         residents: PopulationGrid | None = None,
         jobs: PopulationGrid | None = None,
         turn_restrictions: Iterable[TurnRestriction] = (),
+        stations: Iterable[AirQualityStation] = (),
     ) -> None:
         self.graph = graph
+        # NO2 measuring stations; with residents, the run also models air and noise.
+        self.stations = list(stations)
         self.partition = partition
         if modifications is None:
             modifications = [
@@ -397,6 +404,13 @@ class CapacitySimulator:
                 boundary_ids,
             ),
             limitations=self._limitations(calibrated, baseline, planned),
+        )
+        result.environment = self._environment(
+            network,
+            detail["without_superblocks"],
+            detail["with_superblocks"],
+            elastic_assignment,
+            boundary_ids,
         )
         result.processing_time_seconds = time.monotonic() - started
         self._report("Simulation complete", 1.0)
@@ -866,17 +880,15 @@ class CapacitySimulator:
         gateways = self._gateways(links, x, y, in_core, settings.gateway_band_m)
         share = settings.external_trip_share if gateways else 0.0
         self._external_share = share
+        capacity = np.array([weight for _nodes, weight in gateways])
         if gateways:
-            capacity = np.array([weight for _nodes, weight in gateways])
             capacity /= capacity.sum()
-            production = np.concatenate([production * (1 - share), capacity * share])
-            attraction = np.concatenate([attraction * (1 - share), capacity * share])
             for nodes, _weight in gateways:
                 connectors.extend(nodes)
                 zone_of.extend([zone] * len(nodes))
                 zone += 1
         self._production, self._attraction = production, attraction
-        self._zone_weights = production
+        self._gateway_weights = capacity
         return (
             np.array(zone_of, dtype=np.int64),
             np.array(connectors, dtype=np.int64),
@@ -971,17 +983,7 @@ class CapacitySimulator:
         )
         minutes = free.skims
 
-        production = self._production
-        attraction = self._attraction
-        with np.errstate(over="ignore", invalid="ignore"):
-            pull = attraction[None, :] * np.exp(-settings.distance_decay_per_minute * minutes)
-        pull[~np.isfinite(pull)] = 0.0
-        np.fill_diagonal(pull, 0.0)
-        totals = pull.sum(axis=1, keepdims=True)
-        shares = (
-            np.divide(pull, totals, out=np.zeros_like(pull), where=totals > 0) * production[:, None]
-        )
-        shares /= max(shares.sum(), 1e-12)
+        shares = self._gravity_shares(minutes)
         network.demand = shares
 
         unit = self._all_or_nothing(network, False, network.links.free_time, shares)
@@ -999,6 +1001,47 @@ class CapacitySimulator:
             raise ValueError("no trips reach the main roads; the area is too small to simulate")
         trips = 0.5 / mean_load
         return reference_seconds, self._calibrate(network, reference_seconds, trips), True
+
+    def _gravity_shares(self, minutes: np.ndarray) -> np.ndarray:
+        """Share of all trips from each zone to each other zone.
+
+        Trips between the area's own zones follow residents to jobs with a
+        gravity model. The external share is split evenly between trips that
+        enter through a gateway (to jobs, by the same gravity) and trips that
+        leave through one (from homes, to gateways weighted by road capacity),
+        so exactly that share of trips has an end outside the area.
+        """
+        decay = self.settings.distance_decay_per_minute
+        inner = self._production.size
+        share = self._external_share
+        with np.errstate(over="ignore", invalid="ignore"):
+            friction = np.exp(-decay * minutes)
+        friction[~np.isfinite(friction)] = 0.0
+        np.fill_diagonal(friction, 0.0)
+
+        def spread(origins: np.ndarray, weights: np.ndarray, rows, columns) -> np.ndarray:
+            pull = friction[rows][:, columns] * weights[None, :]
+            totals = pull.sum(axis=1, keepdims=True)
+            out = np.divide(pull, totals, out=np.zeros_like(pull), where=totals > 0)
+            out *= origins[:, None]
+            return out / max(out.sum(), 1e-12)
+
+        zones = friction.shape[0]
+        shares = np.zeros((zones, zones))
+        internal = slice(0, inner)
+        shares[internal, internal] = (1 - share) * spread(
+            self._production, self._attraction, internal, internal
+        )
+        if share > 0:
+            gateway = slice(inner, zones)
+            gates = self._gateway_weights
+            shares[gateway, internal] = (share / 2) * spread(
+                gates, self._attraction, gateway, internal
+            )
+            shares[internal, gateway] = (share / 2) * spread(
+                self._production, gates, internal, gateway
+            )
+        return shares / max(shares.sum(), 1e-12)
 
     def _calibrate(self, network: _Network, reference_seconds: float, trips: float) -> float:
         """Find the trip total at which today's peak trip takes the target index.
@@ -1068,9 +1111,8 @@ class CapacitySimulator:
                 target = reference * np.power(np.maximum(ratio, 1e-3), settings.demand_elasticity)
                 target = np.where(np.isfinite(current.skims), target, 0.0)
                 demand = demand + (target - demand) / (round_number + 1)
-                current = self._equilibrium(
-                    network, True, demand, (current.flows, current.arc_flows), skims=True
-                )
+                # The demand changed shape, so the old flows are no feasible start.
+                current = self._equilibrium(network, True, demand, None, skims=True)
         return current, float(demand.sum())
 
     # -------------------------------------------------------------- assignment
@@ -1312,6 +1354,47 @@ class CapacitySimulator:
             previous = item
         return None, False
 
+    def _environment(
+        self,
+        network: _Network,
+        baseline: _Assignment,
+        planned: _Assignment,
+        elastic: _Assignment | None,
+        boundary_ids: set[int],
+    ) -> EnvironmentSummary | None:
+        """Air and noise over every street that carries traffic in any state."""
+        if len(self.stations) < 3 or self.residents is None:
+            return None
+        from app.services.impact.environment import EnvironmentModel
+
+        self._report("Modelling air and noise", 0.97)
+        every = self.settings.model_copy(update={"max_map_links": 200_000, "min_map_volume_vph": 0})
+        links = self._map_links(network, baseline, planned, elastic, boundary_ids, every)
+        try:
+            outcome = EnvironmentModel(links, self.stations, self.residents).run()
+        except ValueError as error:
+            logger.warning("Air and noise model skipped: %s", error)
+            return None
+        return EnvironmentSummary(
+            background_no2=outcome.background_no2,
+            near_coefficient=outcome.near_coefficient,
+            urban_coefficient=outcome.urban_coefficient,
+            r_squared=outcome.r_squared,
+            rmse=outcome.rmse,
+            leave_one_out_rmse=outcome.leave_one_out_rmse,
+            residents=outcome.residents,
+            scenarios={
+                name: EnvironmentScenario(**vars(scenario))
+                for name, scenario in outcome.scenarios.items()
+            },
+            stations=[EnvironmentStationFit(**vars(station)) for station in outcome.stations],
+            no2_better_residents=outcome.no2_better_residents,
+            no2_worse_residents=outcome.no2_worse_residents,
+            noise_better_residents=outcome.noise_better_residents,
+            noise_worse_residents=outcome.noise_worse_residents,
+            limitations=outcome.limitations,
+        )
+
     def _map_links(
         self,
         network: _Network,
@@ -1319,8 +1402,9 @@ class CapacitySimulator:
         planned: _Assignment,
         elastic: _Assignment | None,
         boundary_ids: set[int],
+        settings: CapacitySimulationSettings | None = None,
     ) -> list[SimulatedLink]:
-        settings = self.settings
+        settings = settings or self.settings
         if settings.max_map_links == 0:
             return []
         links = network.links
