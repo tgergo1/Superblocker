@@ -49,7 +49,7 @@ from app.services.importers.population import PopulationGrid, read_population_cs
 
 logger = logging.getLogger(__name__)
 
-JOBS_SOURCE = "jobs estimated from Overture Maps building floor space (ODbL/CDLA)"
+JOBS_SOURCE = "jobs estimated from Overture Maps places and buildings (CDLA, ODbL)"
 FACILITY_SOURCE = "Overture Maps places (CDLA-Permissive-2.0)"
 TURN_SOURCE = "OpenStreetMap turn restrictions via Overture Maps (ODbL)"
 GTFS_ROUTE_SOURCE = "GTFS shapes matched to the street network"
