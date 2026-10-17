@@ -179,6 +179,13 @@ def _flows(link: SimulatedLink, scenario: str) -> tuple[float, float]:
         return link.baseline_vph, link.baseline_speed_kph or link.free_speed_kph
     if scenario == "plan":
         return link.planned_vph, link.planned_speed_kph or link.free_speed_kph
+    if scenario == "charge" and link.charged_vph is not None:
+        return link.charged_vph, link.charged_speed_kph or link.free_speed_kph
+    if scenario == "plan_with_charge" and link.planned_charged_vph is not None:
+        return (
+            link.planned_charged_vph,
+            link.planned_charged_speed_kph or link.free_speed_kph,
+        )
     volume = link.planned_elastic_vph if link.planned_elastic_vph is not None else link.planned_vph
     speed = link.planned_elastic_speed_kph or link.planned_speed_kph or link.free_speed_kph
     return volume, speed

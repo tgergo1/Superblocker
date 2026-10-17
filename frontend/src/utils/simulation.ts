@@ -17,6 +17,11 @@ export const CHANGE_BANDS: { label: string; color: Rgba }[] = [
   { label: 'Closed to through traffic', color: [22, 163, 74, 240] },
 ];
 
+/** Volume after the change: with the plan, or with the plan and the entry charge. */
+function afterVolume(link: SimulatedLink, view: SimulationMapView): number {
+  return view === 'fee' ? (link.planned_charged_vph ?? link.planned_vph) : link.planned_vph;
+}
+
 export function loadColor(ratio: number): Rgba {
   return (LOAD_BANDS.find(band => ratio < band.max) ?? LOAD_BANDS[LOAD_BANDS.length - 1]).color;
 }
@@ -25,7 +30,7 @@ export function simulationLinkColor(link: SimulatedLink, view: SimulationMapView
   if (view === 'without') return loadColor(link.baseline_vc);
   if (view === 'with') return loadColor(link.planned_vc);
   if (link.closed_in_plan) return CHANGE_BANDS[4].color;
-  const delta = link.planned_vph - link.baseline_vph;
+  const delta = afterVolume(link, view) - link.baseline_vph;
   const relative = delta / Math.max(link.baseline_vph, 50);
   if (delta >= 200) return CHANGE_BANDS[0].color;
   if (delta > 25 && relative > 0.1) return CHANGE_BANDS[1].color;
@@ -39,7 +44,7 @@ export function simulationLinkWidth(link: SimulatedLink, view: SimulationMapView
       ? link.baseline_vph
       : view === 'with'
         ? link.planned_vph
-        : Math.max(Math.abs(link.planned_vph - link.baseline_vph), link.closed_in_plan ? 150 : 0);
+        : Math.max(Math.abs(afterVolume(link, view) - link.baseline_vph), link.closed_in_plan ? 150 : 0);
   return Math.min(9, 1.5 + Math.sqrt(volume) / 9);
 }
 

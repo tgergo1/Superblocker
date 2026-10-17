@@ -57,6 +57,7 @@
 
 .capacity-run {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px;
 }
@@ -295,4 +296,53 @@
 .capacity-method ul {
   margin: 6px 0 0;
   padding-left: 16px;
+}
+
+.capacity-charge {
+  display: flex;
+  flex-basis: 100%;
+  flex-direction: column;
+  gap: 6px;
+  order: 1;
+}
+
+.capacity-run .capacity-charge .capacity-map-toggle {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #334155;
+}
+
+.capacity-run .capacity-primary {
+  order: 2;
+}
+
+.capacity-charge-results {
+  margin-top: 12px;
+}
+
+.capacity-charge-table {
+  width: 100%;
+  margin-top: 4px;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+
+.capacity-charge-table th,
+.capacity-charge-table td {
+  padding: 3px 4px;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: right;
+}
+
+.capacity-charge-table th[scope='row'] {
+  color: #475569;
+  font-weight: 500;
+  text-align: left;
+}
+
+.capacity-charge-table thead th {
+  color: #0f172a;
+  font-weight: 700;
 }

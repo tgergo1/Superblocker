@@ -86,10 +86,107 @@ describe('CapacitySimulatorPanel', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Run traffic simulation' }));
-    expect(onRun).toHaveBeenLastCalledWith(null);
+    expect(onRun).toHaveBeenLastCalledWith(null, null);
     fireEvent.change(screen.getByLabelText('Peak-hour car trips'), { target: { value: '12,000' } });
     fireEvent.click(screen.getByRole('button', { name: 'Run traffic simulation' }));
-    expect(onRun).toHaveBeenLastCalledWith(12_000);
+    expect(onRun).toHaveBeenLastCalledWith(12_000, null);
+  });
+
+  it('adds the Budapest entry charge only where the zone is in reach', () => {
+    const onRun = vi.fn();
+    render(
+      <CapacitySimulatorPanel
+        result={null}
+        isRunning={false}
+        progress={null}
+        error={null}
+        onRun={onRun}
+        onCancel={vi.fn()}
+        showOnMap
+        onShowOnMapChange={vi.fn()}
+        mapView="change"
+        onMapViewChange={vi.fn()}
+        entryChargeAvailable
+      />,
+    );
+    fireEvent.click(screen.getByLabelText(/inner-city entry charge/));
+    fireEvent.change(screen.getByLabelText('Charge per entry (HUF)'), { target: { value: '1,500' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Run traffic simulation' }));
+    expect(onRun).toHaveBeenLastCalledWith(null, 1_500);
+  });
+
+  it('shows what the entry charge does next to the superblocks', () => {
+    const scenario = (entries: number, ring: number) => ({
+      name: 'x',
+      elasticity: -0.7,
+      trips: 1000,
+      trips_not_made_share: 0,
+      mean_trip_minutes: 10,
+      mean_trip_minutes_change_percent: -1,
+      vehicle_km: 1,
+      vehicle_km_change_percent: 0,
+      vehicle_hours: 1,
+      vehicle_hours_change_percent: 0,
+      cordon_entries: 1,
+      cordon_entries_change_percent: entries,
+      inside_vehicle_km: 1,
+      inside_vehicle_km_change_percent: entries,
+      outside_vehicle_km: 1,
+      outside_vehicle_km_change_percent: 0,
+      ring_vehicle_km: 1,
+      ring_vehicle_km_change_percent: ring,
+      main_road_km_busier: 4,
+      minor_street_km_busier: 1,
+      main_road_km_quieter: 9,
+      congested_km: 1,
+      charged_entries: 100,
+      revenue_per_peak_hour: 80_000,
+      revenue_per_year: 2.4e9,
+    });
+    const onMapViewChange = vi.fn();
+    render(
+      <CapacitySimulatorPanel
+        result={{
+          ...result,
+          entry_charge: {
+            name: 'Hungária ring entry charge',
+            charge: 800,
+            currency: 'HUF',
+            area_km2: 32,
+            cordon_links: 120,
+            zones_inside: 40,
+            price_elasticity: -0.7,
+            elasticity_range: [-0.5, -1.2],
+            value_of_time_per_hour: 3000,
+            exempt_share: 0.2,
+            mean_entering_trip_cost: 2000,
+            scenarios: {
+              plan: scenario(-4, 6),
+              charge: scenario(-14, 3),
+              plan_with_charge: scenario(-17, 7),
+              plan_with_charge_low: scenario(-13, 6),
+              plan_with_charge_high: scenario(-24, 9),
+            },
+            limitations: [],
+          },
+        }}
+        isRunning={false}
+        progress={null}
+        error={null}
+        onRun={vi.fn()}
+        onCancel={vi.fn()}
+        showOnMap
+        onShowOnMapChange={vi.fn()}
+        mapView="change"
+        onMapViewChange={onMapViewChange}
+        entryChargeAvailable
+      />,
+    );
+    expect(screen.getByText('Hungária ring entry charge: 800 HUF per entry')).toBeTruthy();
+    expect(screen.getByText(/-13% to -24%/)).toBeTruthy();
+    expect(screen.getByText(/2\.4 bn HUF a year/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'Plan + charge' }));
+    expect(onMapViewChange).toHaveBeenCalledWith('fee');
   });
 
   it('compares capacity and trip times with and without the plan', () => {

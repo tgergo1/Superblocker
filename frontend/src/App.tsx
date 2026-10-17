@@ -11,6 +11,7 @@ import { useSearch } from './hooks/useSearch';
 import { usePartition } from './hooks/usePartition';
 import { useCapacitySimulation } from './hooks/useCapacitySimulation';
 import type { SimulationMapView } from './types/simulation';
+import { overlapsBudapestCordon } from './data/budapestCordon';
 import type {
   BoundingBox,
   ViewState,
@@ -250,6 +251,7 @@ function App() {
                 onShowOnMapChange={setShowSimulation}
                 mapView={simulationView}
                 onMapViewChange={setSimulationView}
+                entryChargeAvailable={overlapsBudapestCordon(partition.bbox)}
               />
             )}
             {partition?.pilot_plan && partition.pilot_plan.candidates.length > 0 && (
