@@ -104,4 +104,34 @@ Later price rises give much smaller arc elasticities: −0.09 to −0.26 for Lon
 - **Trip response:** a trip whose route still enters the zone keeps a share `exempt + (1 − exempt) · ((C + charge) / C)^ε` of its demand, where C is the trip's own generalised cost.
 - **Interaction with the superblocks:** the time response to the plan (elasticity −0.5) applies on top, so the charge and the superblocks interact through the same equilibrium.
 
-**A check:** a per-day charge of €5–8 in a European city with good public transport gives entries about −15% to −30% (the semi-elasticity table in the research notes). 800 HUF (≈ €2) at Budapest incomes lands in the lower half of that band in the model, and 2,000 HUF lands near the middle.
+**Boundary roads are free.** Junctions within 60 m of the cordon line count as outside (`boundary_tolerance_m`), so the Hungária ring, the Buda ring and the bridges at the ends of the zone cost nothing to drive along, as London's Inner Ring Road and Stockholm's Essingeleden do.
+
+## 4. What the model found (17 October 2026)
+
+Whole-Budapest run: 205,825 morning-peak car trips, 99 zones, the plan of the same run (2,123 superblocks), 800 HUF per entry, central elasticity −0.7 with −0.5 and −1.2 as the range. The zone has 108 charged entry links and covers 32 km². Changes are against today, once trips respond.
+
+| | Superblocks | Charge | Both |
+|---|---|---|---|
+| Cars entering the zone (57,600 an hour today) | +11% | −76% (−75 to −79%) | −68% (−66 to −71%) |
+| Driving inside the zone | +9% | −44% | −34% |
+| Main roads within 400 m outside the zone (the ring) | +49% | +80% | +111% |
+| Driving outside the zone | +3% | +8% | +9% |
+| Total car-km | +4.1% | +1.0% | +3.3% |
+| Average car trip time | +19.4% | +7.9% | +25.8% |
+| Main roads more than 10% busier | 773 km | 335 km | 751 km |
+| Peak car trips not made | 8.1% | 3.1% | 11.9% |
+| NO₂ at the average home (22.27 µg/m³ today) | 22.88 | 22.39 | 22.77 |
+| Residents ≥1 µg/m³ more / less NO₂ | 342k / 36k | 61k / 64k | 230k / 63k |
+| Residents ≥3 dB louder / quieter | 211k / 308k | 83k / 113k | 222k / 354k |
+| Revenue a year (peak hour scaled with a 12% peak share, 250 days) | | 18 bn HUF | 25 bn HUF |
+
+At 400 HUF the charge alone cuts entries by 59% and the ring gains 42%; trip suppression is only 2.5% of trips. Price barely matters to the entry figure, because most of it is rerouting, not trips given up.
+
+**How to read it:**
+
+- **The inner city gets much calmer.** Driving inside the zone falls by a third to a half, and with the superblocks the charge turns the plan's NO₂ result from 342,000 residents worse off into 230,000, and adds about 46,000 residents with quieter homes.
+- **The charge does not relieve the main roads the superblocks load outside the zone.** Main roads more than 10% busier: 773 km with the plan, 751 km with both. Trips crossing the city, above all between Buda and Pest, leave the central bridges for the free ring: the Rákóczi bridge goes from about 5,200 to 9,100 vehicles an hour at its busiest section with the charge alone, Könyves Kálmán körút from 4,300 to 8,300. Detours make the average trip longer, so trip time with both (+26%) is worse than with the plan alone (+19%).
+- **The entry cut is an upper bound.** Measured cuts at introduction were 12–30% (44% in Singapore). The model's −68 to −79% is far outside that, for two reasons. Budapest's cordon puts the central Danube bridges inside the zone, so much of today's "entering" traffic is cross-river through traffic with a free alternative at the ends of the zone. And a static deterministic assignment moves every driver to the cheapest route, while real drivers differ in their value of time and many would pay; with no traffic counts the model's ring also starts emptier than the real one (Hungária körút peaks at about 3,000 vehicles an hour in the model), leaving more room to divert into. The trip-suppression part (3% of trips at 800 HUF) is in line with the world cases; the diversion part is not.
+- **Design implication.** A Hungária-ring cordon with paid bridges and free ring roads mostly moves traffic onto the ring and the outer bridges. Gothenburg is the warning case (+16 to +26% on its bypasses). To relieve the main roads the superblocks load, the charge would need either to keep cross-river traffic charged wherever it crosses (charge the bridges at the ends too, or charge per day for any car driving within the zone or the inner districts, as London and Milan do), or to be paired with capacity limits on the ring, as Stockholm's approach-road metering and London's road-space reallocation did.
+
+Model gaps worth closing before quoting a single number: traffic counts on the ring and the bridges, a multi-class assignment with a spread of values of time, and the per-day (not per-entry) charge of the Budapest designs.

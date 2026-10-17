@@ -1170,10 +1170,6 @@ class CapacitySimulator:
         polygon = Polygon([(float(p[0]), float(p[1])) for p in charge.cordon])
         if not polygon.is_valid:
             polygon = polygon.buffer(0)
-        node_inside = contains_xy(polygon, network.lon, network.lat)
-        links = network.links
-        inside = node_inside[links.tail] & node_inside[links.head]
-        entering = ~node_inside[links.tail] & node_inside[links.head]
         lat0 = math.radians(float(network.lat.mean()))
         scale = METRES_PER_DEGREE_LON * math.cos(lat0) / METRES_PER_DEGREE_LAT
         # Distance in metres from each junction to the cordon line, in a
@@ -1187,6 +1183,15 @@ class CapacitySimulator:
             shapely_distance(boundary, points(network.lon * scale, network.lat))
             * METRES_PER_DEGREE_LAT
         )
+        # Junctions on the cordon line count as outside, so the boundary road
+        # itself stays free to drive along, as London's Inner Ring Road and
+        # Stockholm's Essingeleden do. Without this, a ring road drawn a few
+        # metres either side of the line would pay at every other junction.
+        node_inside = contains_xy(polygon, network.lon, network.lat)
+        node_inside &= node_distance > charge.boundary_tolerance_m
+        links = network.links
+        inside = node_inside[links.tail] & node_inside[links.head]
+        entering = ~node_inside[links.tail] & node_inside[links.head]
         near = node_distance <= charge.ring_band_m
         ring = links.is_main & ~node_inside[links.tail] & ~node_inside[links.head]
         ring &= near[links.tail] & near[links.head]

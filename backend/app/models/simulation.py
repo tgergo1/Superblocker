@@ -47,6 +47,10 @@ class EntryChargeSettings(BaseModel):
     charging_days_per_year: int = Field(default=250, ge=1, le=366)
     # Main roads this close outside the cordon count as its ring road.
     ring_band_m: float = Field(default=400.0, ge=0, le=5_000)
+    # Junctions this close to the cordon line count as outside it, so the
+    # boundary road is free to drive along and a ring drawn a little off the
+    # street does not charge at every other junction.
+    boundary_tolerance_m: float = Field(default=60.0, ge=0, le=1_000)
 
     @field_validator("cordon")
     @classmethod

@@ -399,3 +399,34 @@ def test_residents_inside_the_zone_do_not_respond_to_the_charge():
     assert inside.any()
     assert np.all(factor[inside] == 1.0)
     assert np.all(factor[~inside] < 1.0)
+
+
+def test_a_road_on_the_cordon_line_is_free_to_drive_along():
+    from app.models.simulation import EntryChargeSettings
+
+    # The cordon is drawn about 10 m outside the main roads at rows and
+    # columns 4 and 8, as a hand-drawn ring around real streets would be.
+    cordon = _centre_cordon(inner=(4.4, 7.6))
+
+    def ring_links_charged(tolerance: float) -> int:
+        charge = EntryChargeSettings(cordon=cordon, charge=2_000, boundary_tolerance_m=tolerance)
+        simulator = CapacitySimulator(
+            grid_city(),
+            settings=CapacitySimulationSettings(zone_size_m=250, entry_charge=charge),
+        )
+        network = simulator._build_network()
+        simulator._mark_cordon(network)
+        col = np.rint((network.lon - 19.0) / (STEP * 1.48)).astype(int)
+        row = np.rint((network.lat - 47.5) / STEP).astype(int)
+        on_ring = (np.isin(col, (4, 8)) & (row >= 4) & (row <= 8)) | (
+            np.isin(row, (4, 8)) & (col >= 4) & (col <= 8)
+        )
+        links = network.links
+        along = on_ring[links.tail] & on_ring[links.head]
+        assert along.any() and network.link_entering.any()
+        return int((along & (network.link_inside | network.link_entering)).sum())
+
+    # Read literally, the ring road is inside the zone: driving onto it pays.
+    assert ring_links_charged(0.0) > 0
+    # Junctions on the line count as outside, so the ring road stays free.
+    assert ring_links_charged(30.0) == 0
