@@ -30,7 +30,7 @@
 \noindent A superblock is a group of city blocks, typically 6 to 20\,ha, whose interior streets are closed to through motor traffic while every address keeps car access. Through traffic is kept on a surrounding grid of main roads, and the freed interior street space can be given to walking, cycling, play and greenery.
 We present Superblocker, an open-source tool that designs a superblock plan for a whole city automatically from OpenStreetMap, and apply it to Budapest. The tool chooses the boundary-road network, divides the city into cells, places modal filters, one-way changes, bus gates and camera-enforced destination-only gates, and verifies on the routing graph that no car can cross a cell between two main roads while every junction stays reachable. It then tests the plan in a city-wide traffic, NO$_2$ and noise model built only from open data.
 For Budapest the tool produces 2,598 cells in about 100\,s. All cells pass the through-traffic test, none of the roughly 4,200 main-road entries can reach another main road through residential streets, and no junction loses car access; the plan needs about 1,300 destination-only gates.
-The impact model is less favourable. With a modest trip response (elasticity $-0.5$), average peak car trips take about 21\% longer, network capacity falls by about 19\%, and population-weighted NO$_2$ rises slightly (22.4 to 22.8\,\si{\micro\gram\per\cubic\metre}), because diverted traffic concentrates on main roads lined with homes. An 800\,HUF entry charge at the Hungária ring calms the centre but moves cross-river traffic to the free ring.
+The impact model is less favourable. With a modest trip response (elasticity $-0.5$), average peak car trips take about 21\% longer, network capacity falls by about 19\%, and population-weighted NO$_2$ rises slightly (22.4 to 22.8\,\si{\micro\gram\per\cubic\metre}), because diverted traffic concentrates on main roads lined with homes. An 800\,HUF entry charge at the Hungária ring calms the centre but moves cross-river traffic to the free ring. Two changes help most: building only the best-ranked quarter of superblocks keeps 78\% of the interior traffic reduction at a little over half the delay, and charging the Danube bridges as well closes the ring bypass; together they bring population-weighted NO$_2$ back to today's level with trips 13\% slower. The plan's 1,047 destination-only gates rely on camera enforcement that Hungarian law does not yet allow.
 We conclude that a city-wide superblock grid is technically constructible for Budapest, but should be built district by district from trial installations, together with measures that reduce car demand, and with measured traffic counts before any number here is quoted as a forecast.
 \end{abstract}
 
@@ -52,11 +52,13 @@ Our contributions are an open-source design algorithm with formal validity check
 
 The evidence on superblocks and their relatives is consistent on the inside of a scheme and contested on its edge: inside, traffic falls a lot; on the boundary, outcomes depend on how much traffic disappears rather than diverts.
 
-\paragraph{Barcelona.} The Poblenou and Sant Antoni superblocks cut interior traffic sharply; Sant Antoni saw NO$_2$ fall about 25\% and noise about 3.5\,dB. A health impact assessment of the full 503-superblock vision estimated about 667 premature deaths avoided each year, mainly from less NO$_2$, noise and heat and more physical activity \citep{mueller2020}. That estimate assumes much of the displaced traffic disappears.
+\paragraph{Barcelona.} The Poblenou and Sant Antoni superblocks cut interior traffic sharply; Sant Antoni saw NO$_2$ fall 25\% (14.6\,\si{\micro\gram\per\cubic\metre}) and PM$_{10}$ 17\%, while Horta showed no significant change overall and Poblenou residents reported traffic moving to surrounding streets \citep{perez2025}. A health impact assessment of the full 503-superblock vision estimated about 667 premature deaths avoided each year, mainly from less NO$_2$, noise and heat and more physical activity \citep{mueller2020}. That estimate assumes much of the displaced traffic disappears.
 
 \paragraph{Ghent.} In 2017 Ghent divided its centre into six sectors that cars can only move between via the ring. Peak car traffic fell about 12\%, cycling rose about 25\% and public transport about 28\%. Ghent is the closest precedent to a whole-city design.
 
-\paragraph{London low-traffic neighbourhoods.} Inside London's LTNs motor traffic fell about 48\%, while boundary roads changed only marginally on average \citep{thomas2024}. Results vary widely between schemes, and boundary-road congestion is the most common public objection.
+\paragraph{London low-traffic neighbourhoods.} Across 46 London LTNs, mean interior traffic fell from 1,780 to 930 vehicles against 1,745 expected from background trends, while boundary roads changed only marginally on average \citep{thomas2024}. Results vary widely between schemes, and boundary-road congestion is the most common public objection.
+
+\paragraph{Leuven and Vienna.} Leuven's 2016 circulation plan cut car traffic in the centre by 8\% and raised cycling by 32\%, while car traffic on the ring rose 9\% and stayed within capacity \citep{leuven2017}. A MATSim study of Vienna simulated 61 configurations with up to 46 superblocks and found interior car trips fall roughly linearly, about 100 a day per superblock \citep{mueller2023}.
 
 \paragraph{Traffic evaporation.} A review of about 100 road-space reductions found traffic on the treated roads fell 41\% on average, and less than half of it reappeared on nearby roads \citep{cairns2002}. Evaporation is real but not guaranteed; it depends on alternatives existing.
 
@@ -68,7 +70,7 @@ The evidence on superblocks and their relatives is consistent on the inside of a
 
 \section{Data}\label{sec:data}
 
-Every input is open and needs no account, so the study can be repeated by anyone and for any city (Table~\ref{tab:data}). The one input Budapest does not publish openly, traffic counts, is the study's largest weakness.
+Every input is open and needs no account, so the study can be repeated by anyone and for any city (Table~\ref{tab:data}). Traffic counts are the exception and the study's largest weakness. They exist: several hundred Budapest Közút loop and camera counters report daily volumes since October 2022, and BKK's strategic model EFM~3.0 (PTV VISUM, over 1,000 zones, rebuilt in 2024 from a household survey of about 60,000 trips) is released to researchers on request \citep{bkkcounters,bkkefm}. Neither is published as open files, and neither was used here.
 
 \begin{table}[ht]
 \centering\small
@@ -85,7 +87,8 @@ Residents & Meta High Resolution Settlement Layer, 30\,m & CC BY 4.0 & Trip orig
 Jobs (proxy) & Overture places and buildings & CDLA, ODbL & Trip destinations \\
 NO$_2$ annual means 2025 & 10 Budapest stations via OpenAQ & CC BY 4.0 & Fitting the NO$_2$ model \\
 Entry-charge cordon & Hungária ring and Buda inner ring (32\,km$^2$) & ODbL & Entry charge scenario \\
-Traffic counts & None openly available & -- & Would calibrate demand and boundary roads \\
+Traffic counts & Budapest Közút counters (dashboard only); EFM~3.0 on request & -- & Not used; would calibrate demand and boundary roads \\
+Peak congestion & TomTom Traffic Index 2025 \citep{tomtom2025} & public & Range for the calibration target \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -250,6 +253,59 @@ Revenue per year & -- & 18\,bn HUF & 25\,bn HUF \\
 
 The charge calms the centre and, with the plan, cuts the residents breathing worse air from 342,000 to 230,000. It does not relieve the main roads the plan loads (773\,km against 751\,km), because cross-river traffic leaves the central bridges for the free ring and end bridges; peak flow on the Rákóczi bridge rises from about 5,200 to 9,100 vehicles an hour with the charge alone. At 400\,HUF the charge alone still cuts entries by 59\%: most of the effect is rerouting, not trips given up.
 
+\subsection{Sensitivity and improvements}\label{sec:improve}
+A November 2026 run on the current code tests the weakest assumptions and three ways to improve the plan. It rebuilds the plan with the population layer (2,291 superblocks, all valid, 1,047 destination-only gates) and reproduces the impact model within a few points: 198,000 peak car trips, average trip time +18.2\% with today's trips and +18.9\% once 8.3\% of trips are not made by car, capacity $-17$\%, population-weighted NO$_2$ 22.4 to 23.6\,\si{\micro\gram\per\cubic\metre} (23.1 with the trip response). Table~\ref{tab:improve} summarises the variants against this run.
+
+\begin{table}[ht]
+\centering\small
+\caption{Variants of the November 2026 run (trips respond, $\varepsilon=-0.5$, except where noted). Trip time and NO$_2$ are against today in the same model.}\label{tab:improve}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright}Xrrrr@{}}
+\toprule
+Variant & Superblocks & Trip time & Capacity & NO$_2$ (\si{\micro\gram\per\cubic\metre}) \\
+\midrule
+Full plan, congestion index 1.3 (as in the paper) & 2,291 & +18.9\% & $-17$\% & 23.05 \\
+Full plan, index 1.6 (TomTom all-day) & 2,291 & +20.7\% & $-12$\%$^a$ & 22.99 \\
+Full plan, index 1.9 (TomTom morning peak) & 2,291 & +24.4\% & $-10$\%$^a$ & 22.96 \\
+Full plan, gates not enforced & 2,291 & +13.6\% & $-14$\% & 22.88 \\
+Best 75\% of superblocks & 1,718 & +16.5\% & $-14$\% & 22.99 \\
+Best 50\% & 1,146 & +16.1\% & $-12$\% & 22.98 \\
+Best 25\% & 573 & +11.4\% & $-7$\% & 22.88 \\
+Best 10\% & 229 & +4.5\% & $-1$\% & 22.62 \\
+Charge at the Hungária cordon, 800\,HUF$^b$ & 2,291 & +25.3\% & -- & 22.97 \\
+Same charge, Danube bridges charged too$^b$ & 2,291 & +20.9\% & -- & 22.61 \\
+Danube bridge charge without superblocks$^b$ & 0 & +3.2\% & -- & 22.19 \\
+Best 25\% with the Danube bridges charged$^b$ & 573 & +13.3\% & -- & 22.45 \\
+\bottomrule
+\end{tabularx}
+
+\smallskip
+\footnotesize $^a$ Capacity is the demand at which trips take 1.54 times today's level in each case, so the three are not directly comparable. $^b$ Charge elasticity $-0.7$. Today's NO$_2$ is 22.42 (index 1.3), 22.35 (1.6) and 22.27 (1.9).
+\end{table}
+
+\paragraph{Congestion level.} The model assumes today's peak trip takes 1.3 times its free-flow time. TomTom measured 61.9\% congestion across 2025 and 88.9\% in the morning peak, about 28 and 33 minutes per 10\,km \citep{tomtom2025}, which suggests an index between 1.6 and 1.9. TomTom's figure is distance-weighted over probe vehicles, not the model's trip-weighted ratio, so we treat it as a range. Calibrated to it, demand rises to 258,000 and 295,000 trips and the plan's trip-time penalty grows from +19\% to +21\% and +24\%. The direction of every result holds; the penalty in the paper is, if anything, understated.
+
+\paragraph{Unenforced gates.}\label{sec:gates} Camera enforcement is not legally available today (Section~\ref{sec:implementation}). With gates that cost through traffic nothing, the trip-time penalty falls from +19\% to +14\%, because drivers cut through the gated streets the plan meant to protect. Traffic on the gated links rises from about 3,800 to 14,900 vehicle-km in the peak hour, and the interior traffic the plan removes falls by 8\%. The gates are therefore load-bearing: without enforcement part of the plan's effect, good and bad, leaks back onto residential streets, so the gates that carry most of this traffic should become rising bollards with resident access until camera enforcement is allowed.
+
+\paragraph{Coverage frontier.} Ranking superblocks by interior traffic removed per unit of extra boundary-road traffic (both from the full-plan assignment; Section~\ref{sec:method}) shows that the benefit is concentrated. In the full plan, 1,366 of 2,291 superblocks (60\%) carry no modelled through traffic today, so filtering them changes nothing inside and only lengthens access trips. The best 10\% of superblocks remove 39\% of the interior vehicle-km the full plan removes, at a seventh of its trip-time penalty (a quarter once trips respond); the best 25\% remove 78\% at a little over half of the penalty; beyond half, more superblocks add delay and almost no interior benefit (Table~\ref{tab:frontier}). The interior benefit saturates after the first quarter while delay keeps rising, because the remaining superblocks have little through traffic to remove but still lengthen access trips and load the boundary roads. The model's 800\,m zones load few trips onto quiet interiors, so the frontier understates the local benefit of calming streets that are already quiet; the ranking is still the right order in which to build.
+
+\begin{table}[ht]
+\centering\small
+\caption{Coverage frontier: share of the full plan's interior benefit against its costs (fixed demand; trip response in brackets).}\label{tab:frontier}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Built & Interior veh-km removed & Trip time & Capacity & Boundary veh-km added \\
+\midrule
+10\% (229) & 39\% & +2.5\% (+4.5\%) & $-1$\% & 26\% \\
+25\% (573) & 78\% & +9.9\% (+11.4\%) & $-7$\% & 73\% \\
+50\% (1,146) & 92\% & +14.0\% (+16.1\%) & $-12$\% & 89\% \\
+75\% (1,718) & 92\% & +14.8\% (+16.5\%) & $-14$\% & 91\% \\
+100\% (2,291) & 100\% & +18.2\% (+18.9\%) & $-17$\% & 100\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Charging the bridges.} The Hungária cordon failed because cross-river traffic moved to the free ring and end bridges. Charging every Danube road bridge as well (800\,HUF per crossing, residents of the zone exempt) closes that bypass: with the plan, trip time rises 21\% instead of 25\%, ring-road traffic 78\% instead of 112\%, and population-weighted NO$_2$ is 22.6 instead of 23.0\,\si{\micro\gram\per\cubic\metre}. On its own the bridge charge lowers NO$_2$ to 22.2 at a 3\% trip-time cost, the only variant that improves air quality on average. The modelled revenue, about 63\,bn HUF a year, reflects charging every crossing at a cordon price; a real scheme would charge less per crossing or once a day. Combining the two improvements, the best 25\% of superblocks with the bridges charged keeps 78\% of the interior benefit with trips 13\% slower and population-weighted NO$_2$ back at today's level (22.45 against 22.42\,\si{\micro\gram\per\cubic\metre}), against +25\% and 23.0 for the full plan with the cordon charge.
+
 \section{Limitations and validity}\label{sec:limits}
 
 The design checks are verifications on a graph; the impact numbers are screening estimates. The two should not be read with the same confidence.
@@ -274,14 +330,14 @@ Budapest should build superblocks as Barcelona and London did, a few at a time f
 Budapest has two tiers of government. The capital and its transport authority BKK manage the main-road network and public transport; the 23 district councils manage most residential streets. Superblock interiors are therefore district decisions, while boundary roads, bus gates and any charge are the capital's. Every scheme needs a joint agreement between a district and BKK, with BKK checking boundary-road capacity and bus routes.
 
 \subsection{Legal instruments}
-None of the plan's street measures needs new legislation: modal filters, one-way changes, 30\,km/h zones and the ``Behajtani tilos, kivéve célforgalom'' sign are ordinary traffic orders under the KRESZ. Camera enforcement of destination-only and bus gates needs an enforcement agreement and a permit list, and its legal basis should be confirmed with the police before relying on it at scale. The entry charge is different: the road traffic act (Kkt.) reserves road charges to the state, and the Kúria annulled the capital's lorry fee on that ground in 2024 \citep{kuria2024}. A charge needs Parliament to amend the Kkt.\ first \citep{vg2026}.
+None of the plan's street measures needs new legislation: modal filters, one-way changes, 30\,km/h zones and the ``Behajtani tilos, kivéve célforgalom'' sign are ordinary traffic orders under the KRESZ. Camera enforcement is the plan's main legal risk. Municipal police may only fine in person, and in April 2025 the Interior Ministry refused the capital's request to let number-plate cameras fine drivers in bus lanes \citep{xpatloop2025}. Until that changes, a destination-only gate is enforced only by occasional police checks; Section~\ref{sec:gates} measures what that costs, and the gates that matter should become rising bollards with resident access. The entry charge is different: the road traffic act (Kkt.) reserves road charges to the state, and the Kúria annulled the capital's lorry fee on that ground in 2024 \citep{kuria2024}. A charge needs Parliament to amend the Kkt.\ first \citep{vg2026}.
 
 \subsection{Phasing}
 \begin{enumerate}
-  \item \textbf{Evidence (months 0--6).} Install counters on the boundary roads and candidate interiors of the first districts (Telraam sensors, BKK counts, published bridge counts). Load an authoritative address dataset. Rerun the plan with counts so the boundary network comes from measured volumes.
+  \item \textbf{Evidence (months 0--6).} Request the EFM~3.0 matrices and the counters' hourly data from BKK. Install counters on the boundary roads and candidate interiors of the first districts (Telraam sensors, BKK counts, published bridge counts). Load an authoritative address dataset. Rerun the plan with counts so the boundary network comes from measured volumes.
   \item \textbf{Pilots (months 6--18).} Pick three to five superblocks from the tool's pilot ranking, which favours large interior traffic cuts, dense housing, schools and short detours. Build them with planters, removable bollards and signs; in an earlier run the ten top-ranked trials cost about \texteuro160,000 in total. Measure inside and on the boundary before and after, and publish the results.
   \item \textbf{District rollout (years 2--5).} Extend to whole districts where pilots work, starting where tram, metro and cycling alternatives are best (inner Pest districts VI--IX and XIII). Give the reclaimed space to people: greenery, seating, school streets, delivery bays. Pair each district with bus priority and cycle routes on its boundary roads.
-  \item \textbf{City grid and demand management (year 3 onwards).} Before the grid covers most of the city, introduce parking pricing and supply limits (within the districts' powers today), then a charge once the law allows. The model shows the charge must keep cross-river through traffic charged (end bridges too, or a per-day area charge as in London and Milan), or it simply moves traffic onto the ring.
+  \item \textbf{City grid and demand management (year 3 onwards).} Before the grid covers most of the city, introduce parking pricing and supply limits (within the capital's and districts' powers today; hourly rates rose to 800, 600, 400 and 300\,HUF in zones A to D on 1 July 2026 \citep{telex2026}), then a charge once the law allows. The model shows the charge must keep cross-river through traffic charged (end bridges too, or a per-day area charge as in London and Milan), or it simply moves traffic onto the ring.
 \end{enumerate}
 
 \subsection{Gates between phases}
@@ -297,11 +353,11 @@ Indicative central European unit costs in an earlier run gave about \texteuro7.6
 
 A complete superblock plan for Budapest can be generated from open data in under two minutes and verified free of through routes and stranded addresses on the street graph. The design problem is solved well enough to serve as a planning instrument. What remains is the city problem: the same model says that redistributing traffic without reducing it lengthens trips by about a fifth and moves exposure onto main-road residents.
 
-The practical answer is to treat the city-wide plan as a framework, build it district by district from measured pilots, invest in transit and cycling on the boundary roads at the same time, and add demand management that cannot be bypassed on the ring. The next scientific step is calibration: traffic counts on the ring and bridges, a multi-class assignment with a spread of values of time, and a per-day charge design.
+The sensitivity runs sharpen this. The interior benefit is concentrated: 60\% of the superblocks carry no modelled through traffic, and the best quarter delivers 78\% of the benefit. So the city-wide plan should be read as a ranked framework rather than a single project: build the part of the grid the boundary roads can carry, in rank order, and grow it as demand falls. The practical answer is to build it district by district from measured pilots, invest in transit and cycling on the boundary roads at the same time, and add demand management that cannot be bypassed on the ring, such as a charge that includes the Danube bridges. Gates that carry the most leaked traffic should become rising bollards until camera enforcement is legal. The next scientific step is calibration: BKK's EFM~3.0 matrices and hourly counter data, a mode-choice step using the GTFS feed, a multi-class assignment with a spread of values of time, and a per-day charge design.
 
 \section*{Data and code availability}
 {\sloppy
-Code, tests and research notes are at \url{https://github.com/tgergo1/Superblocker} (GPL-3.0). The traffic, air and noise results come from \texttt{POST /api/v1/simulation/capacity} with the layers downloaded by \texttt{backend/scripts/fetch\_open\_data.py}. Entry-charge calibration is in \texttt{docs/research/congestion-charging.md}, the cordon in \texttt{docs/research/cordon-hungaria.json}, and the design history in \texttt{docs/roadmap-budapest.md}. Section~\ref{sec:results} figures come from commits \texttt{bbca81d} (impact model) and \texttt{3b4d346} (entry charge).\par}
+Code, tests and research notes are at \url{https://github.com/tgergo1/Superblocker} (GPL-3.0). The traffic, air and noise results come from \texttt{POST /api/v1/simulation/capacity} with the layers downloaded by \texttt{backend/scripts/fetch\_open\_data.py}. Entry-charge calibration is in \texttt{docs/research/congestion-charging.md}, the cordon in \texttt{docs/research/cordon-hungaria.json}, and the design history in \texttt{docs/roadmap-budapest.md}. Section~\ref{sec:results} figures come from commits \texttt{bbca81d} (impact model) and \texttt{3b4d346} (entry charge); Section~\ref{sec:improve} from \texttt{backend/scripts/run\_budapest.py} on the November 2026 code, with the run settings listed in \texttt{docs/research/november-2026-runs.md}.\par}
 
 \begin{thebibliography}{99}\small
 
@@ -325,10 +381,50 @@ S.~Cairns, S.~Atkins, and P.~Goodwin.
 \newblock Disappearing traffic? {T}he story so far.
 \newblock \emph{Proceedings of the ICE: Municipal Engineer}, 151(1):13--22, 2002.
 
-\bibitem[Thomas and Goodman()]{thomas2024}
-A.~Thomas and A.~Goodman.
+\bibitem[Thomas and Aldred(2024)]{thomas2024}
+A.~Thomas and R.~Aldred.
 \newblock Changes in motor traffic in {L}ondon's low traffic neighbourhoods and boundary roads.
-\newblock \url{https://uwe-repository.worktribe.com/output/11457285}.
+\newblock \emph{Case Studies on Transport Policy}, 15:101124, 2024.
+
+\bibitem[P{\'e}rez et~al.(2025)]{perez2025}
+K.~P{\'e}rez, L.~Pal{\`e}ncia, M.~J. L{\'o}pez, et~al.
+\newblock Environmental and health effects of the {B}arcelona superblocks.
+\newblock \emph{BMC Public Health}, 25:634, 2025.
+
+\bibitem[POLIS(2017)]{leuven2017}
+POLIS.
+\newblock Promising results of {L}euven's new circulation plan, 2017.
+\newblock \url{https://polisnetwork.eu/?p=17522}.
+
+\bibitem[M{\"u}ller et~al.(2023)]{mueller2023}
+J.~M{\"u}ller, M.~Straub, M.~Stubenschrott, and A.~Graser.
+\newblock Simulation of a full scale implementation of superblocks in {V}ienna.
+\newblock In \emph{Proceedings of the 15th ITS European Congress}, Lisbon, 2023.
+
+\bibitem[BKK(2024a)]{bkkefm}
+BKK.
+\newblock Egységes Forgalmi Modell (EFM 3.0).
+\newblock \url{https://bkk.hu/rolunk/forgalmi-adatok-diagramok/egyseges-forgalmi-modell/}.
+
+\bibitem[BKK(2024b)]{bkkcounters}
+BKK and Budapest Közút.
+\newblock Közúti mérőeszközök adatai.
+\newblock \url{https://bkk.hu/rolunk/forgalmi-adatok-diagramok/kozuti-meroeszkozok-adatai/}.
+
+\bibitem[TomTom(2026)]{tomtom2025}
+TomTom.
+\newblock Traffic Index 2025: Budapest.
+\newblock \url{https://www.tomtom.com/traffic-index/budapest-traffic/}.
+
+\bibitem[Xpatloop(2025)]{xpatloop2025}
+Xpatloop.
+\newblock Hungary rejects use of car number plate cameras for traffic violation fines, April 2025.
+\newblock \url{https://xpatloop.com/channels/2025/04/hungary-rejects-use-of-car-number-plate-cameras-for-traffic-violation-fines.html}.
+
+\bibitem[Telex(2026)]{telex2026}
+Telex.
+\newblock Drágult a fővárosi parkolás, July 2026.
+\newblock \url{https://telex.hu/g7/elet/2026/07/02/fovarosi-parkolas-dragulas-bkk-kedvezmeny-koltsegek-botranyok}.
 
 \bibitem[Eliasson(2009)]{eliasson2009}
 J.~Eliasson.

@@ -51,6 +51,12 @@ class EntryChargeSettings(BaseModel):
     # boundary road is free to drive along and a ring drawn a little off the
     # street does not charge at every other junction.
     boundary_tolerance_m: float = Field(default=60.0, ge=0, le=1_000)
+    # Also charge every main-road bridge whose name matches one of these
+    # patterns (case-insensitive substrings of the OSM name), in both
+    # directions and wherever it is. A cordon whose ring and end bridges stay
+    # free moves cross-river traffic onto them; charging the bridges closes
+    # that bypass. For Budapest's Danube bridges use ["híd"].
+    charged_bridge_names: list[str] = Field(default_factory=list, max_length=50)
 
     @field_validator("cordon")
     @classmethod

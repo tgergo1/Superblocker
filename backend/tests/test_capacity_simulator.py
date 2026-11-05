@@ -430,3 +430,105 @@ def test_a_road_on_the_cordon_line_is_free_to_drive_along():
     assert ring_links_charged(0.0) > 0
     # Junctions on the line count as outside, so the ring road stays free.
     assert ring_links_charged(30.0) == 0
+
+
+def test_named_bridges_are_charged_once_per_crossing_even_outside_the_zone():
+    from app.models.simulation import EntryChargeSettings
+
+    graph = grid_city()
+    # Two consecutive links of the secondary road along row 0, far outside the
+    # zone, become one bridge.
+    bridge = {(0, 1), (1, 0), (1, 2), (2, 1)}
+    for u, v, data in graph.edges(data=True):
+        if (u, v) in bridge:
+            data.update(bridge="yes", name="Próba híd")
+    charge = EntryChargeSettings(
+        cordon=_centre_cordon(), charge=2_000, charged_bridge_names=["híd"]
+    )
+    simulator = CapacitySimulator(
+        graph, settings=CapacitySimulationSettings(zone_size_m=250, entry_charge=charge)
+    )
+    network = simulator._build_network()
+    simulator._mark_cordon(network)
+    links = network.links
+    on_bridge = np.array(
+        [(int(t), int(h)) in bridge for t, h in zip(links.tail, links.head, strict=True)]
+    )
+    assert network.link_entering[on_bridge].all()
+    arcs = network.arcs
+    into_bridge = (arcs.link >= 0) & on_bridge[np.maximum(arcs.link, 0)]
+    from_bridge = (arcs.tail < len(links.tail)) & on_bridge[
+        np.minimum(arcs.tail, len(links.tail) - 1)
+    ]
+    # Driving onto the bridge pays; moving along it from bridge to bridge does not.
+    assert (arcs.toll[into_bridge & ~from_bridge] > 0).all()
+    assert (arcs.toll[into_bridge & from_bridge] == 0).all()
+
+
+def test_coverage_keeps_the_superblocks_with_most_benefit_per_boundary_burden():
+    from app.models.schemas import CityPartition, EnforcedSuperblock
+    from app.services.optimization.coverage import select_coverage, superblock_scores
+
+    def square(x0):
+        return {
+            "type": "Polygon",
+            "coordinates": [[[x0, 0], [x0 + 1, 0], [x0 + 1, 1], [x0, 1], [x0, 0]]],
+        }
+
+    def block(sid, x0):
+        return {
+            "id": sid,
+            "geometry": square(x0),
+            "area_hectares": 12.0,
+            "num_sectors": 4,
+            "boundary_roads": [],
+            "entry_points": [],
+            "modifications": [],
+            "constraint_validated": True,
+            "interior_roads_count": 1,
+            "modal_filter_count": 0,
+            "one_way_conversion_count": 0,
+            "street_cut_count": 0,
+        }
+
+    partition = CityPartition.model_construct(
+        superblocks=[
+            EnforcedSuperblock.model_validate(block(s, x)) for s, x in (("a", 0), ("b", 2))
+        ]
+    )
+    links = [
+        # Interior streets: "a" loses 300 vph over 1 km, "b" 100 vph.
+        {
+            "coordinates": [[0.2, 0.5], [0.8, 0.5]],
+            "length_m": 1000,
+            "baseline_vph": 400,
+            "planned_vph": 100,
+            "is_boundary_road": False,
+        },
+        {
+            "coordinates": [[2.2, 0.5], [2.8, 0.5]],
+            "length_m": 1000,
+            "baseline_vph": 200,
+            "planned_vph": 100,
+            "is_boundary_road": False,
+        },
+        # A boundary road along "a" gains 500 vph over 1 km.
+        {
+            "coordinates": [[0, 0], [1, 0]],
+            "length_m": 1000,
+            "baseline_vph": 500,
+            "planned_vph": 1000,
+            "is_boundary_road": True,
+        },
+    ]
+    scores = superblock_scores(partition, links)
+    assert scores["a"]["interior_vkm_removed"] == pytest.approx(300)
+    assert scores["a"]["boundary_vkm_added"] == pytest.approx(500)
+    assert scores["b"]["boundary_vkm_added"] == 0
+    # "b" removes less but costs its boundary nothing, so it ranks first.
+    assert scores["b"]["score"] > scores["a"]["score"]
+    half = select_coverage(partition, scores, 0.5)
+    assert [sb.id for sb in half.superblocks] == ["b"]
+    assert len(partition.superblocks) == 2
+    with pytest.raises(ValueError):
+        select_coverage(partition, scores, 0)
