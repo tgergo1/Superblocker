@@ -63,3 +63,7 @@ cache/
 
 # Local planning registry state
 state/
+
+# Data received from BKK under its EFM user declaration: never commit
+data/efm/
+backend/data/efm/

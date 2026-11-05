@@ -1,4 +1,4 @@
-# Data requests to BKK (drafts, 2026-11-05)
+# Data requests to BKK (drafts, updated 2026-11-05 for the EFM user declaration)
 
 Two requests. The first goes through the form on BKK's model page
 (https://bkk.hu/rolunk/forgalmi-adatok-diagramok/egyseges-forgalmi-modell/ → "adatigénylő űrlap",
@@ -26,19 +26,37 @@ legfrissebb (EFM 3.0) állapot szerint:
 2. A reggeli csúcsórai (és ha van, napi) **személygépkocsi** körzetközi mátrix (OD mátrix).
 3. Ugyanez közösségi közlekedésre, kerékpárra és gyaloglásra, vagy a körzetpáronkénti
    módválasztási arányok.
-4. A modellezett közúti hálózat a hivatkozott szakaszonkénti terheléssel (jármű/óra,
+4. A modellezett közúti hálózat a szakaszonkénti ráterhelt forgalommal (jármű/óra,
    csúcsóra), kapacitással és szabad sebességgel.
 5. Röviden: a módválasztási modell paraméterei (rugalmasságok, időérték), ha közölhetők.
 
-Az adatokat kizárólag kutatási célra használom, harmadik félnek nem adom tovább, és a
-publikációban a BKK-t forrásként feltüntetem. Szívesen megosztom az eredményeket a BKK-val.
+**Az adatok felhasználásáról (az EFM felhasználói nyilatkozatához kapcsolódóan):**
+
+- Az adatokat kizárólag a fent leírt feladatra használom: a Superblocker forgalmi modelljének
+  kalibrálására és ellenőrzésére, valamint egy tudományos cikk elkészítésére.
+- Az átadott EFM adatokat (mátrixokat, hálózati terheléseket) nem teszem közzé, nyilvános
+  tárhelyre (pl. a GitHub-tárolóba) nem töltöm fel, és harmadik személynek nem adom tovább.
+  Az adatokat saját gépemen tárolom.
+- **Engedélyt kérek** arra, hogy az adatokból származtatott, **aggregált eredményeket**
+  (pl. az utazási idő és a hálózati kapacitás változása, kalibrációs mutatók, összesített
+  táblázatok és ábrák) a cikkben és a projekt dokumentációjában a BKK forrásként való
+  feltüntetésével publikáljam. A publikálás előtt szívesen megküldöm a kéziratot
+  véleményezésre.
+- **Engedélyt kérek** arra is, hogy az adatok feldolgozásához felhőalapú elemzőeszközöket
+  (felhőben futó számítási környezetet és mesterséges intelligencián alapuló
+  elemzőszolgáltatást) használjak. Ezek az adatokat csak a feldolgozáshoz kapják meg,
+  nem teszik közzé.
+- A származtatott eredményeket a feladat befejezésekor megküldöm a BKK részére.
 
 Köszönettel:
 [Név] · [e-mail] · [telefon]
 
 *English summary:* asks for EFM 3.0 zones, AM-peak car OD matrix, transit/bike/walk matrices or mode
 shares, the assigned road network with link volumes, capacity and free speed, and the mode-choice
-parameters, for research use with attribution.
+parameters. In line with BKK's user declaration, it promises to use the data only for this task,
+keep it off public hosting and away from third parties, and return derived results; and it asks for
+two permissions: to publish aggregated derived results crediting BKK (with the manuscript offered
+for review), and to process the data with cloud and AI analysis tools.
 
 ---
 
