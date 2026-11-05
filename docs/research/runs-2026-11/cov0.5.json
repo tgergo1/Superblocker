@@ -1,0 +1,413 @@
+{
+ "method": "static_user_equilibrium_frank_wolfe",
+ "settings": {
+  "zone_size_m": 800.0,
+  "max_zones": 100,
+  "connectors_per_zone": 8,
+  "peak_hour_trips": null,
+  "target_peak_travel_time_index": 1.3,
+  "distance_decay_per_minute": 0.12,
+  "demand_levels": [
+   0.5,
+   1.0,
+   1.5,
+   2.0,
+   3.0
+  ],
+  "max_iterations": 6,
+  "convergence_gap": 0.005,
+  "bpr_alpha": 0.15,
+  "bpr_beta": 4.0,
+  "breakdown_travel_time_index": 2.0,
+  "congested_volume_capacity_ratio": 0.9,
+  "max_map_links": 200000,
+  "min_map_volume_vph": 20.0,
+  "turn_model": true,
+  "signal_delay_straight_s": 15.0,
+  "signal_delay_right_s": 12.0,
+  "signal_delay_left_s": 25.0,
+  "give_way_delay_s": 6.0,
+  "give_way_left_extra_s": 6.0,
+  "priority_left_delay_s": 3.0,
+  "dead_end_u_turn_s": 20.0,
+  "gate_penalty_s": 600.0,
+  "external_trip_share": 0.15,
+  "gateway_band_m": 600.0,
+  "demand_elasticity": -0.5,
+  "elastic_iterations": 4,
+  "entry_charge": null
+ },
+ "base_peak_hour_trips": 198067.27985954544,
+ "demand_calibrated": true,
+ "zone_count": 100,
+ "connector_count": 722,
+ "node_count": 24525,
+ "link_count": 63691,
+ "links_closed_by_plan": 6353,
+ "junctions_cut_off_by_plan": 11,
+ "baseline": {
+  "name": "without_superblocks",
+  "levels": [
+   {
+    "demand_multiplier": 0.5,
+    "trips": 99033.6399297727,
+    "served_trips": 99033.63992977272,
+    "blocked_trips": 0.0,
+    "vehicle_km": 676861.292838176,
+    "vehicle_hours": 19162.87738631789,
+    "mean_trip_minutes": 11.60992006346941,
+    "mean_speed_kph": 35.321485348617244,
+    "travel_time_index": 1.0732235619949526,
+    "congested_km": 62.97779849080702,
+    "over_capacity_km": 45.82875178243981,
+    "relative_gap": 0.010547919300087897,
+    "iterations": 6
+   },
+   {
+    "demand_multiplier": 1.0,
+    "trips": 198067.2798595454,
+    "served_trips": 198067.27985954544,
+    "blocked_trips": 0.0,
+    "vehicle_km": 1375389.1791904792,
+    "vehicle_hours": 46465.97005006566,
+    "mean_trip_minutes": 14.075814061671123,
+    "mean_speed_kph": 29.599923938067782,
+    "travel_time_index": 1.3011713450791005,
+    "congested_km": 215.27816558797176,
+    "over_capacity_km": 154.79646741710704,
+    "relative_gap": 0.020500926666838743,
+    "iterations": 6
+   },
+   {
+    "demand_multiplier": 1.5,
+    "trips": 297100.9197893181,
+    "served_trips": 297100.9197893181,
+    "blocked_trips": 0.0,
+    "vehicle_km": 2094767.4866219673,
+    "vehicle_hours": 103726.21516983947,
+    "mean_trip_minutes": 20.94767298130098,
+    "mean_speed_kph": 20.19515975968112,
+    "travel_time_index": 1.9364074937290376,
+    "congested_km": 444.2972261913649,
+    "over_capacity_km": 358.10997905911205,
+    "relative_gap": 0.041594468957789114,
+    "iterations": 6
+   },
+   {
+    "demand_multiplier": 2.0,
+    "trips": 396134.5597190908,
+    "served_trips": 396134.5597190909,
+    "blocked_trips": 0.0,
+    "vehicle_km": 2838825.4887172915,
+    "vehicle_hours": 246673.1592494017,
+    "mean_trip_minutes": 37.362025584082936,
+    "mean_speed_kph": 11.508449064160502,
+    "travel_time_index": 3.453753855451917,
+    "congested_km": 678.8686891646258,
+    "over_capacity_km": 570.3847104407728,
+    "relative_gap": 0.04681915993868536,
+    "iterations": 6
+   },
+   {
+    "demand_multiplier": 3.0,
+    "trips": 594201.8395786362,
+    "served_trips": 594201.8395786362,
+    "blocked_trips": 0.0,
+    "vehicle_km": 4396331.603740431,
+    "vehicle_hours": 1298457.646836061,
+    "mean_trip_minutes": 131.1127862973461,
+    "mean_speed_kph": 3.385810553353765,
+    "travel_time_index": 12.12009477790248,
+    "congested_km": 1137.486803835636,
+    "over_capacity_km": 1025.3713326791838,
+    "relative_gap": 0.0480926053835888,
+    "iterations": 6
+   }
+  ],
+  "capacity_multiplier": 1.5209551714345417,
+  "capacity_trips": 301251.4535943483,
+  "capacity_reached": true,
+  "drivable_km": 8073.1176737995
+ },
+ "planned": {
+  "name": "with_superblocks",
+  "levels": [
+   {
+    "demand_multiplier": 0.5,
+    "trips": 99033.6399297727,
+    "served_trips": 99033.63992977272,
+    "blocked_trips": 0.0,
+    "vehicle_km": 729727.4606882125,
+    "vehicle_hours": 21491.284166731246,
+    "mean_trip_minutes": 13.02059634401276,
+    "mean_speed_kph": 33.95457688926002,
+    "travel_time_index": 1.2036267873703137,
+    "congested_km": 50.96006916123247,
+    "over_capacity_km": 38.12139897261398,
+    "relative_gap": 0.005580149804813588,
+    "iterations": 6
+   },
+   {
+    "demand_multiplier": 1.0,
+    "trips": 198067.2798595454,
+    "served_trips": 198067.27985954544,
+    "blocked_trips": 0.0,
+    "vehicle_km": 1489502.2214394086,
+    "vehicle_hours": 52957.25191914696,
+    "mean_trip_minutes": 16.042201000599484,
+    "mean_speed_kph": 28.126501422572336,
+    "travel_time_index": 1.4829445858352819,
+    "congested_km": 212.73070715417205,
+    "over_capacity_km": 162.92753848088964,
+    "relative_gap": 0.01913632982890998,
+    "iterations": 6
+   },
+   {
+    "demand_multiplier": 1.5,
+    "trips": 297100.9197893181,
+    "served_trips": 297100.9197893181,
+    "blocked_trips": 0.0,
+    "vehicle_km": 2278914.207016372,
+    "vehicle_hours": 120707.41880149391,
+    "mean_trip_minutes": 24.377053875246965,
+    "mean_speed_kph": 18.87965321140781,
+    "travel_time_index": 2.2534202171860067,
+    "congested_km": 439.98386515854025,
+    "over_capacity_km": 355.87597931855896,
+    "relative_gap": 0.027308027563907836,
+    "iterations": 6
+   },
+   {
+    "demand_multiplier": 2.0,
+    "trips": 396134.5597190908,
+    "served_trips": 396134.5597190909,
+    "blocked_trips": 0.0,
+    "vehicle_km": 3100120.223179761,
+    "vehicle_hours": 292366.73411937384,
+    "mean_trip_minutes": 44.28294279499853,
+    "mean_speed_kph": 10.603532691629605,
+    "travel_time_index": 4.09352496332907,
+    "congested_km": 665.3714475963097,
+    "over_capacity_km": 573.2627365664918,
+    "relative_gap": 0.0412168746788502,
+    "iterations": 6
+   },
+   {
+    "demand_multiplier": 3.0,
+    "trips": 594201.8395786362,
+    "served_trips": 594201.8395786362,
+    "blocked_trips": 0.0,
+    "vehicle_km": 4822329.877079026,
+    "vehicle_hours": 1545189.0900769583,
+    "mean_trip_minutes": 156.02668862547026,
+    "mean_speed_kph": 3.120867153442592,
+    "travel_time_index": 14.423141384047115,
+    "congested_km": 1064.9854208296026,
+    "over_capacity_km": 977.0085333414291,
+    "relative_gap": 0.053331211086224996,
+    "iterations": 6
+   }
+  ],
+  "capacity_multiplier": 1.3355430030007993,
+  "capacity_trips": 264527.36973981705,
+  "capacity_reached": true,
+  "drivable_km": 7118.820307256288
+ },
+ "capacity_change_percent": -12.190508432859627,
+ "mean_trip_minutes_change_percent": 13.96996955425045,
+ "vehicle_km_change_percent": 8.296782029075844,
+ "vehicle_hours_change_percent": 13.969969554250428,
+ "planned_elastic": {
+  "demand_multiplier": 1.0,
+  "trips": 183904.06216669164,
+  "served_trips": 183904.0621666916,
+  "blocked_trips": 0.0,
+  "vehicle_km": 1430928.9003184866,
+  "vehicle_hours": 50075.37677871284,
+  "mean_trip_minutes": 16.337445575288353,
+  "mean_speed_kph": 28.575499424435243,
+  "travel_time_index": 1.5102370592007346,
+  "congested_km": 194.0124151010608,
+  "over_capacity_km": 147.0618688276771,
+  "relative_gap": 0.038791048340042864,
+  "iterations": 6
+ },
+ "trips_not_made_share": 0.07150710457021103,
+ "elastic_mean_trip_minutes_change_percent": 16.067500634124766,
+ "elastic_vehicle_km_change_percent": 4.038109501537357,
+ "demand_source": "residents (Meta High Resolution Settlement Layer (CC BY 4.0)) and jobs (jobs estimated from Overture Maps places and buildings (CDLA, ODbL))",
+ "external_trip_share": 0.15,
+ "gateway_count": 5,
+ "turn_model": true,
+ "movements": 129328,
+ "turn_restrictions_applied": 2988,
+ "signalised_junctions": 2166,
+ "destination_gates": 860,
+ "environment": {
+  "background_no2": 15.322268056313948,
+  "near_coefficient": 0.9883388530024563,
+  "urban_coefficient": 0.21315782152552623,
+  "r_squared": 0.5025068937574186,
+  "rmse": 3.7731632245156126,
+  "leave_one_out_rmse": 5.474722797960556,
+  "residents": 2083187.5867224932,
+  "scenarios": {
+   "today": {
+    "name": "today",
+    "vehicle_km": 1375379.4530800001,
+    "nox_kg_per_hour": 512.2374285763202,
+    "population_weighted_no2": 22.42217268732263,
+    "residents_no2_over_40": 83.26367330551147,
+    "residents_no2_over_20": 1566691.7021896243,
+    "residents_no2_over_10": 2083187.5867224932,
+    "population_weighted_noise_db": 56.46767976575743,
+    "residents_noise_over_55": 1211429.379190147,
+    "residents_noise_over_65": 346834.3395045996,
+    "residents_noise_over_70": 83970.92271822691
+   },
+   "plan": {
+    "name": "plan",
+    "vehicle_km": 1489499.46443,
+    "nox_kg_per_hour": 571.3832930118728,
+    "population_weighted_no2": 23.390013726792006,
+    "residents_no2_over_40": 578.5002846717834,
+    "residents_no2_over_20": 1652844.7550287247,
+    "residents_no2_over_10": 2083187.5867224932,
+    "population_weighted_noise_db": 56.28151619819495,
+    "residents_noise_over_55": 1173414.650918305,
+    "residents_noise_over_65": 367414.27489697933,
+    "residents_noise_over_70": 108012.31158655882
+   },
+   "plan_with_response": {
+    "name": "plan_with_response",
+    "vehicle_km": 1430927.7623500002,
+    "nox_kg_per_hour": 548.08223782043,
+    "population_weighted_no2": 22.981972850268036,
+    "residents_no2_over_40": 287.0188970565796,
+    "residents_no2_over_20": 1619725.667851925,
+    "residents_no2_over_10": 2083187.5867224932,
+    "population_weighted_noise_db": 56.16618597063503,
+    "residents_noise_over_55": 1166286.3198259473,
+    "residents_noise_over_65": 354227.95293849707,
+    "residents_noise_over_70": 101560.09923923016
+   }
+  },
+  "stations": [
+   {
+    "name": "Budapest Honv\u00e9d",
+    "lon": 19.069867,
+    "lat": 47.522693,
+    "measured": 20.7,
+    "modelled": 25.70843979007462,
+    "left_out": 28.67573867281538
+   },
+   {
+    "name": "Budapest K\u0151rak\u00e1s park",
+    "lon": 19.144177,
+    "lat": 47.544291,
+    "measured": 18.32,
+    "modelled": 21.9021734403734,
+    "left_out": 22.561661604480957
+   },
+   {
+    "name": "Budapest Szena",
+    "lon": 19.02806699981771,
+    "lat": 47.508056000192234,
+    "measured": 28.32,
+    "modelled": 24.79795673787661,
+    "left_out": 24.302405531562876
+   },
+   {
+    "name": "Budapest Pesthidegkut",
+    "lon": 18.9600080000324,
+    "lat": 47.5619440001522,
+    "measured": 12.56,
+    "modelled": 17.83682571977828,
+    "left_out": 21.443782415283778
+   },
+   {
+    "name": "Budapest Gilice t\u00e9r",
+    "lon": 19.18111,
+    "lat": 47.43,
+    "measured": 24.28,
+    "modelled": 20.548785075801486,
+    "left_out": 19.784252977829784
+   },
+   {
+    "name": "Budapest Gergely utca",
+    "lon": 19.157219,
+    "lat": 47.466982,
+    "measured": 24.73,
+    "modelled": 23.824233367184537,
+    "left_out": 23.567080355743897
+   },
+   {
+    "name": "Budapest Erzs\u00e9bet t\u00e9r",
+    "lon": 19.051903,
+    "lat": 47.498948,
+    "measured": 32.25,
+    "modelled": 26.941083147200345,
+    "left_out": 25.619538615704464
+   },
+   {
+    "name": "Budapest Teleki",
+    "lon": 19.087781000058193,
+    "lat": 47.49194400023793,
+    "measured": 26.47,
+    "modelled": 29.556602254615132,
+    "left_out": 31.836389277333925
+   },
+   {
+    "name": "Budapest Budat\u00e9t\u00e9ny",
+    "lon": 19.0099,
+    "lat": 47.40605,
+    "measured": 21.61,
+    "modelled": 18.183062102615143,
+    "left_out": 16.251218028578197
+   },
+   {
+    "name": "Budapest Kosztol\u00e1nyi D. t\u00e9r",
+    "lon": 19.04094,
+    "lat": 47.474775,
+    "measured": 27.73,
+    "modelled": 27.670838364480435,
+    "left_out": 27.598388305630962
+   }
+  ],
+  "no2_better_residents": {
+   "plan": 4809.885386943817,
+   "plan_with_response": 9389.712188243866
+  },
+  "no2_worse_residents": {
+   "plan": 796701.9557483792,
+   "plan_with_response": 285693.637722075
+  },
+  "noise_better_residents": {
+   "plan": 263232.13740992546,
+   "plan_with_response": 265886.9278138876
+  },
+  "noise_worse_residents": {
+   "plan": 214306.24423623085,
+   "plan_with_response": 189961.64345431328
+  },
+  "limitations": [
+   "NO2 is fitted to measured annual means at the stations; the emission factors set only how traffic is spread by speed and road type.",
+   "Noise is peak-hour LAeq by CRTN with no screening by buildings, so it is loudest-fa\u00e7ade exposure; changes are more reliable than absolute levels."
+  ]
+ },
+ "entry_charge": null,
+ "processing_time_seconds": 707.5616000729999,
+ "superblocks_simulated": 1146,
+ "wall_seconds": 709.1,
+ "link_summary": {
+  "boundary_vkm_today": 1129724.3,
+  "boundary_vkm_plan": 1350301.2,
+  "boundary_vkm_plan_response": 1296848.3,
+  "interior_vkm_today": 245235.0,
+  "interior_vkm_plan": 138743.5,
+  "gated_links": 500,
+  "gated_vkm_plan": 194.6,
+  "main_km_over_10pct": 485.7,
+  "main_km_over_10pct_response": 448.0
+ }
+}

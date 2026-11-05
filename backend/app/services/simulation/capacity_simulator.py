@@ -1204,8 +1204,38 @@ class CapacitySimulator:
         ) / np.maximum(counts, 1)
         zone_inside[: counts.size] = share > 0.5
 
+        if charge.charged_bridge_names:
+            patterns = [name.casefold() for name in charge.charged_bridge_names]
+            bridge = np.array(
+                [
+                    bool(_first(data.get("bridge")))
+                    and _first(data.get("bridge")) != "no"
+                    and any(
+                        pattern in str(_first(data.get("name")) or "").casefold()
+                        for pattern in patterns
+                    )
+                    for data in links.data
+                ],
+                dtype=bool,
+            )
+            # Charge a bridge once per crossing: only on bridge links entered
+            # from a link that is not part of the same bridge.
+            charged_bridge = bridge & links.is_main
+            entering = entering | charged_bridge
         arcs = network.arcs
         into = np.where(arcs.link >= 0, entering[np.maximum(arcs.link, 0)], False)
+        if charge.charged_bridge_names:
+            from_link = np.full(arcs.tail.shape, -1)
+            # Arc tails are routing nodes; street-link nodes share the link index.
+            street_tail = arcs.tail < len(links.tail)
+            from_link[street_tail] = arcs.tail[street_tail]
+            previous_bridge = np.where(
+                from_link >= 0, charged_bridge[np.maximum(from_link, 0)], False
+            )
+            target_bridge = np.where(
+                arcs.link >= 0, charged_bridge[np.maximum(arcs.link, 0)], False
+            )
+            into &= ~(target_bridge & previous_bridge)
         seconds = charge.charge * (1.0 - charge.exempt_share) / charge.value_of_time_per_hour
         arcs.cordon = into.astype(float)
         arcs.toll = arcs.cordon * seconds * 3600.0
